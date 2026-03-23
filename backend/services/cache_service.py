@@ -1,16 +1,25 @@
 import json
 from typing import Any, Optional
-import redis.asyncio as aioredis
 from loguru import logger
+
+try:
+    import redis.asyncio as aioredis
+    _REDIS_AVAILABLE = True
+except ImportError:
+    aioredis = None
+    _REDIS_AVAILABLE = False
+    logger.warning("redis package not installed — cache disabled")
 
 from backend.config import settings
 
 
 class CacheService:
     def __init__(self):
-        self._redis: Optional[aioredis.Redis] = None
+        self._redis = None
 
-    async def get_redis(self) -> aioredis.Redis:
+    async def get_redis(self):
+        if not _REDIS_AVAILABLE:
+            return None
         if not self._redis:
             self._redis = aioredis.from_url(
                 settings.REDIS_URL,
