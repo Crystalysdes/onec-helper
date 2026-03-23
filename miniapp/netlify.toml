@@ -9,3 +9,4 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  VITE_API_URL = "https://onec-helper-1.onrender.com/api/v1"
