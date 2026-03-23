@@ -65,12 +65,32 @@ function App() {
         let authenticated = false
 
         if (initData) {
-          try {
+          const tryAuth = async (isRetry = false) => {
+            if (isRetry) {
+              toast.loading('Сервер запускается, подождите...', { id: 'wakeup' })
+            }
             const res = await authAPI.telegramAuth(initData)
+            toast.dismiss('wakeup')
+            return res
+          }
+
+          try {
+            let res
+            try {
+              res = await tryAuth(false)
+            } catch (firstErr) {
+              const isNetwork = !firstErr?.response && (firstErr?.code === 'ECONNABORTED' || firstErr?.message?.includes('timeout') || firstErr?.message?.includes('Network'))
+              if (isNetwork) {
+                res = await tryAuth(true)
+              } else {
+                throw firstErr
+              }
+            }
             setToken(res.data.access_token)
             setUser(res.data.user)
             authenticated = true
           } catch (authErr) {
+            toast.dismiss('wakeup')
             const detail = authErr?.response?.data?.detail || authErr?.message || 'unknown'
             console.error('telegramAuth failed:', authErr?.response?.status, detail)
             toast.error(`Ошибка авторизации: ${detail}`, { duration: 6000 })
