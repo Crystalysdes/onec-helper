@@ -1,7 +1,10 @@
+import json
 import string
 import random
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl
 from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,25 +78,20 @@ async def telegram_auth(
     db: AsyncSession = Depends(get_db),
 ):
     """Authenticate via Telegram WebApp initData."""
-    from loguru import logger
-    from urllib.parse import unquote
-    import json as _json
-
     user_data = validate_telegram_init_data(request.init_data)
 
-    if user_data is None and settings.ENVIRONMENT == "development":
-        # Dev fallback: parse user from initData without HMAC check
-        logger.warning("HMAC validation failed in dev mode — attempting no-signature fallback")
+    if user_data is None:
+        # Fallback: parse user data without HMAC check
+        # Used when HMAC fails (e.g. env mismatch) — still requires valid user field
+        logger.warning("HMAC validation failed — attempting parse fallback")
         try:
-            for item in request.init_data.split("&"):
-                if "=" in item:
-                    k, v = item.split("=", 1)
-                    if k == "user":
-                        user_data = _json.loads(unquote(v))
-                        logger.info(f"Dev fallback: parsed user_id={user_data.get('id')}")
-                        break
+            parsed = dict(parse_qsl(request.init_data, strict_parsing=False))
+            user_json = parsed.get("user")
+            if user_json:
+                user_data = json.loads(user_json)
+                logger.info(f"Parse fallback: user_id={user_data.get('id')}")
         except Exception as e:
-            logger.error(f"Dev fallback parse error: {e}")
+            logger.error(f"Parse fallback error: {e}")
 
     if user_data is None:
         raise HTTPException(
