@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --tg-theme-bg-color: #ffffff;
+  --tg-theme-text-color: #000000;
+  --tg-theme-hint-color: #999999;
+  --tg-theme-link-color: #2481cc;
+  --tg-theme-button-color: #2481cc;
+  --tg-theme-button-text-color: #ffffff;
+  --tg-theme-secondary-bg-color: #f4f4f5;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, sans-serif;
+  background-color: var(--tg-theme-bg-color);
+  color: var(--tg-theme-text-color);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.btn-primary {
+  @apply w-full py-3 px-4 rounded-xl font-semibold text-white transition-all active:scale-95;
+  background-color: var(--tg-theme-button-color);
+  color: var(--tg-theme-button-text-color);
+}
+
+.btn-secondary {
+  @apply w-full py-3 px-4 rounded-xl font-semibold transition-all active:scale-95;
+  background-color: var(--tg-theme-secondary-bg-color);
+  color: var(--tg-theme-text-color);
+}
+
+.card {
+  @apply rounded-2xl p-4 shadow-sm;
+  background-color: var(--tg-theme-secondary-bg-color);
+}
+
+.field-label {
+  @apply text-xs font-medium mb-1 block;
+  color: var(--tg-theme-hint-color);
+}
+
+.input-field {
+  @apply w-full px-4 py-3 rounded-xl border outline-none transition-all text-sm;
+  background-color: var(--tg-theme-secondary-bg-color);
+  color: var(--tg-theme-text-color);
+  border-color: transparent;
+}
+
+.input-field:focus {
+  border-color: var(--tg-theme-button-color);
+  box-shadow: 0 0 0 3px rgba(36, 129, 204, 0.15);
+}
+
+.page-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding-bottom: 5rem;
+  padding-top: calc(env(safe-area-inset-top) + 124px);
+  background-color: var(--tg-theme-bg-color);
+}
+
+.section-title {
+  @apply text-xs font-semibold uppercase tracking-wider px-4 py-2;
+  color: var(--tg-theme-hint-color);
+}
+
+.list-item {
+  @apply flex items-center gap-3 px-4 py-3 active:opacity-70 transition-opacity cursor-pointer;
+  background-color: var(--tg-theme-secondary-bg-color);
+}
+
+.badge {
+  @apply text-xs font-medium px-2 py-0.5 rounded-full;
+}
+
+.badge-green {
+  @apply badge bg-green-100 text-green-700;
+}
+
+.badge-red {
+  @apply badge bg-red-100 text-red-700;
+}
+
+.badge-yellow {
+  @apply badge bg-yellow-100 text-yellow-700;
+}
+
+.badge-blue {
+  @apply badge bg-blue-100 text-blue-700;
+}
+
+.skeleton {
+  @apply animate-pulse rounded-xl;
+  background-color: var(--tg-theme-secondary-bg-color);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.slide-up {
+  animation: slideUp 0.2s ease-out;
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
