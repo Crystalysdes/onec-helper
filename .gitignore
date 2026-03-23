@@ -1,4 +1,5 @@
 .env
+render.env
 *.db
 *.db-shm
 *.db-wal
