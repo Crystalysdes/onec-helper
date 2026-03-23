@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: onec-helper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: frankfurt
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        value: oneshelperbot
+      - key: ADMIN_TELEGRAM_ID
+        value: "5504548686"
+      - key: SECRET_KEY
+        sync: false
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:////app/data/prod.db
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: TRIAL_DAYS
+        value: "7"
+      - key: MINIAPP_URL
+        value: https://placeholder.netlify.app
+      - key: BACKEND_URL
+        value: http://localhost:8000
+      - key: REDIS_URL
+        value: redis://localhost:6379/0
