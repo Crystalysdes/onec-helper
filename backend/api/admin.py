@@ -474,31 +474,45 @@ async def _run_catalog_import(limit: int):
         elif os.path.exists(zip_path):
             logger.info(f"Reading ZIP from {zip_path}")
             _catalog_import_status["stage"] = "parsing"
-            with zipfile.ZipFile(zip_path) as zf:
-                csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
-                if not csv_name:
-                    raise ValueError("CSV не найден в архиве")
-                raw = zf.read(csv_name)
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                text = raw.decode("cp1251", errors="replace")
+
+            def _read_zip():
+                with zipfile.ZipFile(zip_path) as zf:
+                    csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
+                    if not csv_name:
+                        raise ValueError("CSV не найден в архиве")
+                    raw = zf.read(csv_name)
+                try:
+                    return raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    return raw.decode("cp1251", errors="replace")
+
+            import asyncio as _asyncio
+            loop = _asyncio.get_event_loop()
+            text = await loop.run_in_executor(None, _read_zip)
 
         else:
             raise FileNotFoundError(
                 f"Файл не найден. Положите barcodes.csv или barcodes_csv.zip в папку {catalog_dir} на сервере"
             )
 
+        _catalog_import_status["stage"] = "importing"
         reader = csv.DictReader(io.StringIO(text))
         imported = 0
         skipped = 0
         batch = []
         BATCH_SIZE = 500
+        row_count = 0
 
         async with async_session_maker() as db:
             for row in reader:
                 if imported + skipped >= limit:
                     break
+
+                row_count += 1
+                # yield to event loop every 200 rows so HTTP polling works
+                if row_count % 200 == 0:
+                    import asyncio as _aio
+                    await _aio.sleep(0)
 
                 cleaned = clean_record(row)
                 if not cleaned:
