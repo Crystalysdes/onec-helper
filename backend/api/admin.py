@@ -413,14 +413,14 @@ async def catalog_import_status(current_user: User = Depends(get_current_admin))
 @router.post("/import-catalog")
 async def import_russian_catalog(
     limit: int = 100000,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_admin),
 ):
     """Download and import catalog.app Russian barcode database into GlobalProduct."""
+    import asyncio
     if _catalog_import_status["running"]:
         raise HTTPException(status_code=409, detail="Импорт уже запущен")
-    background_tasks.add_task(_run_catalog_import, limit)
     _catalog_import_status.update({"running": True, "imported": 0, "skipped": 0, "done": False, "error": None})
+    asyncio.create_task(_run_catalog_import(limit))
     return {"status": "started", "message": f"Импорт запущен в фоне (лимит {limit} товаров)"}
 
 
@@ -436,6 +436,7 @@ async def _run_catalog_import(limit: int):
 
     URL = "https://catalog.app/public-opportunities/download-public-file?fileName=barcodes_csv.zip"
     _catalog_import_status["running"] = True
+    _catalog_import_status["stage"] = "downloading"
 
     try:
         async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
@@ -443,6 +444,7 @@ async def _run_catalog_import(limit: int):
             resp = await client.get(URL, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
             raw_zip = resp.content
+        _catalog_import_status["stage"] = "parsing"
 
         with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
             csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
@@ -510,14 +512,14 @@ async def ai_cleanup_status_endpoint(current_user: User = Depends(get_current_ad
 @router.post("/ai-cleanup-catalog")
 async def ai_cleanup_catalog(
     batch_size: int = 200,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_admin),
 ):
     """Use AI to clean and normalize suspicious GlobalProduct entries."""
+    import asyncio
     if _ai_cleanup_status["running"]:
         raise HTTPException(status_code=409, detail="Очистка уже запущена")
     _ai_cleanup_status.update({"running": True, "processed": 0, "fixed": 0, "done": False, "error": None})
-    background_tasks.add_task(_run_ai_cleanup, batch_size)
+    asyncio.create_task(_run_ai_cleanup(batch_size))
     return {"status": "started"}
 
 

@@ -312,7 +312,11 @@ export default function Admin() {
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                         <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          Загружено: <b style={{ color: 'var(--tg-theme-text-color)' }}>{catProgress.imported.toLocaleString('ru-RU')}</b> · Пропущено: {catProgress.skipped.toLocaleString('ru-RU')}
+                          {catProgress.stage === 'downloading' && '⬇️ Скачиваем файл (~150 МБ)...'}
+                          {catProgress.stage === 'parsing' && '📂 Распаковываем и читаем CSV...'}
+                          {(!catProgress.stage || catProgress.stage === 'importing') && (
+                            <>Загружено: <b style={{ color: 'var(--tg-theme-text-color)' }}>{(catProgress.imported || 0).toLocaleString('ru-RU')}</b> · Пропущено: {(catProgress.skipped || 0).toLocaleString('ru-RU')}</>
+                          )}
                         </p>
                       </div>
                     )}
