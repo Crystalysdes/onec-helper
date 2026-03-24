@@ -238,26 +238,52 @@ async def search_global_catalog(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Search products_cache by name across ALL users (raw SQL, cross-tenant)."""
+    """Search GlobalProduct catalog + products_cache cross-tenant by name."""
     q = q.strip()
     if len(q) < 2:
         return []
     from sqlalchemy import text as _text
-    rows = (await db.execute(_text(
-        "SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
-        "pc.article, pc.category, pc.unit, pc.description "
-        "FROM products_cache pc "
-        "JOIN stores s ON pc.store_id = s.id "
-        "WHERE lower(pc.name) LIKE lower(:q) AND pc.is_active = :active "
-        "LIMIT :lim"
-    ), {"q": f"%{q}%", "lim": limit, "active": True})).fetchall()
-    return [
+
+    # 1. Search GlobalProduct (Open Food Facts catalog)
+    gp_rows = (await db.execute(_text(
+        "SELECT barcode, name, price, purchase_price, article, category, unit, description "
+        "FROM global_products "
+        "WHERE lower(name) LIKE lower(:q) "
+        "ORDER BY name LIMIT :lim"
+    ), {"q": f"%{q}%", "lim": limit})).fetchall()
+
+    results = [
         {"id": None, "store_id": None, "barcode": r[0], "name": r[1],
          "price": r[2], "purchase_price": r[3], "article": r[4],
          "category": r[5], "unit": r[6], "description": r[7],
-         "quantity": 0, "source": "global"}
-        for r in rows
+         "quantity": 0, "source": "catalog"}
+        for r in gp_rows
     ]
+
+    # 2. Fill remaining slots from products_cache (other users)
+    remaining = limit - len(results)
+    if remaining > 0:
+        seen_names = {r["name"].lower() for r in results}
+        pc_rows = (await db.execute(_text(
+            "SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
+            "pc.article, pc.category, pc.unit, pc.description "
+            "FROM products_cache pc "
+            "WHERE lower(pc.name) LIKE lower(:q) AND pc.is_active = :active "
+            "LIMIT :lim"
+        ), {"q": f"%{q}%", "lim": remaining * 2, "active": True})).fetchall()
+        for r in pc_rows:
+            if r[1].lower() not in seen_names:
+                results.append({
+                    "id": None, "store_id": None, "barcode": r[0], "name": r[1],
+                    "price": r[2], "purchase_price": r[3], "article": r[4],
+                    "category": r[5], "unit": r[6], "description": r[7],
+                    "quantity": 0, "source": "user_catalog"
+                })
+                seen_names.add(r[1].lower())
+            if len(results) >= limit:
+                break
+
+    return results
 
 
 @router.get("/{store_id}")

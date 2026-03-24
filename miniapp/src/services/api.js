@@ -119,8 +119,8 @@ export const adminAPI = {
     api.post(`/admin/subscriptions/${userId}/grant`, { days }),
   revokeSubscription: (userId) => api.delete(`/admin/subscriptions/${userId}`),
   backfillCatalog: () => api.post('/admin/backfill-catalog'),
-  importOpenFoodFacts: (storeId, country, pages) =>
-    api.post('/admin/import-openfoodfacts', null, { params: { store_id: storeId, country, pages }, timeout: 300000 }),
+  importOpenFoodFacts: (country, pages) =>
+    api.post('/admin/import-openfoodfacts', null, { params: { country, pages }, timeout: 300000 }),
   products: (params) => api.get('/admin/products', { params }),
   getProduct: (id) => api.get(`/admin/products/${id}`),
   bulkDeleteProducts: (ids) => api.delete('/admin/products/bulk-delete', { data: { ids } }),

@@ -403,26 +403,15 @@ async def admin_get_product(
 
 @router.post("/import-openfoodfacts")
 async def import_openfoodfacts(
-    store_id: str,
     country: str = "russia",
     pages: int = 10,
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Fetch products from Open Food Facts API and import into a store."""
+    """Fetch products from Open Food Facts API and import into GlobalProduct catalog."""
     import httpx
     import uuid as _uuid
-    from datetime import datetime, timezone
-
-    try:
-        store_uuid = UUID(store_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid store_id")
-
-    result = await db.execute(select(Store).where(Store.id == store_uuid))
-    store = result.scalar_one_or_none()
-    if not store:
-        raise HTTPException(status_code=404, detail="Магазин не найден")
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     imported = 0
     skipped = 0
@@ -430,9 +419,9 @@ async def import_openfoodfacts(
     async with httpx.AsyncClient(timeout=30) as client:
         for page in range(1, pages + 1):
             url = (
-                f"https://world.openfoodfacts.org/api/v2/search"
+                "https://world.openfoodfacts.org/api/v2/search"
                 f"?countries_tags_en={country}"
-                f"&fields=code,product_name,product_name_ru,brands,categories_tags_en,quantity"
+                "&fields=code,product_name,product_name_ru,brands,categories_tags_en"
                 f"&page_size=200&page={page}"
             )
             try:
@@ -446,12 +435,15 @@ async def import_openfoodfacts(
             if not products_raw:
                 break
 
-            batch = []
+            rows = []
             for item in products_raw:
+                barcode = (item.get("code") or "").strip()
+                if not barcode or not barcode.isdigit():
+                    skipped += 1
+                    continue
+
                 name = (
-                    item.get("product_name_ru")
-                    or item.get("product_name")
-                    or ""
+                    item.get("product_name_ru") or item.get("product_name") or ""
                 ).strip()
                 if not name or len(name) < 2:
                     skipped += 1
@@ -461,33 +453,30 @@ async def import_openfoodfacts(
                 if brand and brand.lower() not in name.lower():
                     name = f"{name} {brand}".strip()
 
-                barcode = (item.get("code") or "").strip()
-                if not barcode.isdigit():
-                    barcode = None
-
                 cats = item.get("categories_tags_en") or []
                 category = None
                 for c in cats:
-                    c = c.replace("en:", "").replace("-", " ").title()
-                    if len(c) > 3:
-                        category = c[:60]
+                    label = c.replace("en:", "").replace("-", " ").title()
+                    if len(label) > 3:
+                        category = label[:60]
                         break
 
-                batch.append(ProductCache(
-                    id=_uuid.uuid4(),
-                    store_id=store_uuid,
-                    name=name[:255],
-                    barcode=barcode,
-                    category=category,
-                    unit="шт",
-                    is_active=True,
-                    created_at=datetime.now(timezone.utc),
-                ))
+                rows.append({
+                    "id": _uuid.uuid4(),
+                    "barcode": barcode,
+                    "name": name[:255],
+                    "category": category,
+                    "unit": "шт",
+                })
 
-            db.add_all(batch)
-            await db.flush()
-            imported += len(batch)
-            skipped += len(products_raw) - len(batch)
+            if rows:
+                stmt = pg_insert(GlobalProduct).values(rows)
+                stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
+                await db.execute(stmt)
+                await db.flush()
+                imported += len(rows)
+
+            skipped += len(products_raw) - len(rows)
 
     await db.commit()
     return {"imported": imported, "skipped": skipped, "pages_fetched": pages, "country": country}

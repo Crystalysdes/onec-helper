@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
-import { adminAPI, storesAPI } from '../services/api'
+import { adminAPI } from '../services/api'
 import StatCard from '../components/StatCard'
 
 const TABS = [
@@ -51,9 +51,7 @@ export default function Admin() {
   const [backfillLoading, setBackfillLoading] = useState(false)
   const [offLoading, setOffLoading] = useState(false)
   const [offResult, setOffResult] = useState(null)
-  const [offStoreId, setOffStoreId] = useState('')
   const [offPages, setOffPages] = useState(20)
-  const [myStores, setMyStores] = useState([])
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -72,7 +70,6 @@ export default function Admin() {
       return
     }
     loadTab('stats')
-    storesAPI.list().then(r => { setMyStores(r.data); if (r.data[0]) setOffStoreId(r.data[0].id) }).catch(() => {})
   }, [])
 
   const loadTab = async (t = tab) => {
@@ -287,14 +284,7 @@ export default function Admin() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <select
-                    className="input-field text-sm py-2"
-                    value={offStoreId}
-                    onChange={e => setOffStoreId(e.target.value)}
-                  >
-                    {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    {myStores.length === 0 && <option value="">Нет магазинов</option>}
-                  </select>
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Товары загружаются в общую базу бота (GlobalCatalog) и доступны всем пользователям при поиске</p>
                   <div className="flex gap-2 items-center">
                     <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Страниц:</span>
                     {[5, 10, 20, 50].map(n => (
@@ -320,12 +310,12 @@ export default function Admin() {
 
                 <button
                   className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
-                  disabled={offLoading || !offStoreId}
+                  disabled={offLoading}
                   onClick={async () => {
                     setOffLoading(true)
                     setOffResult(null)
                     try {
-                      const res = await adminAPI.importOpenFoodFacts(offStoreId, 'russia', offPages)
+                      const res = await adminAPI.importOpenFoodFacts('russia', offPages)
                       setOffResult(res.data)
                       toast.success(`Импортировано ${res.data.imported} товаров`)
                     } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
