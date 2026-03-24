@@ -1,10 +1,11 @@
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
 import aiofiles
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
@@ -116,42 +117,53 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
     return store
 
 
-async def _push_to_onec(db: AsyncSession, store_id: UUID, product: ProductCache):
-    """Push a product to 1C if an active integration exists. Non-blocking — errors are logged only."""
+async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, product_onec_id: str | None, product_article: str | None):
+    """Push a product to 1C in the background. Uses its own DB session."""
     from backend.integrations.onec_integration import OneCClient
     from backend.core.security import decrypt_password
+    from backend.database.connection import AsyncSessionLocal
     from loguru import logger
-    try:
-        result = await db.execute(
-            select(Integration).where(
-                Integration.store_id == store_id,
-                Integration.status == IntegrationStatus.active,
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(
+                select(Integration).where(
+                    Integration.store_id == store_id,
+                    Integration.status == IntegrationStatus.active,
+                )
             )
-        )
-        integration = result.scalars().first()
-        if not integration:
-            return
+            integration = result.scalars().first()
+            if not integration:
+                return
 
-        client = OneCClient(
-            url=integration.onec_url,
-            username=integration.onec_username,
-            password=decrypt_password(integration.onec_password_encrypted),
-        )
-        if product.onec_id:
-            success, data = await client.update_product(product.onec_id, product)
-        else:
-            success, data = await client.create_product(product)
-            if success and data and data.get("Ref_Key"):
-                product.onec_id = data["Ref_Key"]
+            # Re-fetch product from DB so we can update it
+            p_result = await db.execute(
+                select(ProductCache).where(ProductCache.id == product_id)
+            )
+            product = p_result.scalar_one_or_none()
+            if not product:
+                return
 
-        if success:
-            from datetime import datetime, timezone
-            product.synced_at = datetime.now(timezone.utc)
-            logger.info(f"Product '{product.name}' synced to 1C (onec_id={product.onec_id})")
-        else:
-            logger.warning(f"1C push failed for '{product.name}': {data}")
-    except Exception as e:
-        logger.error(f"_push_to_onec error: {e}")
+            client = OneCClient(
+                url=integration.onec_url,
+                username=integration.onec_username,
+                password=decrypt_password(integration.onec_password_encrypted),
+            )
+            if product.onec_id:
+                success, data = await client.update_product(product.onec_id, product)
+            else:
+                success, data = await client.create_product(product)
+                if success and data and data.get("Ref_Key"):
+                    product.onec_id = data["Ref_Key"]
+
+            if success:
+                product.synced_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.info(f"Product '{product.name}' synced to 1C (onec_id={product.onec_id})")
+            else:
+                logger.warning(f"1C push failed for '{product.name}': {data}")
+        except Exception as e:
+            logger.error(f"_push_to_onec_bg error: {e}")
 
 
 @router.get("/check-barcode")
@@ -281,6 +293,7 @@ async def list_products(
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_product(
     payload: ProductCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -303,7 +316,6 @@ async def create_product(
     await db.flush()
 
     await _upsert_global_product(db, product)
-    await _push_to_onec(db, store_id, product)
 
     log = Log(
         user_id=current_user.id,
@@ -314,8 +326,11 @@ async def create_product(
         meta={"product_id": str(product.id)},
     )
     db.add(log)
-
-    return _serialize_product(product)
+    result = _serialize_product(product)
+    background_tasks.add_task(
+        _push_to_onec_bg, store_id, product.id, product.name, product.onec_id, product.article
+    )
+    return result
 
 
 @router.post("/scan-barcode")
@@ -495,9 +510,12 @@ async def quick_add_product(
     db.add(product)
     await db.flush()
     await _upsert_global_product(db, product)
-    await _push_to_onec(db, UUID(store_id), product)
+    result = _serialize_product(product)
     await db.commit()
-    return _serialize_product(product)
+    # 1C push runs in background — does not block response
+    import asyncio
+    asyncio.ensure_future(_push_to_onec_bg(UUID(store_id), product.id, product.name, product.onec_id, product.article))
+    return result
 
 
 @router.post("/parse-text")
@@ -532,6 +550,7 @@ async def get_product(
 async def update_product(
     product_id: UUID,
     payload: ProductUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -546,9 +565,12 @@ async def update_product(
         setattr(product, field, value)
 
     await _upsert_global_product(db, product)
-    await _push_to_onec(db, product.store_id, product)
+    result = _serialize_product(product)
     await db.commit()
-    return _serialize_product(product)
+    background_tasks.add_task(
+        _push_to_onec_bg, product.store_id, product.id, product.name, product.onec_id, product.article
+    )
+    return result
 
 
 @router.delete("/detail/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
