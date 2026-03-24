@@ -229,6 +229,8 @@ export default function AddProduct() {
   const [aiText, setAiText] = useState('')
   // scan: null | { code, status:'checking'|'found'|'new', product, storeName }
   const [aiScan, setAiScan] = useState(null)
+  const [aiPreview, setAiPreview] = useState(null)
+  const [aiPreviewLoading, setAiPreviewLoading] = useState(false)
 
   // ── Editing existing product (from scan) ─────────────────────────
   const [editingProductId, setEditingProductId] = useState(null)
@@ -381,24 +383,50 @@ export default function AddProduct() {
     })
   }, [openScanner, checkBarcodeGlobal])
 
-  const handleQuickAdd = useCallback(async (forceNew = false) => {
-    if (!aiText.trim() && !aiScan?.code) return toast.error('Введите описание или отсканируйте QR')
+  const handleQuickAdd = useCallback(async () => {
+    if (!aiScan?.code) return toast.error('Сначала отсканируйте QR / штрих-код')
     if (!currentStore) return toast.error('Выберите магазин')
+    setAiPreviewLoading(true)
+    try {
+      const fullText = [aiText.trim(), `Штрих-код: ${aiScan.code}`].filter(Boolean).join('\n')
+      const res = await productsAPI.parseText(fullText)
+      const data = res.data || {}
+      if (!data.name) data.name = aiText.trim() || aiScan.code
+      if (!data.barcode) data.barcode = aiScan.code
+      setAiPreview(data)
+    } catch {
+      toast.error('Ошибка обработки ИИ')
+    } finally { setAiPreviewLoading(false) }
+  }, [aiText, aiScan, currentStore])
+
+  const confirmAiPreview = useCallback(async () => {
+    if (!aiPreview || !currentStore) return
     setLoading(true)
     try {
-      const res = await productsAPI.quickAdd(
-        currentStore.id,
-        aiText || aiScan.code,
-        aiScan?.code || null,
-      )
+      const res = await productsAPI.quickAdd(currentStore.id, aiText.trim() || aiPreview.name, aiScan?.code || null)
       toast.success(`"${res.data.name}" добавлен!`)
-      setAiText('')
-      setAiScan(null)
+      setAiText(''); setAiScan(null); setAiPreview(null)
       navigate('/products')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка добавления')
     } finally { setLoading(false) }
-  }, [aiText, aiScan, currentStore, navigate])
+  }, [aiPreview, aiText, aiScan, currentStore, navigate])
+
+  const editAiPreview = useCallback(() => {
+    if (!aiPreview) return
+    suppressSearch.current = true
+    setValue('name', aiPreview.name || '')
+    if (aiPreview.price != null) setValue('price', aiPreview.price)
+    if (aiPreview.purchase_price != null) setValue('purchase_price', aiPreview.purchase_price)
+    setValue('barcode', aiPreview.barcode || aiScan?.code || '')
+    setValue('article', aiPreview.article || '')
+    setValue('category', aiPreview.category || '')
+    setValue('unit', aiPreview.unit || 'шт')
+    setValue('quantity', aiPreview.quantity ?? 0)
+    setValue('description', aiPreview.description || '')
+    setAiPreview(null)
+    setMethod('manual')
+  }, [aiPreview, aiScan, setValue])
 
   // ════════════════════════════════════════════════════════════════
   //  BARCODE TAB handlers
@@ -588,6 +616,54 @@ export default function AddProduct() {
         </div>
       )}
 
+      {/* ── AI Preview Modal ── */}
+      {aiPreview && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6"
+          style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setAiPreview(null)}>
+          <div className="w-full max-w-sm rounded-3xl px-5 py-5 flex flex-col gap-3"
+            style={{ background: 'var(--tg-theme-bg-color)' }}
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+                style={{ background: 'rgba(99,102,241,0.12)' }}>
+                <Sparkles size={18} style={{ color: 'var(--tg-theme-button-color)' }} />
+              </div>
+              <div>
+                <p className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>ИИ заполнил карточку товара</p>
+                <p className="text-base font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{aiPreview.name}</p>
+              </div>
+            </div>
+            <div className="rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+              {[
+                ['Штрих-код', aiPreview.barcode],
+                ['Цена', aiPreview.price != null ? `${aiPreview.price} ₽` : null],
+                ['Закупочная', aiPreview.purchase_price != null ? `${aiPreview.purchase_price} ₽` : null],
+                ['Категория', aiPreview.category],
+                ['Артикул', aiPreview.article],
+                ['Кол-во', aiPreview.quantity != null ? `${aiPreview.quantity} ${aiPreview.unit || 'шт'}` : null],
+              ].filter(([, v]) => v != null).map(([label, val]) => (
+                <div key={label} className="flex justify-between items-center">
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{label}</span>
+                  <span className="text-xs font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>{val}</span>
+                </div>
+              ))}
+            </div>
+            <button className="btn-primary flex items-center justify-center gap-2"
+              onClick={confirmAiPreview} disabled={loading}>
+              {loading
+                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                : <Check size={15} />}
+              {loading ? 'Сохраняю...' : 'Подтвердить и сохранить'}
+            </button>
+            <button className="btn-secondary flex items-center justify-center gap-2" onClick={editAiPreview}>
+              <Edit2 size={15} />
+              Редактировать поля
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* In-app barcode/QR scanner modal */}
       {scannerCb && (
         <BarcodeScanner
@@ -701,15 +777,20 @@ export default function AddProduct() {
               )}
             </div>
 
-            {/* Add button */}
+            {/* Add button — only active after barcode scan */}
             <button className="btn-primary flex items-center justify-center gap-2"
-              onClick={() => handleQuickAdd(false)}
-              disabled={loading || (!aiText.trim() && !aiScan?.code) || aiScan?.status === 'checking'}>
-              {loading
+              onClick={handleQuickAdd}
+              disabled={loading || aiPreviewLoading || !aiScan || aiScan.status !== 'new'}>
+              {(loading || aiPreviewLoading)
                 ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 : <Plus size={16} />}
-              {loading ? 'ИИ создаёт товар...' : 'Добавить товар'}
+              {aiPreviewLoading ? 'ИИ обрабатывает...' : loading ? 'Сохраняю...' : 'Добавить товар'}
             </button>
+            {!aiScan && (
+              <p className="text-center text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                Сканируйте QR / штрих-код чтобы активировать кнопку
+              </p>
+            )}
           </div>
 
         </div>

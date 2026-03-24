@@ -706,11 +706,15 @@ export default function Settings() {
                     placeholder="Название интеграции"
                     {...intForm.register('name')}
                   />
-                  <div className="text-xs p-3 rounded-xl bg-blue-50 text-blue-700 flex flex-col gap-1">
-                    <p className="font-semibold">💡 Для 1С:Fresh:</p>
-                    <p className="font-mono">https://msk1.1cfresh.com/a/sbm/12345</p>
-                    <p className="mt-1 font-semibold">Для локального сервера:</p>
-                    <p className="font-mono">http://192.168.1.100/base1c</p>
+                  <div className="text-xs p-3 rounded-xl flex flex-col gap-2" style={{ background: 'rgba(36,129,204,0.08)', color: 'var(--tg-theme-text-color)' }}>
+                    <p className="font-semibold text-[13px]">📋 Как подключить 1С:Fresh</p>
+                    <div className="flex flex-col gap-1.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      <p><b className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>1. URL</b> — адрес вашей базы без <code className="bg-black/10 px-1 rounded">/ru/</code> на конце:</p>
+                      <p className="font-mono text-[11px] pl-2">https://msk1.1cfresh.com/a/sbm/12345</p>
+                      <p className="text-[11px] pl-2">Откройте 1С Fresh в браузере → скопируйте адрес до <code className="bg-black/10 px-1 rounded">/ru/</code></p>
+                      <p className="mt-1"><b className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>2. Логин и пароль</b> — от вашей учётной записи 1С Fresh (той, что входите на сайт)</p>
+                      <p className="mt-1"><b className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>3. После сохранения</b> нажмите <b>«Проверить»</b> — если OData не настроен, приложение покажет прямую ссылку для настройки (1 мин)</p>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <button type="button" className="btn-secondary flex-1" onClick={() => setShowIntegrationForm(false)}>
