@@ -1,0 +1,44 @@
+version: '3.9'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: onec_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: onec_app:latest
+    container_name: onec_app
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "8000"
+    depends_on:
+      - redis
+    volumes:
+      - uploads_data:/app/uploads
+
+  nginx:
+    image: nginx:alpine
+    container_name: onec_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - app
+
+volumes:
+  redis_data:
+  uploads_data:
+  certbot_www:
