@@ -52,7 +52,14 @@ class OneCClient:
         """Test connection to 1C system."""
         success, data = await self._request("GET", "odata/standard.odata/")
         if success:
-            return True, "Подключение к 1С успешно установлено"
+            entities = data.get("value", []) if isinstance(data, dict) else []
+            if not entities:
+                return True, (
+                    "Подключение установлено, но объекты 1С не опубликованы через OData. "
+                    "Откройте 1С → Администрирование → найдите «Настройка автоматического REST-сервиса» "
+                    "и отметьте нужные объекты (Номенклатура, Товары на складах, Цены)."
+                )
+            return True, f"Подключение к 1С успешно установлено. Доступно объектов: {len(entities)}"
         error = data.get("error", "Неизвестная ошибка") if data else "Нет ответа"
         return False, f"Ошибка подключения к 1С: {error}"
 

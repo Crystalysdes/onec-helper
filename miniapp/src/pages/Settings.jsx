@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus, Store, Plug, Check, ChevronLeft, ChevronRight, TestTube2,
   CreditCard, RefreshCw, Users, Copy, CheckCircle2,
-  AlertCircle, Crown, Zap,
+  AlertCircle, Crown, Zap, ExternalLink, RotateCcw,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
@@ -20,6 +20,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(false)
   const [testLoading, setTestLoading] = useState(false)
   const [testResult, setTestResult] = useState(null)
+  const [syncLoading, setSyncLoading] = useState(false)
 
   // Subscription state
   const [sub, setSub] = useState(null)
@@ -105,9 +106,9 @@ export default function Settings() {
     try {
       const res = await storesAPI.testIntegration(storeId, intId)
       setTestResult(res.data)
-      if (res.data.success) {
+      if (res.data.success && !res.data.message?.includes('не опубликованы')) {
         toast.success('Подключение успешно!')
-      } else {
+      } else if (!res.data.success) {
         toast.error(res.data.message || 'Ошибка подключения')
       }
     } catch (e) {
@@ -115,6 +116,24 @@ export default function Settings() {
     } finally {
       setTestLoading(false)
     }
+  }
+
+  const syncIntegration = async (storeId, intId) => {
+    setSyncLoading(true)
+    try {
+      await storesAPI.syncIntegration(storeId, intId)
+      toast.success('Импорт товаров из 1С запущен!')
+    } catch {
+      toast.error('Ошибка синхронизации')
+    } finally {
+      setSyncLoading(false)
+    }
+  }
+
+  const getSetupUrl = (onecUrl) => {
+    if (!onecUrl) return null
+    const base = onecUrl.replace(/\/ru\/?$/, '').replace(/\/odata.*$/, '').replace(/\/$/, '')
+    return `${base}/ru/e1cib/command/DataProcessor.НастройкаАвтоматическогоRESTСервиса.Form`
   }
 
   const currentStoreDetail = stores.find((s) => s.id === currentStore?.id)
@@ -516,23 +535,58 @@ export default function Settings() {
                       {int.status === 'active' ? 'Активна' : int.status === 'error' ? 'Ошибка' : 'Не активна'}
                     </span>
                   </div>
-                  <button
-                    className="btn-secondary flex items-center justify-center gap-2 py-2 text-sm"
-                    disabled={testLoading}
-                    onClick={() => testIntegration(currentStore.id, int.id)}
-                  >
-                    {testLoading ? (
-                      <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <TestTube2 size={15} />
-                    )}
-                    Проверить подключение
-                  </button>
-                  {testResult && (
-                    <div className={`text-xs p-2 rounded-lg ${testResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                      {testResult.message}
-                    </div>
-                  )}
+                  <div className="flex gap-2">
+                    <button
+                      className="btn-secondary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
+                      disabled={testLoading}
+                      onClick={() => testIntegration(currentStore.id, int.id)}
+                    >
+                      {testLoading
+                        ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                        : <TestTube2 size={14} />}
+                      Проверить
+                    </button>
+                    <button
+                      className="btn-primary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
+                      disabled={syncLoading}
+                      onClick={() => syncIntegration(currentStore.id, int.id)}
+                    >
+                      {syncLoading
+                        ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        : <RotateCcw size={14} />}
+                      Импорт
+                    </button>
+                  </div>
+                  {testResult && (() => {
+                    const needsSetup = testResult.success && testResult.message?.includes('не опубликованы')
+                    const setupUrl = needsSetup ? getSetupUrl(int.onec_url) : null
+                    return (
+                      <div className={`text-xs p-3 rounded-xl flex flex-col gap-2 ${
+                        needsSetup ? 'bg-amber-50 text-amber-800' :
+                        testResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                      }`}>
+                        <span>{testResult.message}</span>
+                        {needsSetup && setupUrl && (
+                          <div className="flex flex-col gap-1.5">
+                            <p className="font-semibold">Быстрая настройка (1 раз):</p>
+                            <p>1. Откройте ссылку → нажмите <b>«Загрузить метаданные»</b></p>
+                            <p>2. Отметьте: <b>Номенклатура</b>, <b>Цены номенклатуры</b>, <b>Склады</b></p>
+                            <p>3. Нажмите <b>«Сохранить и закрыть»</b> → вернитесь сюда</p>
+                            <a
+                              href={setupUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl font-semibold text-white"
+                              style={{ background: 'var(--tg-theme-button-color)' }}
+                            >
+                              <ExternalLink size={13} />
+                              Открыть настройку 1С
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
               ))}
 
@@ -563,8 +617,11 @@ export default function Settings() {
                     placeholder="Название интеграции"
                     {...intForm.register('name')}
                   />
-                  <div className="text-xs p-3 rounded-xl bg-blue-50 text-blue-700">
-                    💡 Пример URL: http://192.168.1.100/1c/hs/v1 или http://server/УправлениеТорговлей/odata/standard.odata
+                  <div className="text-xs p-3 rounded-xl bg-blue-50 text-blue-700 flex flex-col gap-1">
+                    <p className="font-semibold">💡 Для 1С:Fresh:</p>
+                    <p className="font-mono">https://msk1.1cfresh.com/a/sbm/12345</p>
+                    <p className="mt-1 font-semibold">Для локального сервера:</p>
+                    <p className="font-mono">http://192.168.1.100/base1c</p>
                   </div>
                   <div className="flex gap-2">
                     <button type="button" className="btn-secondary flex-1" onClick={() => setShowIntegrationForm(false)}>
@@ -590,10 +647,10 @@ export default function Settings() {
                 </button>
               )}
 
-              <div className="card bg-yellow-50 mt-1">
-                <p className="text-xs font-semibold text-yellow-800 mb-1">Требования к 1С</p>
-                <p className="text-xs text-yellow-700">
-                  Необходим включённый OData REST-сервис в 1С и доступ по HTTP/HTTPS. Убедитесь, что публикация базы настроена через веб-сервер.
+              <div className="card mt-1 flex flex-col gap-1" style={{ background: 'rgba(234,179,8,0.1)' }}>
+                <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Как подключить 1С:Fresh</p>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                  Введите URL без <code>/ru/</code> в конце. После подключения нажмите <b>«Проверить»</b> — если OData не настроен, бот покажет прямую ссылку на настройку (займёт ~1 мин).
                 </p>
               </div>
             </>

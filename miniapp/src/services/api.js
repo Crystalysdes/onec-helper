@@ -43,6 +43,10 @@ export const storesAPI = {
     api.put(`/stores/${storeId}/integrations/${intId}`, data),
   testIntegration: (storeId, intId) =>
     api.post(`/stores/${storeId}/integrations/${intId}/test`),
+  syncIntegration: (storeId, intId) =>
+    api.post(`/stores/${storeId}/integrations/${intId}/sync`),
+  getOnecStock: (storeId, intId, threshold = 5) =>
+    api.get(`/stores/${storeId}/integrations/${intId}/stock`, { params: { low_stock_threshold: threshold } }),
 }
 
 export const productsAPI = {
