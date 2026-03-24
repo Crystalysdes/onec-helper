@@ -303,3 +303,83 @@ async def get_user_subscription(
             for p in payments
         ],
     }
+
+
+@router.get("/products")
+async def admin_list_products(
+    search: str = "",
+    page: int = 1,
+    limit: int = 50,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import or_, String
+    offset = (page - 1) * limit
+    q = (
+        select(ProductCache, Store, User)
+        .join(Store, ProductCache.store_id == Store.id)
+        .join(User, Store.owner_id == User.id)
+        .where(ProductCache.is_active == True)
+    )
+    if search:
+        q = q.where(
+            or_(
+                ProductCache.name.ilike(f"%{search}%"),
+                ProductCache.barcode.ilike(f"%{search}%"),
+                ProductCache.article.ilike(f"%{search}%"),
+            )
+        )
+    total_res = await db.execute(select(func.count()).select_from(q.subquery()))
+    total = total_res.scalar() or 0
+
+    q = q.order_by(ProductCache.created_at.desc()).offset(offset).limit(limit)
+    rows = (await db.execute(q)).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "items": [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "barcode": p.barcode,
+                "article": p.article,
+                "category": p.category,
+                "price": p.price,
+                "quantity": p.quantity,
+                "unit": p.unit,
+                "store_id": str(p.store_id),
+                "store_name": s.name,
+                "owner": u.telegram_username or str(u.telegram_id),
+                "created_at": p.created_at,
+            }
+            for p, s, u in rows
+        ],
+    }
+
+
+class AdminBulkDeleteRequest(BaseModel):
+    ids: list
+
+
+@router.delete("/products/bulk-delete")
+async def admin_bulk_delete_products(
+    body: AdminBulkDeleteRequest,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    if not body.ids:
+        return {"deleted": 0}
+    from uuid import UUID as _UUID
+    uuids = [_UUID(i) if isinstance(i, str) else i for i in body.ids]
+    result = await db.execute(
+        select(ProductCache).where(
+            ProductCache.id.in_(uuids),
+            ProductCache.is_active == True,
+        )
+    )
+    products = result.scalars().all()
+    for p in products:
+        p.is_active = False
+    await db.commit()
+    return {"deleted": len(products)}

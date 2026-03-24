@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   RefreshCw, Users, Store, Package, ToggleLeft, ToggleRight,
   Crown, CreditCard, ShieldOff, CheckCircle2, AlertCircle, Database,
+  Search, X, CheckSquare, Square, Trash2, CheckCheck,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
@@ -12,6 +13,7 @@ import StatCard from '../components/StatCard'
 const TABS = [
   { id: 'stats', label: 'Обзор' },
   { id: 'users', label: 'Пользователи' },
+  { id: 'db', label: 'База' },
   { id: 'subscriptions', label: 'Подписки' },
   { id: 'logs', label: 'Логи' },
 ]
@@ -47,6 +49,13 @@ export default function Admin() {
   const [grantUserId, setGrantUserId] = useState(null)
   const [grantDays, setGrantDays] = useState(30)
   const [backfillLoading, setBackfillLoading] = useState(false)
+  const [dbProducts, setDbProducts] = useState([])
+  const [dbSearch, setDbSearch] = useState('')
+  const [dbPage, setDbPage] = useState(1)
+  const [dbTotal, setDbTotal] = useState(0)
+  const [dbSelected, setDbSelected] = useState(new Set())
+  const [dbSelectMode, setDbSelectMode] = useState(false)
+  const [dbDeleting, setDbDeleting] = useState(false)
 
   useEffect(() => {
     if (!isAdmin()) {
@@ -71,6 +80,10 @@ export default function Admin() {
       } else if (t === 'logs') {
         const res = await adminAPI.logs()
         setLogs(res.data)
+      } else if (t === 'db') {
+        const res = await adminAPI.products({ search: dbSearch, page: dbPage, limit: 50 })
+        setDbProducts(res.data.items || [])
+        setDbTotal(res.data.total || 0)
       }
     } catch {
       toast.error('Ошибка загрузки данных')
@@ -89,6 +102,38 @@ export default function Admin() {
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка')
     }
+  }
+
+  const loadDbProducts = async (search = dbSearch, page = 1) => {
+    setLoading(true)
+    try {
+      const res = await adminAPI.products({ search, page, limit: 50 })
+      setDbProducts(res.data.items || [])
+      setDbTotal(res.data.total || 0)
+      setDbPage(page)
+    } catch { toast.error('Ошибка загрузки') }
+    finally { setLoading(false) }
+  }
+
+  const toggleDbSelect = (id) => {
+    setDbSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  const dbSelectAll = () => setDbSelected(new Set(dbProducts.map(p => p.id)))
+  const dbDeselectAll = () => setDbSelected(new Set())
+  const dbAllSelected = dbProducts.length > 0 && dbSelected.size === dbProducts.length
+
+  const handleDbBulkDelete = async () => {
+    if (dbSelected.size === 0) return
+    if (!window.confirm(`Удалить ${dbSelected.size} товар(ов) навсегда?`)) return
+    setDbDeleting(true)
+    try {
+      const res = await adminAPI.bulkDeleteProducts([...dbSelected])
+      toast.success(`Удалено ${res.data.deleted} товаров`)
+      setDbSelected(new Set())
+      setDbSelectMode(false)
+      loadDbProducts(dbSearch, 1)
+    } catch { toast.error('Ошибка удаления') }
+    finally { setDbDeleting(false) }
   }
 
   const levelBadge = (level) =>
@@ -208,6 +253,122 @@ export default function Admin() {
               <span className="text-5xl">📊</span>
               <p style={{ color: 'var(--tg-theme-hint-color)' }} className="text-sm">Нет данных</p>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: База */}
+      {tab === 'db' && (
+        <div className="px-4 flex flex-col gap-3">
+          {/* Search + controls */}
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--tg-theme-hint-color)' }} />
+              <input
+                className="input-field text-sm py-2"
+                style={{ paddingLeft: '2.2rem' }}
+                placeholder="Название, штрих-код, артикул..."
+                value={dbSearch}
+                onChange={e => { setDbSearch(e.target.value); loadDbProducts(e.target.value, 1) }}
+              />
+              {dbSearch && (
+                <button className="absolute right-2 top-1/2 -translate-y-1/2" onClick={() => { setDbSearch(''); loadDbProducts('', 1) }}>
+                  <X size={14} style={{ color: 'var(--tg-theme-hint-color)' }} />
+                </button>
+              )}
+            </div>
+            <button
+              className="px-3 py-2 rounded-xl text-xs font-medium active:opacity-70 flex-shrink-0"
+              style={{
+                background: dbSelectMode ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
+                color: dbSelectMode ? 'white' : 'var(--tg-theme-hint-color)',
+              }}
+              onClick={() => { setDbSelectMode(v => !v); setDbSelected(new Set()) }}
+            >
+              <CheckSquare size={16} />
+            </button>
+          </div>
+
+          {/* Stats row */}
+          <div className="flex items-center justify-between">
+            <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+              Всего: <b style={{ color: 'var(--tg-theme-text-color)' }}>{dbTotal}</b> товаров
+              {dbSelectMode && dbSelected.size > 0 && (
+                <span> · выбрано: <b style={{ color: 'var(--tg-theme-button-color)' }}>{dbSelected.size}</b></span>
+              )}
+            </p>
+            {dbSelectMode && (
+              <div className="flex gap-2">
+                <button
+                  className="text-xs px-2.5 py-1 rounded-lg active:opacity-70"
+                  style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                  onClick={dbAllSelected ? dbDeselectAll : dbSelectAll}
+                >
+                  {dbAllSelected ? 'Снять всё' : 'Выбрать всё'}
+                </button>
+                <button
+                  className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70 disabled:opacity-40"
+                  style={{ background: dbSelected.size > 0 ? 'rgba(239,68,68,0.12)' : 'var(--tg-theme-secondary-bg-color)', color: dbSelected.size > 0 ? '#ef4444' : 'var(--tg-theme-hint-color)' }}
+                  onClick={handleDbBulkDelete}
+                  disabled={dbSelected.size === 0 || dbDeleting}
+                >
+                  <Trash2 size={12} />
+                  {dbDeleting ? '...' : `Удалить (${dbSelected.size})`}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Product list */}
+          {loading ? (
+            [1,2,3,4].map(i => <div key={i} className="skeleton h-14" />)
+          ) : dbProducts.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-10">
+              <span className="text-4xl">📦</span>
+              <p className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>Нет товаров</p>
+            </div>
+          ) : (
+            dbProducts.map(p => (
+              <div key={p.id} className="flex items-center gap-2">
+                {dbSelectMode && (
+                  <button className="flex-shrink-0 active:opacity-60" onClick={() => toggleDbSelect(p.id)}>
+                    {dbSelected.has(p.id)
+                      ? <CheckSquare size={20} style={{ color: 'var(--tg-theme-button-color)' }} />
+                      : <Square size={20} style={{ color: 'var(--tg-theme-hint-color)' }} />}
+                  </button>
+                )}
+                <div
+                  className="flex-1 card py-2.5 flex items-center gap-2 cursor-pointer active:opacity-70"
+                  onClick={() => dbSelectMode && toggleDbSelect(p.id)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
+                    <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      {p.store_name} · {p.owner}{p.category ? ` · ${p.category}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+                    {p.price != null && (
+                      <span className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                        {p.price.toLocaleString('ru-RU')} ₽
+                      </span>
+                    )}
+                    {p.quantity != null && (
+                      <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        {p.quantity} {p.unit || 'шт'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+
+          {/* Pagination */}
+          {dbTotal > dbProducts.length && (
+            <button className="btn-secondary text-sm" onClick={() => loadDbProducts(dbSearch, dbPage + 1)} disabled={loading}>
+              Загрузить ещё
+            </button>
           )}
         </div>
       )}

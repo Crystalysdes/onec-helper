@@ -614,3 +614,34 @@ async def delete_product(
 
     await _check_store_access(product.store_id, current_user, db)
     product.is_active = False
+    await db.commit()
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: List[UUID]
+
+
+@router.delete("/bulk-delete")
+async def bulk_delete_products(
+    body: BulkDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-delete multiple products. Only products owned by the current user."""
+    if not body.ids:
+        return {"deleted": 0}
+
+    result = await db.execute(
+        select(ProductCache, Store)
+        .join(Store, ProductCache.store_id == Store.id)
+        .where(
+            ProductCache.id.in_(body.ids),
+            ProductCache.is_active == True,
+            Store.owner_id == current_user.id,
+        )
+    )
+    rows = result.all()
+    for product, _ in rows:
+        product.is_active = False
+    await db.commit()
+    return {"deleted": len(rows)}

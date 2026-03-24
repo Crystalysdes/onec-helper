@@ -89,6 +89,7 @@ export const productsAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),
 }
 
 export const reportsAPI = {
@@ -112,6 +113,8 @@ export const adminAPI = {
     api.post(`/admin/subscriptions/${userId}/grant`, { days }),
   revokeSubscription: (userId) => api.delete(`/admin/subscriptions/${userId}`),
   backfillCatalog: () => api.post('/admin/backfill-catalog'),
+  products: (params) => api.get('/admin/products', { params }),
+  bulkDeleteProducts: (ids) => api.delete('/admin/products/bulk-delete', { data: { ids } }),
 }
 
 export const subscriptionsAPI = {
