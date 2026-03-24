@@ -21,6 +21,8 @@ export default function Settings() {
   const [testLoading, setTestLoading] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [syncLoading, setSyncLoading] = useState(false)
+  const [storeDetail, setStoreDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   // Subscription state
   const [sub, setSub] = useState(null)
@@ -34,10 +36,30 @@ export default function Settings() {
   const storeForm = useForm()
   const intForm = useForm({ defaultValues: { name: '1C Integration' } })
 
+  const loadStoreDetail = async (storeId) => {
+    if (!storeId) return
+    setDetailLoading(true)
+    try {
+      const res = await storesAPI.get(storeId)
+      setStoreDetail(res.data)
+    } catch {}
+    finally { setDetailLoading(false) }
+  }
+
   const loadStores = async () => {
     try {
       const res = await storesAPI.list()
       setStores(res.data)
+      const savedId = localStorage.getItem('current_store_id')
+      if (savedId && !currentStore) {
+        const found = res.data.find((s) => s.id === savedId)
+        if (found) {
+          setCurrentStore(found)
+          loadStoreDetail(found.id)
+        }
+      } else if (currentStore) {
+        loadStoreDetail(currentStore.id)
+      }
     } catch {}
   }
 
@@ -76,6 +98,9 @@ export default function Settings() {
 
   const selectStore = async (store) => {
     setCurrentStore(store)
+    setStoreDetail(null)
+    setTestResult(null)
+    loadStoreDetail(store.id)
     toast.success(`Выбран магазин: ${store.name}`)
   }
 
@@ -92,7 +117,7 @@ export default function Settings() {
       toast.success('Интеграция создана!')
       intForm.reset()
       setShowIntegrationForm(false)
-      await loadStores()
+      await loadStoreDetail(currentStore.id)
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка создания интеграции')
     } finally {
@@ -111,6 +136,7 @@ export default function Settings() {
       } else if (!res.data.success) {
         toast.error(res.data.message || 'Ошибка подключения')
       }
+      await loadStoreDetail(storeId)
     } catch (e) {
       toast.error('Ошибка тестирования')
     } finally {
@@ -517,7 +543,12 @@ export default function Settings() {
               <p className="section-title px-0">Интеграция с 1С</p>
 
               {/* Existing Integrations */}
-              {currentStoreDetail?.integrations?.map((int) => (
+              {detailLoading && (
+                <div className="flex items-center justify-center py-4">
+                  <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              {storeDetail?.integrations?.map((int) => (
                 <div key={int.id} className="card flex flex-col gap-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center flex-shrink-0">

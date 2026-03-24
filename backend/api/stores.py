@@ -307,7 +307,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
 
                     if product:
                         product.name = name
-                        product.article = p1c.get("custom_article") or p1c.get("article") or product.article
+                        product.article = p1c.get("article") or product.article
                         product.synced_at = datetime.now(timezone.utc)
                         total_updated += 1
                     else:
@@ -315,7 +315,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                             store_id=store_id,
                             onec_id=onec_id,
                             name=name,
-                            article=p1c.get("custom_article") or p1c.get("article"),
+                            article=p1c.get("article"),
                             synced_at=datetime.now(timezone.utc),
                         )
                         db.add(product)
