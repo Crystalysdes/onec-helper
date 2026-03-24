@@ -79,59 +79,65 @@ class OneCClient:
         items = data.get("value", []) if isinstance(data, dict) else []
         products = []
         for item in items:
+            if item.get("IsFolder"):
+                continue
+            article = item.get("Артикул", "").strip() or item.get("Code", "").strip()
             products.append({
                 "onec_id": item.get("Ref_Key"),
-                "article": item.get("Code", ""),
+                "article": article,
                 "name": item.get("Description", ""),
-                "custom_article": item.get("Артикул", ""),
+                "code": item.get("Code", ""),
+                "full_name": item.get("НаименованиеПолное", ""),
             })
         return True, products
 
     async def get_product_prices(self, product_ids: List[str]) -> dict:
-        """Get current prices for products from 1C."""
+        """Get current prices for products from 1C. Returns empty dict if register not published."""
         prices = {}
-        for pid in product_ids:
-            path = (
-                f"odata/standard.odata/InformationRegister_ЦеныНоменклатуры"
-                f"?$format=json&$filter=Номенклатура_Key eq guid'{pid}'"
-                f"&$select=Цена,Валюта_Key&$top=1"
-            )
-            success, data = await self._request("GET", path)
-            if success and data:
-                items = data.get("value", [])
-                if items:
-                    prices[pid] = items[0].get("Цена", 0)
+        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
+            for pid in product_ids:
+                path = (
+                    f"odata/standard.odata/{register}"
+                    f"?$format=json&$filter=Номенклатура_Key eq guid'{pid}'"
+                    f"&$select=Цена,Валюта_Key&$top=1"
+                )
+                success, data = await self._request("GET", path)
+                if success and data:
+                    items = data.get("value", [])
+                    if items:
+                        prices[pid] = items[0].get("Цена", 0)
+            if prices:
+                break
         return prices
 
     async def get_stock_balances(self, store_id: str = None) -> Tuple[bool, List[dict]]:
-        """Get stock balances from 1C."""
-        path = (
-            "odata/standard.odata/AccumulationRegister_ТоварыНаСкладах/Balance"
-            "?$format=json"
-            "&$select=Номенклатура_Key,КоличествоBalance"
-        )
-        if store_id:
-            path += f"&$filter=Склад_Key eq guid'{store_id}'"
-
-        success, data = await self._request("GET", path)
-        if not success:
-            return False, []
-
-        items = data.get("value", []) if isinstance(data, dict) else []
-        balances = [
-            {
-                "onec_id": item.get("Номенклатура_Key"),
-                "quantity": item.get("КоличествоBalance", 0),
-            }
-            for item in items
+        """Get stock balances from 1C. Tries multiple register names for different 1C configs."""
+        registers = [
+            ("AccumulationRegister_ТоварыНаСкладах/Balance", "КоличествоБалансе"),
+            ("AccumulationRegister_ОстаткиТоваров/Balance", "КоличествоБалансе"),
+            ("AccumulationRegister_Товары/Balance", "КоличествоБалансе"),
         ]
-        return True, balances
+        for reg_path, qty_field in registers:
+            path = f"odata/standard.odata/{reg_path}?$format=json&$select=Номенклатура_Key,{qty_field}"
+            if store_id:
+                path += f"&$filter=Склад_Key eq guid'{store_id}'"
+            success, data = await self._request("GET", path)
+            if success:
+                items = data.get("value", []) if isinstance(data, dict) else []
+                balances = [
+                    {
+                        "onec_id": item.get("Номенклатура_Key"),
+                        "quantity": item.get(qty_field, 0),
+                    }
+                    for item in items
+                ]
+                return True, balances
+        return False, []
 
     async def create_product(self, product) -> Tuple[bool, Optional[dict]]:
         """Create a new product (nomenclature) in 1C."""
         payload = {
             "Description": product.name,
-            "Code": product.article or "",
             "Артикул": product.article or "",
         }
         success, data = await self._request(
