@@ -557,19 +557,18 @@ async def ai_cleanup_status_endpoint(current_user: User = Depends(get_current_ad
 
 @router.post("/ai-cleanup-catalog")
 async def ai_cleanup_catalog(
-    batch_size: int = 200,
     current_user: User = Depends(get_current_admin),
 ):
-    """Use AI to clean and normalize suspicious GlobalProduct entries."""
+    """Use AI to clean and normalize ALL suspicious GlobalProduct entries."""
     import asyncio
     if _ai_cleanup_status["running"]:
         raise HTTPException(status_code=409, detail="Очистка уже запущена")
-    _ai_cleanup_status.update({"running": True, "processed": 0, "fixed": 0, "done": False, "error": None})
-    asyncio.create_task(_run_ai_cleanup(batch_size))
+    _ai_cleanup_status.update({"running": True, "processed": 0, "fixed": 0, "total": 0, "done": False, "error": None})
+    asyncio.create_task(_run_ai_cleanup())
     return {"status": "started"}
 
 
-async def _run_ai_cleanup(batch_size: int):
+async def _run_ai_cleanup():
     import json as _json
     from sqlalchemy import text as _text
     from backend.database.connection import AsyncSessionLocal
@@ -581,36 +580,36 @@ async def _run_ai_cleanup(batch_size: int):
         fixed = 0
 
         async with AsyncSessionLocal() as db:
-            # Fetch records that look suspicious: no Cyrillic, too short after space-strip, or mixed garbage
             rows = (await db.execute(_text(
                 "SELECT id, name, category, unit FROM global_products "
                 "WHERE name !~ '[а-яёА-ЯЁ]' OR length(trim(name)) < 5 "
-                "ORDER BY id LIMIT :lim"
-            ), {"lim": batch_size})).fetchall()
+                "ORDER BY id"
+            ))).fetchall()
 
         if not rows:
-            _ai_cleanup_status.update({"running": False, "done": True, "processed": 0, "fixed": 0})
+            _ai_cleanup_status.update({"running": False, "done": True, "processed": 0, "fixed": 0, "total": 0})
             return
 
-        CHUNK = 50
+        _ai_cleanup_status["total"] = len(rows)
+        CHUNK = 200
         for i in range(0, len(rows), CHUNK):
             chunk = rows[i:i + CHUNK]
             items = [{"id": str(r[0]), "name": r[1], "category": r[2] or "", "unit": r[3] or "шт"} for r in chunk]
 
             prompt = (
-                "Ты помогаешь нормализовать базу товаров для российского ритейла. "
-                "Для каждого товара из списка:\n"
-                "1. Исправь/переведи название на русский язык, приведи в нормальный вид\n"
-                "2. Заполни категорию на русском если пустая или на английском\n"
-                "3. Определи единицу из названия (шт/кг/г/л/мл/м/упак)\n"
-                "4. Если название выглядит как мусор (код, набор символов) — верни name: null\n\n"
-                "Верни JSON массив:\n"
-                '[{"id":"...", "name":"Очищенное название", "category":"Категория", "unit":"шт"}]\n\n'
-                f"Товары:\n{_json.dumps(items, ensure_ascii=False)}"
+                "Нормализуй базу товаров для российского ритейла. "
+                "Для каждого товара:\n"
+                "1. Исправь/переведи название на русский, приведи в читаемый вид\n"
+                "2. Категория на русском (если пустая или английская — заполни)\n"
+                "3. Единица: шт/кг/г/л/мл/м/упак (определи из названия)\n"
+                "4. Мусор (только коды, символы, бессмысленный набор) — верни name: null\n"
+                "Верни ТОЛЬКО JSON массив без пояснений:\n"
+                '[{"id":"...","name":"Название","category":"Категория","unit":"шт"}]\n\n'
+                f"{_json.dumps(items, ensure_ascii=False)}"
             )
 
             try:
-                raw = await ai._call([{"role": "user", "content": prompt}], max_tokens=2048, fast=True)
+                raw = await ai._call([{"role": "user", "content": prompt}], max_tokens=8192, fast=True)
                 # Extract JSON array
                 match = re.search(r'\[.*\]', raw, re.DOTALL)
                 if not match:

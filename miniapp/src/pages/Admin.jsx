@@ -55,7 +55,6 @@ export default function Admin() {
   const [catFile, setCatFile] = useState(null)
   const [aiCleanLoading, setAiCleanLoading] = useState(false)
   const [aiCleanProgress, setAiCleanProgress] = useState(null)
-  const [aiCleanBatch, setAiCleanBatch] = useState(200)
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -399,22 +398,8 @@ export default function Admin() {
                   <span className="text-xl">🤖</span>
                   <div>
                     <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>ИИ-очистка каталога</p>
-                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Исправит мусор, переведёт на русский, заполнит категории</p>
+                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Исправит мусор, переведёт на русский, заполнит категории · все подозрительные записи</p>
                   </div>
-                </div>
-
-                <div className="flex gap-2 items-center flex-wrap">
-                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Записей:</span>
-                  {[100, 200, 500, 1000].map(n => (
-                    <button key={n}
-                      className="px-2.5 py-1 rounded-lg text-xs font-medium active:opacity-70"
-                      style={{
-                        background: aiCleanBatch === n ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
-                        color: aiCleanBatch === n ? 'white' : 'var(--tg-theme-hint-color)',
-                      }}
-                      onClick={() => setAiCleanBatch(n)}
-                    >{n}</button>
-                  ))}
                 </div>
 
                 {aiCleanProgress && (
@@ -430,7 +415,9 @@ export default function Admin() {
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                         <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          Обработано: <b style={{ color: 'var(--tg-theme-text-color)' }}>{aiCleanProgress.processed}</b> · Исправлено: {aiCleanProgress.fixed}
+                          Обработано: <b style={{ color: 'var(--tg-theme-text-color)' }}>{aiCleanProgress.processed}</b>
+                          {aiCleanProgress.total > 0 && ` из ${aiCleanProgress.total}`}
+                          {' '}· Исправлено: {aiCleanProgress.fixed}
                         </p>
                       </div>
                     )}
@@ -444,7 +431,7 @@ export default function Admin() {
                     setAiCleanLoading(true)
                     setAiCleanProgress(null)
                     try {
-                      await adminAPI.aiCleanupCatalog(aiCleanBatch)
+                      await adminAPI.aiCleanupCatalog()
                       toast.success('ИИ-очистка запущена...')
                       const poll = setInterval(async () => {
                         try {
