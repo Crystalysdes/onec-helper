@@ -598,32 +598,66 @@ export default function AddProduct() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  Товар уже существует{aiScan.storeName ? ` · ${aiScan.storeName}` : ''}
+                  {aiScan.product?.id
+                    ? `Уже в вашем магазине · ${aiScan.storeName || ''}`
+                    : `Найден в ${aiScan.storeName || 'базе'} 📦`}
                 </p>
                 <p className="text-base font-bold leading-snug truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
                   {aiScan.product?.name}
                 </p>
-                {aiScan.product?.price != null && (
-                  <p className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {aiScan.product.price.toLocaleString('ru-RU')} ₽
-                    {aiScan.product.quantity != null ? ` · Остаток: ${aiScan.product.quantity} ${aiScan.product.unit || ''}` : ''}
-                  </p>
-                )}
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {aiScan.product?.price != null && (
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                      {aiScan.product.price.toLocaleString('ru-RU')} ₽
+                    </span>
+                  )}
+                  {aiScan.product?.category && (
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                      {aiScan.product.category}
+                    </span>
+                  )}
+                  {aiScan.product?.barcode && (
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                      {aiScan.product.barcode}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
             <div className="flex flex-col gap-2">
-              <button
-                className="btn-primary flex items-center justify-center gap-2"
-                onClick={() => fillFormAndEdit(aiScan.product)}
-              >
-                <Edit2 size={15} />
-                Редактировать
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={() => setAiScan(null)}
-              >
+              {/* From catalog or other store — offer to add to current store */}
+              {(!aiScan.product?.id || aiScan.product?.store_id !== currentStore?.id) && (
+                <button
+                  className="btn-primary flex items-center justify-center gap-2"
+                  onClick={() => copyExisting(aiScan.product, () => setAiScan(null))}
+                  disabled={loading}
+                >
+                  <Plus size={15} />
+                  {loading ? 'Добавляю...' : 'Добавить в мой магазин'}
+                </button>
+              )}
+              {/* Own product — offer to edit */}
+              {aiScan.product?.id && (
+                <button
+                  className="btn-secondary flex items-center justify-center gap-2"
+                  onClick={() => fillFormAndEdit(aiScan.product)}
+                >
+                  <Edit2 size={15} />
+                  Редактировать
+                </button>
+              )}
+              {/* Fill form with catalog data for customisation */}
+              {!aiScan.product?.id && (
+                <button
+                  className="btn-secondary flex items-center justify-center gap-2"
+                  onClick={() => { fillFormAndEdit({ ...aiScan.product, id: null }); setAiScan(null) }}
+                >
+                  <Edit2 size={15} />
+                  Изменить и добавить
+                </button>
+              )}
+              <button className="btn-secondary text-sm" onClick={() => setAiScan(null)}>
                 Отмена
               </button>
             </div>

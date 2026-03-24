@@ -228,6 +228,26 @@ async def check_barcode_global(
             },
         }
 
+    # 3. GlobalProduct catalog (Open Food Facts imports)
+    gp = (await db.execute(_text(
+        "SELECT barcode, name, price, purchase_price, article, category, unit, description "
+        "FROM global_products WHERE barcode = :bc LIMIT 1"
+    ), {"bc": bc})).fetchone()
+
+    if gp:
+        return {
+            "found": True,
+            "source": "catalog",
+            "store_name": "База товаров",
+            "product": {
+                "id": None, "store_id": None,
+                "barcode": gp[0], "name": gp[1], "price": gp[2],
+                "purchase_price": gp[3], "article": gp[4],
+                "category": gp[5], "unit": gp[6], "description": gp[7],
+                "quantity": 0, "is_active": True,
+            },
+        }
+
     return {"found": False, "product": None, "store_name": None}
 
 
