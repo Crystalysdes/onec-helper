@@ -393,10 +393,14 @@ async def upload_invoice(
         await f.write(contents)
 
     ocr_service = OCRService()
-    extracted_text = ocr_service.extract_text(contents)
+    content_type = file.content_type or "image/jpeg"
+    extracted_text = ocr_service.extract_from_file(contents, content_type)
 
     ai_service = AIService()
-    products = await ai_service.parse_invoice(extracted_text)
+    if extracted_text.strip():
+        products = await ai_service.parse_invoice(extracted_text)
+    else:
+        products = await ai_service.parse_invoice_from_image(contents)
 
     log = Log(
         user_id=current_user.id,

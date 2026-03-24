@@ -92,6 +92,47 @@ class AIService:
             logger.error(f"AI invoice parse error: {e}")
             return []
 
+    async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
+        """Parse invoice by sending image directly to Claude vision (when OCR is unavailable)."""
+        base64_image = base64.standard_b64encode(image_bytes).decode("utf-8")
+        prompt = """Ты — система обработки накладных для розничного магазина.
+На изображении — накладная, товарный чек или счёт-фактура.
+Извлеки СПИСОК ТОВАРОВ и верни ТОЛЬКО валидный JSON массив объектов.
+
+Поля каждого объекта:
+- name: string — полное нормализованное название (обязательно, правильный регистр)
+- article: string|null — артикул/код товара
+- barcode: string|null — штрих-код EAN/UPC (только цифры 8-13 знаков)
+- quantity: number — количество (дробное если кг/л), по умолчанию 1
+- unit: string — шт/кг/л/упак/пара/м/рулон, по умолчанию "шт"
+- price: number|null — цена продажи за единицу
+- purchase_price: number|null — закупочная цена / себестоимость
+- category: string|null — Молочные продукты / Выпечка / Хозтовары / Бакалея и т.д.
+
+Правила:
+- Нормализуй названия: правильный регистр, убери лишние символы и коды
+- Если одна колонка цен — это purchase_price
+- Игнорируй строки: итого, НДС, сумма, заголовки колонок, реквизиты поставщика
+
+Верни только JSON массив без пояснений. Если товаров нет — []"""
+
+        messages = [{
+            "role": "user",
+            "content": [
+                self._img_block(base64_image),
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        try:
+            content = await self._call(messages, max_tokens=4096)
+            return json.loads(_strip_json(content))
+        except json.JSONDecodeError as e:
+            logger.error(f"AI invoice image parse JSON error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"AI invoice image parse error: {e}")
+            return []
+
     async def recognize_product_from_image(
         self, ocr_text: str, image_bytes: Optional[bytes] = None
     ) -> dict:
