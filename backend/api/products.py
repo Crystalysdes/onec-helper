@@ -116,6 +116,44 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
     return store
 
 
+async def _push_to_onec(db: AsyncSession, store_id: UUID, product: ProductCache):
+    """Push a product to 1C if an active integration exists. Non-blocking — errors are logged only."""
+    from backend.integrations.onec_integration import OneCClient
+    from backend.core.security import decrypt_password
+    from loguru import logger
+    try:
+        result = await db.execute(
+            select(Integration).where(
+                Integration.store_id == store_id,
+                Integration.status == IntegrationStatus.active,
+            )
+        )
+        integration = result.scalars().first()
+        if not integration:
+            return
+
+        client = OneCClient(
+            url=integration.onec_url,
+            username=integration.onec_username,
+            password=decrypt_password(integration.onec_password_encrypted),
+        )
+        if product.onec_id:
+            success, data = await client.update_product(product.onec_id, product)
+        else:
+            success, data = await client.create_product(product)
+            if success and data and data.get("Ref_Key"):
+                product.onec_id = data["Ref_Key"]
+
+        if success:
+            from datetime import datetime, timezone
+            product.synced_at = datetime.now(timezone.utc)
+            logger.info(f"Product '{product.name}' synced to 1C (onec_id={product.onec_id})")
+        else:
+            logger.warning(f"1C push failed for '{product.name}': {data}")
+    except Exception as e:
+        logger.error(f"_push_to_onec error: {e}")
+
+
 @router.get("/check-barcode")
 async def check_barcode_global(
     barcode: str,
@@ -265,6 +303,7 @@ async def create_product(
     await db.flush()
 
     await _upsert_global_product(db, product)
+    await _push_to_onec(db, store_id, product)
 
     log = Log(
         user_id=current_user.id,
@@ -454,9 +493,9 @@ async def quick_add_product(
         is_active=True,
     )
     db.add(product)
-    await db.commit()
-    await db.refresh(product)
+    await db.flush()
     await _upsert_global_product(db, product)
+    await _push_to_onec(db, UUID(store_id), product)
     await db.commit()
     return _serialize_product(product)
 
@@ -507,6 +546,7 @@ async def update_product(
         setattr(product, field, value)
 
     await _upsert_global_product(db, product)
+    await _push_to_onec(db, product.store_id, product)
     await db.commit()
     return _serialize_product(product)
 

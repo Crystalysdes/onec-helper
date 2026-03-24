@@ -1,13 +1,15 @@
+import asyncio
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from backend.database.connection import get_db
-from backend.database.models import User, Store, Integration, IntegrationStatus
+from backend.database.connection import get_db, AsyncSessionLocal
+from backend.database.models import User, Store, Integration, IntegrationStatus, ProductCache
 from backend.core.security import get_current_user, encrypt_password, decrypt_password
 
 router = APIRouter()
@@ -156,6 +158,7 @@ async def delete_store(
 async def create_integration(
     store_id: UUID,
     payload: IntegrationCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -176,10 +179,13 @@ async def create_integration(
     )
     db.add(integration)
     await db.flush()
+    integration_id = integration.id
+    background_tasks.add_task(_run_sync_in_background, store_id, integration_id)
     return {
         "id": str(integration.id),
         "name": integration.name,
         "status": integration.status,
+        "message": "Интеграция создана. Импорт товаров из 1С запущен в фоне.",
     }
 
 
@@ -253,3 +259,171 @@ async def test_integration(
 
     integration.status = IntegrationStatus.active if success else IntegrationStatus.error
     return {"success": success, "message": message}
+
+
+async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
+    """Pull all products from 1C into products_cache. Runs in background."""
+    from backend.integrations.onec_integration import OneCClient
+    from loguru import logger
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(
+                select(Integration).where(Integration.id == integration_id)
+            )
+            integration = result.scalar_one_or_none()
+            if not integration:
+                return
+
+            client = OneCClient(
+                url=integration.onec_url,
+                username=integration.onec_username,
+                password=decrypt_password(integration.onec_password_encrypted),
+            )
+
+            offset = 0
+            batch = 200
+            total_added = 0
+            total_updated = 0
+
+            while True:
+                success, products_1c = await client.get_products(limit=batch, offset=offset)
+                if not success or not products_1c:
+                    break
+
+                for p1c in products_1c:
+                    onec_id = p1c.get("onec_id")
+                    name = p1c.get("name", "").strip()
+                    if not name:
+                        continue
+
+                    existing = await db.execute(
+                        select(ProductCache).where(
+                            ProductCache.store_id == store_id,
+                            ProductCache.onec_id == onec_id,
+                        )
+                    )
+                    product = existing.scalar_one_or_none()
+
+                    if product:
+                        product.name = name
+                        product.article = p1c.get("custom_article") or p1c.get("article") or product.article
+                        product.synced_at = datetime.now(timezone.utc)
+                        total_updated += 1
+                    else:
+                        product = ProductCache(
+                            store_id=store_id,
+                            onec_id=onec_id,
+                            name=name,
+                            article=p1c.get("custom_article") or p1c.get("article"),
+                            synced_at=datetime.now(timezone.utc),
+                        )
+                        db.add(product)
+                        total_added += 1
+
+                await db.flush()
+                if len(products_1c) < batch:
+                    break
+                offset += batch
+
+            integration.last_sync_at = datetime.now(timezone.utc)
+            integration.status = IntegrationStatus.active
+            await db.commit()
+            logger.info(f"1C sync done: store={store_id} added={total_added} updated={total_updated}")
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"1C sync error: {e}")
+
+
+@router.post("/{store_id}/integrations/{integration_id}/sync")
+async def sync_from_onec(
+    store_id: UUID,
+    integration_id: UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import all products from 1C into the bot's database."""
+    result = await db.execute(
+        select(Store).where(Store.id == store_id, Store.owner_id == current_user.id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Магазин не найден")
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.id == integration_id, Integration.store_id == store_id
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Интеграция не найдена")
+
+    background_tasks.add_task(_run_sync_in_background, store_id, integration_id)
+    return {"status": "sync_started", "message": "Импорт товаров из 1С запущен в фоне"}
+
+
+@router.get("/{store_id}/integrations/{integration_id}/stock")
+async def get_onec_stock(
+    store_id: UUID,
+    integration_id: UUID,
+    low_stock_threshold: float = 5.0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get stock balances from 1C, optionally filter low-stock items."""
+    from backend.integrations.onec_integration import OneCClient
+
+    result = await db.execute(
+        select(Store).where(Store.id == store_id, Store.owner_id == current_user.id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Магазин не найден")
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.id == integration_id, Integration.store_id == store_id
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Интеграция не найдена")
+
+    client = OneCClient(
+        url=integration.onec_url,
+        username=integration.onec_username,
+        password=decrypt_password(integration.onec_password_encrypted),
+    )
+    success, balances = await client.get_stock_balances()
+    if not success:
+        raise HTTPException(status_code=502, detail="Не удалось получить остатки из 1С")
+
+    onec_ids = [b["onec_id"] for b in balances if b.get("onec_id")]
+    products_map = {}
+    if onec_ids:
+        rows = await db.execute(
+            select(ProductCache).where(
+                ProductCache.store_id == store_id,
+                ProductCache.onec_id.in_(onec_ids),
+            )
+        )
+        for p in rows.scalars().all():
+            products_map[p.onec_id] = p.name
+
+    result_items = []
+    low_stock = []
+    for b in balances:
+        qty = b.get("quantity", 0)
+        name = products_map.get(b.get("onec_id"), b.get("onec_id", "—"))
+        item = {"onec_id": b.get("onec_id"), "name": name, "quantity": qty}
+        result_items.append(item)
+        if qty <= low_stock_threshold:
+            low_stock.append(item)
+
+    return {
+        "total": len(result_items),
+        "low_stock_count": len(low_stock),
+        "low_stock": low_stock,
+        "all": result_items,
+    }
