@@ -53,6 +53,9 @@ export default function Admin() {
   const [catResult, setCatResult] = useState(null)
   const [catLimit, setCatLimit] = useState(100000)
   const [catProgress, setCatProgress] = useState(null)
+  const [aiCleanLoading, setAiCleanLoading] = useState(false)
+  const [aiCleanProgress, setAiCleanProgress] = useState(null)
+  const [aiCleanBatch, setAiCleanBatch] = useState(200)
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -346,6 +349,82 @@ export default function Admin() {
                     : '📥 Загрузить русские товары'}
                 </button>
               </div>
+
+              {/* AI catalog cleanup */}
+              <div className="card flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🤖</span>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>ИИ-очистка каталога</p>
+                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Исправит мусор, переведёт на русский, заполнит категории</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 items-center flex-wrap">
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Записей:</span>
+                  {[100, 200, 500, 1000].map(n => (
+                    <button key={n}
+                      className="px-2.5 py-1 rounded-lg text-xs font-medium active:opacity-70"
+                      style={{
+                        background: aiCleanBatch === n ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
+                        color: aiCleanBatch === n ? 'white' : 'var(--tg-theme-hint-color)',
+                      }}
+                      onClick={() => setAiCleanBatch(n)}
+                    >{n}</button>
+                  ))}
+                </div>
+
+                {aiCleanProgress && (
+                  <div className="p-3 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                    {aiCleanProgress.error ? (
+                      <p className="text-xs" style={{ color: '#ef4444' }}>❌ {aiCleanProgress.error}</p>
+                    ) : aiCleanProgress.done ? (
+                      <>
+                        <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Готово!</p>
+                        <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>Обработано: {aiCleanProgress.processed} · Исправлено/удалено: {aiCleanProgress.fixed}</p>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                        <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          Обработано: <b style={{ color: 'var(--tg-theme-text-color)' }}>{aiCleanProgress.processed}</b> · Исправлено: {aiCleanProgress.fixed}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                  disabled={aiCleanLoading}
+                  onClick={async () => {
+                    setAiCleanLoading(true)
+                    setAiCleanProgress(null)
+                    try {
+                      await adminAPI.aiCleanupCatalog(aiCleanBatch)
+                      toast.success('ИИ-очистка запущена...')
+                      const poll = setInterval(async () => {
+                        try {
+                          const st = await adminAPI.aiCleanupStatus()
+                          setAiCleanProgress(st.data)
+                          if (st.data.done || st.data.error) {
+                            clearInterval(poll)
+                            setAiCleanLoading(false)
+                          }
+                        } catch { clearInterval(poll); setAiCleanLoading(false) }
+                      }, 3000)
+                    } catch (e) {
+                      toast.error(e.response?.data?.detail || 'Ошибка')
+                      setAiCleanLoading(false)
+                    }
+                  }}
+                >
+                  {aiCleanLoading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Очистка идёт...</>
+                    : '🧹 Запустить ИИ-очистку'}
+                </button>
+              </div>
+
             </>
           ) : (
             <div className="flex flex-col items-center gap-3 py-12">

@@ -1,3 +1,4 @@
+import re
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
@@ -431,6 +432,7 @@ async def _run_catalog_import(limit: int):
     import uuid as _uuid
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from backend.database.connection import AsyncSessionLocal as async_session_maker
+    from backend.services.catalog_cleaner import clean_record
 
     URL = "https://catalog.app/public-opportunities/download-public-file?fileName=barcodes_csv.zip"
     _catalog_import_status["running"] = True
@@ -464,28 +466,12 @@ async def _run_catalog_import(limit: int):
                 if imported + skipped >= limit:
                     break
 
-                barcode = (row.get("Barcode") or row.get("barcode") or "").strip()
-                if not barcode or not barcode.isdigit():
+                cleaned = clean_record(row)
+                if not cleaned:
                     skipped += 1
                     continue
 
-                name = (row.get("Name") or row.get("name") or "").strip()
-                if not name or len(name) < 2:
-                    skipped += 1
-                    continue
-
-                vendor = (row.get("Vendor") or row.get("vendor") or "").strip()
-                if vendor and vendor.lower() not in name.lower():
-                    name = f"{name} {vendor}".strip()
-
-                batch.append({
-                    "id": _uuid.uuid4(),
-                    "barcode": barcode,
-                    "name": name[:255],
-                    "category": (row.get("Category") or row.get("category") or "")[:60] or None,
-                    "article": (row.get("Article") or row.get("article") or "")[:60] or None,
-                    "unit": "шт",
-                })
+                batch.append({"id": _uuid.uuid4(), **cleaned})
 
                 if len(batch) >= BATCH_SIZE:
                     stmt = pg_insert(GlobalProduct).values(batch)
@@ -510,6 +496,109 @@ async def _run_catalog_import(limit: int):
     except Exception as e:
         logger.error(f"Catalog import error: {e}")
         _catalog_import_status.update({"running": False, "done": True, "error": str(e)})
+
+
+# ── AI batch cleanup ──────────────────────────────────────────────────────────
+_ai_cleanup_status: dict = {"running": False, "processed": 0, "fixed": 0, "done": False, "error": None}
+
+
+@router.get("/ai-cleanup-status")
+async def ai_cleanup_status_endpoint(current_user: User = Depends(get_current_admin)):
+    return _ai_cleanup_status
+
+
+@router.post("/ai-cleanup-catalog")
+async def ai_cleanup_catalog(
+    batch_size: int = 200,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: User = Depends(get_current_admin),
+):
+    """Use AI to clean and normalize suspicious GlobalProduct entries."""
+    if _ai_cleanup_status["running"]:
+        raise HTTPException(status_code=409, detail="Очистка уже запущена")
+    _ai_cleanup_status.update({"running": True, "processed": 0, "fixed": 0, "done": False, "error": None})
+    background_tasks.add_task(_run_ai_cleanup, batch_size)
+    return {"status": "started"}
+
+
+async def _run_ai_cleanup(batch_size: int):
+    import json as _json
+    from sqlalchemy import text as _text
+    from backend.database.connection import AsyncSessionLocal
+    from backend.services.ai_service import AIService
+
+    try:
+        ai = AIService()
+        processed = 0
+        fixed = 0
+
+        async with AsyncSessionLocal() as db:
+            # Fetch records that look suspicious: no Cyrillic, too short after space-strip, or mixed garbage
+            rows = (await db.execute(_text(
+                "SELECT id, name, category, unit FROM global_products "
+                "WHERE name !~ '[а-яёА-ЯЁ]' OR length(trim(name)) < 5 "
+                "ORDER BY id LIMIT :lim"
+            ), {"lim": batch_size})).fetchall()
+
+        if not rows:
+            _ai_cleanup_status.update({"running": False, "done": True, "processed": 0, "fixed": 0})
+            return
+
+        CHUNK = 50
+        for i in range(0, len(rows), CHUNK):
+            chunk = rows[i:i + CHUNK]
+            items = [{"id": str(r[0]), "name": r[1], "category": r[2] or "", "unit": r[3] or "шт"} for r in chunk]
+
+            prompt = (
+                "Ты помогаешь нормализовать базу товаров для российского ритейла. "
+                "Для каждого товара из списка:\n"
+                "1. Исправь/переведи название на русский язык, приведи в нормальный вид\n"
+                "2. Заполни категорию на русском если пустая или на английском\n"
+                "3. Определи единицу из названия (шт/кг/г/л/мл/м/упак)\n"
+                "4. Если название выглядит как мусор (код, набор символов) — верни name: null\n\n"
+                "Верни JSON массив:\n"
+                '[{"id":"...", "name":"Очищенное название", "category":"Категория", "unit":"шт"}]\n\n'
+                f"Товары:\n{_json.dumps(items, ensure_ascii=False)}"
+            )
+
+            try:
+                raw = await ai._call([{"role": "user", "content": prompt}], max_tokens=2048, fast=True)
+                # Extract JSON array
+                match = re.search(r'\[.*\]', raw, re.DOTALL)
+                if not match:
+                    continue
+                cleaned_items = _json.loads(match.group())
+            except Exception as e:
+                logger.warning(f"AI cleanup chunk error: {e}")
+                continue
+
+            async with AsyncSessionLocal() as db:
+                for item in cleaned_items:
+                    pid = item.get("id")
+                    name = (item.get("name") or "").strip()
+                    if not pid:
+                        continue
+                    if not name:
+                        # Delete garbage
+                        await db.execute(_text("DELETE FROM global_products WHERE id = :id"), {"id": pid})
+                        fixed += 1
+                    else:
+                        await db.execute(_text(
+                            "UPDATE global_products SET name=:name, category=:cat, unit=:unit WHERE id=:id"
+                        ), {"id": pid, "name": name[:255], "cat": item.get("category") or None, "unit": item.get("unit") or "шт"})
+                        fixed += 1
+                await db.commit()
+
+            processed += len(chunk)
+            _ai_cleanup_status["processed"] = processed
+            _ai_cleanup_status["fixed"] = fixed
+
+        _ai_cleanup_status.update({"running": False, "done": True, "processed": processed, "fixed": fixed, "error": None})
+        logger.info(f"AI cleanup done: processed={processed}, fixed={fixed}")
+
+    except Exception as e:
+        logger.error(f"AI cleanup error: {e}")
+        _ai_cleanup_status.update({"running": False, "done": True, "error": str(e)})
 
 
 @router.delete("/products/bulk-delete")
