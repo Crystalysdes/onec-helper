@@ -18,14 +18,6 @@ def get_main_menu_keyboard(miniapp_url: str = None) -> ReplyKeyboardMarkup:
                     web_app=WebAppInfo(url=url),
                 )
             ],
-            [
-                KeyboardButton(text="📦 Мои магазины"),
-                KeyboardButton(text="⚙️ Настройки"),
-            ],
-            [
-                KeyboardButton(text="📊 Статистика"),
-                KeyboardButton(text="❓ Помощь"),
-            ],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -41,14 +33,6 @@ def get_admin_keyboard(miniapp_url: str = None) -> ReplyKeyboardMarkup:
                     text="🛍 Открыть магазин",
                     web_app=WebAppInfo(url=url),
                 )
-            ],
-            [
-                KeyboardButton(text="📦 Мои магазины"),
-                KeyboardButton(text="⚙️ Настройки"),
-            ],
-            [
-                KeyboardButton(text="📊 Статистика"),
-                KeyboardButton(text="❓ Помощь"),
             ],
             [
                 KeyboardButton(text="👑 Админ панель"),
