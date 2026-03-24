@@ -1,4 +1,7 @@
 net1c.ru {
+    handle /health {
+        reverse_proxy localhost:8000
+    }
     handle /api/* {
         reverse_proxy localhost:8000
     }
