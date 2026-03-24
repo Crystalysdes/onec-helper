@@ -5,29 +5,10 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     restart: unless-stopped
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - uploads:/app/uploads
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      - BACKEND_DOMAIN=${BACKEND_DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./miniapp/dist:/srv/miniapp:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
-
 volumes:
   uploads:
-  caddy_data:
-  caddy_config:

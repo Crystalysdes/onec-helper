@@ -72,26 +72,50 @@ else
     echo "[5/6] .env обновлён (домен: $DOMAIN)"
 fi
 
-# ── 6. Собираем miniapp с правильным API URL ─────────────────────────
-echo "[6/6] Собираю miniapp..."
+# ── 6. Устанавливаем Caddy как системный сервис ──────────────────────
+if ! command -v caddy &> /dev/null; then
+    echo "[6a] Устанавливаю Caddy..."
+    apt install -y debian-keyring debian-archive-keyring apt-transport-https
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+        | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+        | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -qq
+    apt-get install -y caddy
+else
+    echo "[6a] Caddy уже установлен: $(caddy version)"
+fi
+
+# ── 7. Собираем miniapp с правильным API URL ─────────────────────────
+echo "[6b] Собираю miniapp..."
 cd /app/miniapp
 npm install --silent
 VITE_API_URL="https://${DOMAIN}/api/v1" npm run build
-echo "      miniapp собран → /app/miniapp/dist"
+echo "     miniapp собран → /app/miniapp/dist"
 
-# ── 7. Запускаем ────────────────────────────────────────────────────
+# ── 8. Конфигурируем и перезапускаем Caddy ───────────────────────────
+echo "[6c] Настраиваю Caddy..."
+export BACKEND_DOMAIN="${DOMAIN}"
+envsubst < /app/Caddyfile > /etc/caddy/Caddyfile
+
+systemctl enable caddy
+systemctl restart caddy
+echo "     Caddy запущен"
+
+# ── 9. Запускаем backend + bot в Docker ──────────────────────────────
 cd /app
 echo ""
-echo "=== Запускаю контейнеры ==="
+echo "=== Запускаю backend + bot ==="
 docker compose -f docker-compose.timeweb.yml up -d --build
 
 echo ""
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║  ГОТОВО!                                                  ║"
-echo "╠═══════════════════════════════════════════════════════════╣"
-echo "║  Сайт + API:  https://$DOMAIN"
-echo "║  Бот:         @oneshelperbot                              ║"
-echo "║                                                           ║"
-echo "║  Логи:  docker compose -f /app/docker-compose.timeweb.yml logs -f  ║"
-echo "║  Обновить:  cd /app && git pull && bash timeweb-setup.sh  ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║  ГОТОВО!                                                      ║"
+echo "╠═══════════════════════════════════════════════════════════════╣"
+echo "║  Сайт + API:  https://${DOMAIN}                              ║"
+echo "║  Бот:         @oneshelperbot                                  ║"
+echo "║                                                               ║"
+echo "║  Логи backend:  docker compose -f /app/docker-compose.timeweb.yml logs -f  ║"
+echo "║  Логи Caddy:    journalctl -u caddy -f                       ║"
+echo "║  Обновить:      cd /app && git pull && bash timeweb-setup.sh  ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
