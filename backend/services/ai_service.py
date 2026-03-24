@@ -9,8 +9,18 @@ from backend.config import settings
 
 class AIService:
     def __init__(self):
-        self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = settings.CLAUDE_MODEL
+        if settings.OPENROUTER_API_KEY:
+            import httpx
+            self.client = anthropic.AsyncAnthropic(
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+                default_headers={"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
+                http_client=httpx.AsyncClient(),
+            )
+            self.model = "anthropic/claude-3-5-sonnet"
+        else:
+            self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            self.model = settings.CLAUDE_MODEL
 
     async def parse_invoice(self, ocr_text: str) -> List[dict]:
         """Parse invoice text and extract product list using Claude."""
