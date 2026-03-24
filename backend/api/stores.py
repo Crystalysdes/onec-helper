@@ -4,6 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -427,3 +428,45 @@ async def get_onec_stock(
         "low_stock": low_stock,
         "all": result_items,
     }
+
+
+@router.get("/edo-check")
+async def edo_check(
+    internal_token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint for bot to poll EDO documents from all active integrations."""
+    from backend.config import settings as backend_settings
+    from backend.integrations.onec_integration import OneCClient
+
+    if internal_token != backend_settings.SECRET_KEY[:16]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    result = await db.execute(
+        select(Integration, Store, User)
+        .join(Store, Integration.store_id == Store.id)
+        .join(User, Store.owner_id == User.id)
+        .where(Integration.status == IntegrationStatus.active)
+    )
+    rows = result.all()
+
+    notifications = []
+    for integration, store, user in rows:
+        try:
+            client = OneCClient(
+                url=integration.onec_url,
+                username=integration.onec_username,
+                password=decrypt_password(integration.onec_password_encrypted),
+            )
+            success, docs = await client.get_edo_documents()
+            if success and docs:
+                notifications.append({
+                    "telegram_id": user.telegram_id,
+                    "store_name": store.name,
+                    "integration_id": str(integration.id),
+                    "documents": docs,
+                })
+        except Exception as e:
+            logger.warning(f"EDO check failed for integration {integration.id}: {e}")
+
+    return {"notifications": notifications}

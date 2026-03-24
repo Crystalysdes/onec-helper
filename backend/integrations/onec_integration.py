@@ -192,6 +192,52 @@ class OneCClient:
         )
         return success, data
 
+    async def get_edo_documents(self) -> Tuple[bool, List[dict]]:
+        """Fetch incoming EDO documents from 1C that may need attention."""
+        candidates = [
+            "Document_ЭлектронныйДокументВходящий",
+            "Document_ЭДОВходящийДокумент",
+            "Document_СчетФактураПолученный",
+            "Document_ПоступлениеТоваровУслуг",
+        ]
+        for entity in candidates:
+            path = (
+                f"odata/standard.odata/{entity}"
+                f"?$format=json&$top=20&$orderby=Date desc"
+                f"&$select=Ref_Key,Number,Date,СостояниеЭДО,Статус,СтатусЭДО,"
+                f"СуммаДокумента,Сумма,Контрагент_Key,ВидОперации"
+            )
+            success, data = await self._request("GET", path)
+            if not success:
+                continue
+            items = data.get("value", []) if isinstance(data, dict) else []
+            if not items:
+                continue
+            docs = []
+            for item in items:
+                status = (
+                    item.get("СостояниеЭДО") or
+                    item.get("СтатусЭДО") or
+                    item.get("Статус") or ""
+                )
+                needs_action = any(kw in status.lower() for kw in [
+                    "подпис", "ожидает", "требует", "входящий", "получен", "новый"
+                ]) or not status
+                if needs_action:
+                    amount = item.get("СуммаДокумента") or item.get("Сумма") or 0
+                    docs.append({
+                        "id": str(item.get("Ref_Key", "")),
+                        "number": str(item.get("Number", "б/н")),
+                        "date": str(item.get("Date", ""))[:10],
+                        "status": status or "Входящий",
+                        "amount": float(amount),
+                        "counterparty_key": str(item.get("Контрагент_Key", ""))[:8],
+                        "doc_type": entity.replace("Document_", ""),
+                        "entity": entity,
+                    })
+            return True, docs
+        return False, []
+
     async def sync_products(self, store_products: List) -> dict:
         """Full sync: pull from 1C and return mapping."""
         result = {"synced": 0, "errors": 0, "products": []}

@@ -12,6 +12,7 @@ class BotSettings(BaseSettings):
     MINIAPP_URL: str = "https://yourdomain.com"
     REDIS_URL: str = "redis://redis:6379/0"
     ENVIRONMENT: str = "production"
+    SECRET_KEY: str = "changeme"
 
     class Config:
         env_file = str(_ENV_FILE)
