@@ -1,26 +1,54 @@
 import json
 import base64
 from typing import List, Optional
-import anthropic
 from loguru import logger
 
 from backend.config import settings
 
 
+def _strip_json(content: str) -> str:
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    return content.strip()
+
+
 class AIService:
     def __init__(self):
         if settings.OPENROUTER_API_KEY:
-            import httpx
-            self.client = anthropic.AsyncAnthropic(
+            from openai import AsyncOpenAI
+            self._mode = "openai"
+            self._client = AsyncOpenAI(
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1",
                 default_headers={"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
-                http_client=httpx.AsyncClient(),
             )
-            self.model = "anthropic/claude-3-5-sonnet"
+            self._model = "anthropic/claude-3.5-sonnet"
         else:
-            self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-            self.model = settings.CLAUDE_MODEL
+            import anthropic
+            self._mode = "anthropic"
+            self._client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            self._model = settings.CLAUDE_MODEL
+
+    def _img_block(self, b64: str) -> dict:
+        if self._mode == "openai":
+            return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
+
+    async def _call(self, messages: list, system: str = None, max_tokens: int = 1024) -> str:
+        if self._mode == "openai":
+            msgs = ([{"role": "system", "content": system}] if system else []) + messages
+            r = await self._client.chat.completions.create(
+                model=self._model, max_tokens=max_tokens, messages=msgs
+            )
+            return r.choices[0].message.content.strip()
+        kwargs = {"model": self._model, "max_tokens": max_tokens, "messages": messages}
+        if system:
+            kwargs["system"] = system
+        r = await self._client.messages.create(**kwargs)
+        return r.content[0].text.strip()
 
     async def parse_invoice(self, ocr_text: str) -> List[dict]:
         """Parse invoice text and extract product list using Claude."""
@@ -55,17 +83,8 @@ class AIService:
 Если товаров не найдено, верни пустой массив: []"""
 
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = response.content[0].text.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            return json.loads(content)
+            content = await self._call([{"role": "user", "content": prompt}], max_tokens=4096)
+            return json.loads(_strip_json(content))
         except json.JSONDecodeError as e:
             logger.error(f"AI invoice parse JSON error: {e}")
             return []
@@ -84,14 +103,7 @@ class AIService:
             messages.append({
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": base64_image,
-                        },
-                    },
+                    self._img_block(base64_image),
                     {
                         "type": "text",
                         "text": f"""Ты — система распознавания товаров для розничного магазина.
@@ -122,17 +134,8 @@ class AIService:
             })
 
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                messages=messages,
-            )
-            content = response.content[0].text.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            return json.loads(content)
+            content = await self._call(messages, max_tokens=1024)
+            return json.loads(_strip_json(content))
         except Exception as e:
             logger.error(f"AI product recognition error: {e}")
             return {"name": "Неизвестный товар", "description": ocr_text[:200]}
@@ -154,13 +157,11 @@ class AIService:
             context_str = f"\nКонтекст магазина:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
 
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=2048,
+            return await self._call(
+                [{"role": "user", "content": message + context_str}],
                 system=system_prompt,
-                messages=[{"role": "user", "content": message + context_str}],
+                max_tokens=2048,
             )
-            return response.content[0].text
         except Exception as e:
             logger.error(f"AI chat error: {e}")
             return "Извините, произошла ошибка. Попробуйте позже."
@@ -199,17 +200,8 @@ name, price, purchase_price, barcode, article, category, quantity, unit, descrip
 Верни только JSON без пояснений."""
 
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = response.content[0].text.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            return json.loads(content)
+            content = await self._call([{"role": "user", "content": prompt}], max_tokens=512)
+            return json.loads(_strip_json(content))
         except Exception as e:
             logger.error(f"AI text extraction error: {e}")
             return {"name": text[:100]}
