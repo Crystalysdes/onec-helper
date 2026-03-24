@@ -10,8 +10,8 @@ _engine_kwargs = dict(
     pool_pre_ping=not _is_sqlite,
 )
 if not _is_sqlite:
-    _engine_kwargs["pool_size"] = 20
-    _engine_kwargs["max_overflow"] = 0
+    _engine_kwargs["pool_size"] = 5
+    _engine_kwargs["max_overflow"] = 5
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
