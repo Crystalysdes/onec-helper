@@ -25,8 +25,8 @@ export default function Layout() {
         className="fixed top-0 left-0 right-0 z-50 flex items-end px-4 gap-3"
         style={{
           background: 'var(--tg-theme-bg-color)',
-          paddingTop: 'calc(env(safe-area-inset-top) + 80px)',
-          height: 'calc(env(safe-area-inset-top) + 124px)',
+          paddingTop: 'calc(env(safe-area-inset-top) + 8px)',
+          height: 'calc(env(safe-area-inset-top) + 52px)',
           borderBottom: '1px solid rgba(128,128,128,0.08)',
         }}
       >

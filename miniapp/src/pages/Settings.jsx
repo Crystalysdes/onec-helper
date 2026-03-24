@@ -585,17 +585,15 @@ export default function Settings() {
                 <div key={int.id} className="card flex flex-col gap-3">
                   {editingIntegration === int.id ? (
                     <form onSubmit={editForm.handleSubmit(updateIntegration)} className="flex flex-col gap-3">
-                      <div className="flex items-center justify-between">
-                        <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Редактировать</p>
-                        <button type="button" className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }} onClick={() => setEditingIntegration(null)}>Отмена</button>
-                      </div>
+                      <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Редактировать интеграцию</p>
                       <input className="input-field" placeholder="URL сервера 1С *" {...editForm.register('onec_url', { required: true })} />
                       <input className="input-field" placeholder="Имя пользователя *" {...editForm.register('onec_username', { required: true })} />
                       <input className="input-field" type="password" placeholder="Новый пароль (оставьте пустым чтобы не менять)" {...editForm.register('onec_password')} />
                       <input className="input-field" placeholder="Название интеграции" {...editForm.register('name')} />
-                      <button type="submit" className="btn-primary" disabled={loading}>
-                        {loading ? '...' : 'Сохранить'}
-                      </button>
+                      <div className="flex gap-2">
+                        <button type="button" className="btn-secondary flex-1" onClick={() => setEditingIntegration(null)}>Отмена</button>
+                        <button type="submit" className="btn-primary flex-1" disabled={loading}>{loading ? '...' : 'Сохранить'}</button>
+                      </div>
                     </form>
                   ) : (
                     <>
