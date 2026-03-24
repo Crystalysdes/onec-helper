@@ -157,18 +157,34 @@ class AIService:
 
     async def extract_product_from_text(self, text: str) -> dict:
         """Extract product info from free-form text message."""
-        prompt = f"""Пользователь написал о товаре:
+        prompt = f"""Ты — система разбора описания товара для розничного магазина.
+Пользователь вводит текст в произвольном формате. Разбери его и верни JSON.
+
+Текст пользователя:
 "{text}"
 
-Извлеки информацию о товаре и верни ТОЛЬКО JSON объект с полями:
-- name: string (название товара)
-- price: number или null
-- purchase_price: number или null
-- barcode: string или null
-- article: string или null
-- category: string или null
-- quantity: number или null
-- unit: string или null
+Правила разбора:
+- "цена NNN" или "NNN р/руб/₽" → price
+- "закуп NNN" или "себест NNN" → purchase_price  
+- "NNNшт/кг/л/упак/пара" или "N штук/килограмм" → quantity + unit
+- числовой баркод (8-13 цифр) или "штрих-код NNNNN" → barcode
+- "арт NNN" или "артикул NNN" → article
+- название бренда/производителя (Простоквашино, Nestle и т.д.) → добавь в name
+- категорию можно определить по смыслу (молочные, выпечка, хозтовары и т.д.)
+- слова "штрих код", "qr", "qr код" без числа — игнорируй
+
+Примеры:
+"молоко 3.2% 1л Простоквашино цена 89 закуп 65" →
+{{"name":"Молоко 3.2% 1л Простоквашино","price":89,"purchase_price":65,"unit":"л","quantity":1,"category":"Молочные продукты"}}
+
+"салфетки большие цена 120 8шт штрих код" →
+{{"name":"Салфетки большие","price":120,"quantity":8,"unit":"шт","category":"Хозтовары"}}
+
+"хлеб белый нарезной 450г 4601234567890 45р категория выпечка" →
+{{"name":"Хлеб белый нарезной 450г","price":45,"barcode":"4601234567890","category":"Выпечка","unit":"шт","quantity":1}}
+
+Верни ТОЛЬКО JSON объект с полями (null если не найдено):
+name, price, purchase_price, barcode, article, category, quantity, unit, description
 
 Верни только JSON без пояснений."""
 
