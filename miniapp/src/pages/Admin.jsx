@@ -56,6 +56,10 @@ export default function Admin() {
   const [dbSelected, setDbSelected] = useState(new Set())
   const [dbSelectMode, setDbSelectMode] = useState(false)
   const [dbDeleting, setDbDeleting] = useState(false)
+  const [productModal, setProductModal] = useState(null)
+  const [productLoading, setProductLoading] = useState(false)
+  const [userModal, setUserModal] = useState(null)
+  const [userLoading, setUserLoading] = useState(false)
 
   useEffect(() => {
     if (!isAdmin()) {
@@ -121,6 +125,25 @@ export default function Admin() {
   const dbSelectAll = () => setDbSelected(new Set(dbProducts.map(p => p.id)))
   const dbDeselectAll = () => setDbSelected(new Set())
   const dbAllSelected = dbProducts.length > 0 && dbSelected.size === dbProducts.length
+
+  const openProduct = async (id) => {
+    if (dbSelectMode) return
+    setProductLoading(true)
+    try {
+      const res = await adminAPI.getProduct(id)
+      setProductModal(res.data)
+    } catch { toast.error('Ошибка загрузки товара') }
+    finally { setProductLoading(false) }
+  }
+
+  const openUser = async (id) => {
+    setUserLoading(true)
+    try {
+      const res = await adminAPI.getUser(id)
+      setUserModal(res.data)
+    } catch { toast.error('Ошибка загрузки пользователя') }
+    finally { setUserLoading(false) }
+  }
 
   const handleDbBulkDelete = async () => {
     if (dbSelected.size === 0) return
@@ -339,7 +362,7 @@ export default function Admin() {
                 )}
                 <div
                   className="flex-1 card py-2.5 flex items-center gap-2 cursor-pointer active:opacity-70"
-                  onClick={() => dbSelectMode && toggleDbSelect(p.id)}
+                  onClick={() => dbSelectMode ? toggleDbSelect(p.id) : openProduct(p.id)}
                 >
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
@@ -490,6 +513,155 @@ export default function Admin() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Product Detail Modal */}
+      {(productModal || productLoading) && (
+        <div className="fixed inset-0 z-50 flex items-end" onClick={() => setProductModal(null)}>
+          <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.4)' }} />
+          <div
+            className="relative w-full rounded-t-3xl p-5 flex flex-col gap-4"
+            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '85vh', overflowY: 'auto' }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* drag handle */}
+            <div className="w-10 h-1 rounded-full mx-auto" style={{ background: 'var(--tg-theme-hint-color)', opacity: 0.3 }} />
+            {productLoading || !productModal ? (
+              <div className="flex flex-col gap-3">{[1,2,3,4].map(i=><div key={i} className="skeleton h-10" />)}</div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-lg font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{productModal.name}</h2>
+                  <button className="flex-shrink-0 text-xl active:opacity-60" onClick={() => setProductModal(null)}>✕</button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    ['Цена', productModal.price != null ? `${productModal.price.toLocaleString('ru-RU')} ₽` : '—'],
+                    ['Закупка', productModal.purchase_price != null ? `${productModal.purchase_price.toLocaleString('ru-RU')} ₽` : '—'],
+                    ['Остаток', productModal.quantity != null ? `${productModal.quantity} ${productModal.unit || 'шт'}` : '—'],
+                    ['Категория', productModal.category || '—'],
+                    ['Штрих-код', productModal.barcode || '—'],
+                    ['Артикул', productModal.article || '—'],
+                  ].map(([k, v]) => (
+                    <div key={k} className="card py-2.5 px-3">
+                      <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{k}</p>
+                      <p className="text-sm font-medium mt-0.5 truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{v}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {productModal.description && (
+                  <div className="card py-2.5 px-3">
+                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Описание</p>
+                    <p className="text-sm mt-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>{productModal.description}</p>
+                  </div>
+                )}
+
+                <div className="card py-2.5 px-3 flex flex-col gap-1">
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Магазин</p>
+                  <p className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>{productModal.store_name}</p>
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Владелец: @{productModal.owner} · {productModal.owner_name}</p>
+                  {productModal.onec_id && <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>1C ID: {productModal.onec_id}</p>}
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Добавлен: {new Date(productModal.created_at).toLocaleString('ru-RU')}</p>
+                  {productModal.synced_at && <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Синхр.: {new Date(productModal.synced_at).toLocaleString('ru-RU')}</p>}
+                </div>
+
+                <button
+                  className="btn-secondary flex items-center justify-center gap-2 text-sm"
+                  style={{ color: '#ef4444' }}
+                  onClick={async () => {
+                    if (!window.confirm('Удалить этот товар?')) return
+                    try {
+                      await adminAPI.bulkDeleteProducts([productModal.id])
+                      toast.success('Товар удалён')
+                      setProductModal(null)
+                      loadDbProducts(dbSearch, 1)
+                    } catch { toast.error('Ошибка') }
+                  }}
+                >
+                  <Trash2 size={15} /> Удалить товар
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* User Detail Modal */}
+      {(userModal || userLoading) && (
+        <div className="fixed inset-0 z-50 flex items-end" onClick={() => setUserModal(null)}>
+          <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.4)' }} />
+          <div
+            className="relative w-full rounded-t-3xl p-5 flex flex-col gap-4"
+            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '85vh', overflowY: 'auto' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-10 h-1 rounded-full mx-auto" style={{ background: 'var(--tg-theme-hint-color)', opacity: 0.3 }} />
+            {userLoading || !userModal ? (
+              <div className="flex flex-col gap-3">{[1,2,3].map(i=><div key={i} className="skeleton h-10" />)}</div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                      {userModal.first_name || userModal.username || `ID ${userModal.telegram_id}`}
+                    </h2>
+                    <p className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      {userModal.username ? `@${userModal.username} · ` : ''}TG: {userModal.telegram_id}
+                    </p>
+                  </div>
+                  <button className="flex-shrink-0 text-xl active:opacity-60" onClick={() => setUserModal(null)}>✕</button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    ['Статус', userModal.is_active ? '✅ Активен' : '🚫 Заблокирован'],
+                    ['Роль', userModal.is_admin ? '👑 Админ' : '👤 Пользователь'],
+                    ['Магазинов', userModal.stores?.length ?? 0],
+                    ['Зарегистрирован', new Date(userModal.created_at).toLocaleDateString('ru-RU')],
+                  ].map(([k, v]) => (
+                    <div key={k} className="card py-2.5 px-3">
+                      <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{k}</p>
+                      <p className="text-sm font-medium mt-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>{String(v)}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {userModal.stores?.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>МАГАЗИНЫ</p>
+                    {userModal.stores.map(s => (
+                      <div key={s.id} className="card py-2.5 px-3 flex items-center justify-between">
+                        <p className="text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>{s.name}</p>
+                        <span className="text-xs" style={{ color: s.is_active ? '#22c55e' : '#9ca3af' }}>
+                          {s.is_active ? 'Активен' : 'Неактивен'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {!userModal.is_admin && (
+                  <button
+                    className="btn-secondary text-sm"
+                    style={{ color: userModal.is_active ? '#ef4444' : '#22c55e' }}
+                    onClick={async () => {
+                      try {
+                        const res = await adminAPI.toggleUser(userModal.id)
+                        setUserModal(prev => ({ ...prev, is_active: res.data.is_active }))
+                        setUsers(prev => prev.map(u => u.id === userModal.id ? { ...u, is_active: res.data.is_active } : u))
+                        toast.success(res.data.is_active ? 'Пользователь активирован' : 'Заблокирован')
+                      } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                    }}
+                  >
+                    {userModal.is_active ? '🚫 Заблокировать' : '✅ Активировать'}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 

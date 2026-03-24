@@ -114,6 +114,7 @@ export const adminAPI = {
   revokeSubscription: (userId) => api.delete(`/admin/subscriptions/${userId}`),
   backfillCatalog: () => api.post('/admin/backfill-catalog'),
   products: (params) => api.get('/admin/products', { params }),
+  getProduct: (id) => api.get(`/admin/products/${id}`),
   bulkDeleteProducts: (ids) => api.delete('/admin/products/bulk-delete', { data: { ids } }),
 }
 

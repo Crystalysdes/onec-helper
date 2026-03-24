@@ -362,6 +362,45 @@ class AdminBulkDeleteRequest(BaseModel):
     ids: list
 
 
+@router.get("/products/{product_id}")
+async def admin_get_product(
+    product_id: UUID,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ProductCache, Store, User)
+        .join(Store, ProductCache.store_id == Store.id)
+        .join(User, Store.owner_id == User.id)
+        .where(ProductCache.id == product_id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    p, s, u = row
+    return {
+        "id": str(p.id),
+        "name": p.name,
+        "barcode": p.barcode,
+        "article": p.article,
+        "category": p.category,
+        "description": p.description,
+        "price": p.price,
+        "purchase_price": p.purchase_price,
+        "quantity": p.quantity,
+        "unit": p.unit,
+        "onec_id": p.onec_id,
+        "is_active": p.is_active,
+        "created_at": p.created_at,
+        "synced_at": p.synced_at,
+        "store_id": str(p.store_id),
+        "store_name": s.name,
+        "owner_id": str(u.id),
+        "owner": u.telegram_username or str(u.telegram_id),
+        "owner_name": u.telegram_first_name or u.telegram_username or str(u.telegram_id),
+    }
+
+
 @router.delete("/products/bulk-delete")
 async def admin_bulk_delete_products(
     body: AdminBulkDeleteRequest,
