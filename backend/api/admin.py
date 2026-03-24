@@ -454,16 +454,25 @@ async def _run_catalog_import(limit: int):
     try:
         # Look for CSV or ZIP in /app/catalog/
         catalog_dir = CATALOG_DIR
+        # Find any CSV in catalog dir (priority: known names, then any *.csv)
+        known = ("products.csv", "barcodes.csv")
         csv_path = next(
-            (os.path.join(catalog_dir, f) for f in ("products.csv", "barcodes.csv")
+            (os.path.join(catalog_dir, f) for f in known
              if os.path.exists(os.path.join(catalog_dir, f))),
-            os.path.join(catalog_dir, "barcodes.csv")
+            None
         )
-        zip_path = os.path.join(catalog_dir, "barcodes_csv.zip")
+        if not csv_path:
+            # pick first *.csv found
+            csv_files = [f for f in os.listdir(catalog_dir) if f.endswith(".csv")]
+            csv_path = os.path.join(catalog_dir, csv_files[0]) if csv_files else None
+        zip_path = next(
+            (os.path.join(catalog_dir, f) for f in os.listdir(catalog_dir) if f.endswith(".zip")),
+            None
+        ) if os.path.exists(catalog_dir) else None
 
         text = None
 
-        if os.path.exists(csv_path):
+        if csv_path and os.path.exists(csv_path):
             logger.info(f"Reading CSV from {csv_path}")
             with open(csv_path, "rb") as f:
                 raw = f.read()
@@ -472,7 +481,7 @@ async def _run_catalog_import(limit: int):
             except UnicodeDecodeError:
                 text = raw.decode("cp1251", errors="replace")
 
-        elif os.path.exists(zip_path):
+        elif zip_path and os.path.exists(zip_path):
             logger.info(f"Reading ZIP from {zip_path}")
             _catalog_import_status["stage"] = "parsing"
 
@@ -539,12 +548,39 @@ async def _run_catalog_import(limit: int):
                 await db.commit()
                 imported += len(batch)
 
-        _catalog_import_status.update({"running": False, "imported": imported, "skipped": skipped, "done": True, "error": None})
+        _catalog_import_status.update({"running": False, "imported": imported, "skipped": skipped, "done": True, "error": None, "stage": "done"})
         logger.info(f"Catalog import done: {imported} imported, {skipped} skipped")
+
+        # Auto-create trigram index for fast name search
+        await _ensure_trgm_index()
 
     except Exception as e:
         logger.error(f"Catalog import error: {e}")
         _catalog_import_status.update({"running": False, "done": True, "error": str(e)})
+
+
+async def _ensure_trgm_index():
+    """Create pg_trgm GIN index on global_products.name for fast LIKE search."""
+    from sqlalchemy import text as _text
+    from backend.database.connection import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(_text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+            await db.execute(_text(
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_global_products_name_trgm "
+                "ON global_products USING GIN (name gin_trgm_ops)"
+            ))
+            await db.commit()
+        logger.info("pg_trgm index on global_products.name ensured")
+    except Exception as e:
+        logger.warning(f"Could not create trgm index (non-fatal): {e}")
+
+
+@router.post("/ensure-catalog-index")
+async def ensure_catalog_index(current_user: User = Depends(get_current_admin)):
+    """Create trigram index on global_products.name for fast search."""
+    await _ensure_trgm_index()
+    return {"status": "ok", "message": "Trigram index ensured"}
 
 
 # ── AI batch cleanup ──────────────────────────────────────────────────────────
