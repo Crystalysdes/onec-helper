@@ -138,12 +138,44 @@ class OneCClient:
                 return True, balances
         return False, []
 
+    async def get_or_create_category(self, category_name: str) -> Optional[str]:
+        """Find or create a folder (category) in 1C Nomenclature catalog."""
+        safe_name = category_name.replace("'", "'")
+        path = (
+            f"odata/standard.odata/Catalog_Номенклатура"
+            f"?$format=json&$filter=Description eq '{safe_name}' and IsFolder eq true"
+            f"&$select=Ref_Key,Description&$top=1"
+        )
+        success, data = await self._request("GET", path)
+        if success:
+            items = data.get("value", []) if isinstance(data, dict) else []
+            if items:
+                key = items[0].get("Ref_Key")
+                logger.info(f"1C category found: '{category_name}' → {key}")
+                return key
+
+        payload = {"Description": category_name, "IsFolder": True}
+        success, data = await self._request(
+            "POST", "odata/standard.odata/Catalog_Номенклатура", json=payload
+        )
+        if success and data and data.get("Ref_Key"):
+            key = data["Ref_Key"]
+            logger.info(f"1C category created: '{category_name}' → {key}")
+            return key
+        logger.warning(f"1C category create failed for '{category_name}': {data}")
+        return None
+
     async def create_product(self, product) -> Tuple[bool, Optional[dict]]:
         """Create a new product (nomenclature) in 1C."""
         payload = {
             "Description": product.name,
             "Артикул": product.article or "",
         }
+        category = getattr(product, "category", None)
+        if category:
+            parent_key = await self.get_or_create_category(category)
+            if parent_key:
+                payload["Parent_Key"] = parent_key
         success, data = await self._request(
             "POST",
             "odata/standard.odata/Catalog_Номенклатура",
@@ -159,6 +191,11 @@ class OneCClient:
             "Description": product.name,
             "Артикул": product.article or "",
         }
+        category = getattr(product, "category", None)
+        if category:
+            parent_key = await self.get_or_create_category(category)
+            if parent_key:
+                payload["Parent_Key"] = parent_key
         success, data = await self._request(
             "PATCH",
             f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
