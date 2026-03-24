@@ -27,10 +27,9 @@ else
     echo "[2/6] Node.js уже установлен: $(node -v)"
 fi
 
-# ── 3. Получаю IP и формирую домен ──────────────────────────────────
-SERVER_IP=$(curl -s https://api.ipify.org)
-DOMAIN="${SERVER_IP//./-}.nip.io"
-echo "[3/6] IP: $SERVER_IP → домен: https://$DOMAIN"
+# ── 3. Домен ────────────────────────────────────────────────────────
+DOMAIN="net1c.ru"
+echo "[3/6] Домен: https://$DOMAIN"
 
 # ── 4. Клонируем / обновляем репозиторий ────────────────────────────
 if [ ! -d "/app/.git" ]; then
