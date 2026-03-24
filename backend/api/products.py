@@ -123,8 +123,8 @@ async def check_barcode_global(
 ):
     """Check barcode: own stores first (raw SQL), then any other store (cross-tenant)."""
     from sqlalchemy import text as _text
-    # SQLite stores UUIDs without hyphens — normalize to match
-    uid = str(current_user.id).replace('-', '')
+    from backend.database.connection import _is_sqlite
+    uid = str(current_user.id).replace('-', '') if _is_sqlite else str(current_user.id)
 
     # 1. Own stores — raw SQL, no ORM
     own = (await db.execute(_text(
@@ -133,9 +133,9 @@ async def check_barcode_global(
         "pc.description, pc.is_active, s.name AS store_name "
         "FROM products_cache pc "
         "JOIN stores s ON pc.store_id = s.id "
-        "WHERE s.owner_id = :uid AND pc.barcode = :bc AND pc.is_active = 1 "
+        "WHERE s.owner_id = :uid AND pc.barcode = :bc AND pc.is_active = :active "
         "LIMIT 1"
-    ), {"uid": uid, "bc": barcode})).fetchone()
+    ), {"uid": uid, "bc": barcode, "active": True})).fetchone()
 
     if own:
         return {
@@ -157,9 +157,9 @@ async def check_barcode_global(
         "pc.article, pc.category, pc.unit, pc.description "
         "FROM products_cache pc "
         "JOIN stores s ON pc.store_id = s.id "
-        "WHERE s.owner_id != :uid AND pc.barcode = :bc AND pc.is_active = 1 "
+        "WHERE s.owner_id != :uid AND pc.barcode = :bc AND pc.is_active = :active "
         "LIMIT 1"
-    ), {"uid": uid, "bc": barcode})).fetchone()
+    ), {"uid": uid, "bc": barcode, "active": True})).fetchone()
 
     if other:
         return {
@@ -195,10 +195,10 @@ async def search_global_catalog(
         "pc.article, pc.category, pc.unit, pc.description "
         "FROM products_cache pc "
         "JOIN stores s ON pc.store_id = s.id "
-        "WHERE pc.name LIKE :q AND pc.is_active = 1 "
-        "GROUP BY lower(pc.name) "
+        "WHERE pc.name LIKE :q AND pc.is_active = :active "
+        "GROUP BY pc.name "
         "LIMIT :lim"
-    ), {"q": f"%{q}%", "lim": limit})).fetchall()
+    ), {"q": f"%{q}%", "lim": limit, "active": True})).fetchall()
     return [
         {"id": None, "store_id": None, "barcode": r[0], "name": r[1],
          "price": r[2], "purchase_price": r[3], "article": r[4],
