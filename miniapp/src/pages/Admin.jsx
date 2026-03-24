@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
-import { adminAPI } from '../services/api'
+import { adminAPI, storesAPI } from '../services/api'
 import StatCard from '../components/StatCard'
 
 const TABS = [
@@ -49,6 +49,11 @@ export default function Admin() {
   const [grantUserId, setGrantUserId] = useState(null)
   const [grantDays, setGrantDays] = useState(30)
   const [backfillLoading, setBackfillLoading] = useState(false)
+  const [offLoading, setOffLoading] = useState(false)
+  const [offResult, setOffResult] = useState(null)
+  const [offStoreId, setOffStoreId] = useState('')
+  const [offPages, setOffPages] = useState(20)
+  const [myStores, setMyStores] = useState([])
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -67,6 +72,7 @@ export default function Admin() {
       return
     }
     loadTab('stats')
+    storesAPI.list().then(r => { setMyStores(r.data); if (r.data[0]) setOffStoreId(r.data[0].id) }).catch(() => {})
   }, [])
 
   const loadTab = async (t = tab) => {
@@ -270,6 +276,67 @@ export default function Admin() {
                   </p>
                 </div>
               </button>
+
+              {/* Open Food Facts import */}
+              <div className="card flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🌍</span>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Импорт Open Food Facts</p>
+                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Загрузить реальные товары с баркодами</p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <select
+                    className="input-field text-sm py-2"
+                    value={offStoreId}
+                    onChange={e => setOffStoreId(e.target.value)}
+                  >
+                    {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {myStores.length === 0 && <option value="">Нет магазинов</option>}
+                  </select>
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Страниц:</span>
+                    {[5, 10, 20, 50].map(n => (
+                      <button key={n}
+                        className="px-3 py-1 rounded-lg text-xs font-medium active:opacity-70"
+                        style={{
+                          background: offPages === n ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
+                          color: offPages === n ? 'white' : 'var(--tg-theme-hint-color)',
+                        }}
+                        onClick={() => setOffPages(n)}
+                      >{n}</button>
+                    ))}
+                    <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>≈{offPages * 200} товаров</span>
+                  </div>
+                </div>
+
+                {offResult && (
+                  <div className="p-3 rounded-xl" style={{ background: 'rgba(34,197,94,0.08)' }}>
+                    <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Импортировано: {offResult.imported}</p>
+                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Пропущено: {offResult.skipped}</p>
+                  </div>
+                )}
+
+                <button
+                  className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                  disabled={offLoading || !offStoreId}
+                  onClick={async () => {
+                    setOffLoading(true)
+                    setOffResult(null)
+                    try {
+                      const res = await adminAPI.importOpenFoodFacts(offStoreId, 'russia', offPages)
+                      setOffResult(res.data)
+                      toast.success(`Импортировано ${res.data.imported} товаров`)
+                    } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                    finally { setOffLoading(false) }
+                  }}
+                >
+                  {offLoading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Загрузка... (~1 мин)</>
+                    : '📥 Импортировать товары России'}
+                </button>
+              </div>
             </>
           ) : (
             <div className="flex flex-col items-center gap-3 py-12">

@@ -401,6 +401,98 @@ async def admin_get_product(
     }
 
 
+@router.post("/import-openfoodfacts")
+async def import_openfoodfacts(
+    store_id: str,
+    country: str = "russia",
+    pages: int = 10,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch products from Open Food Facts API and import into a store."""
+    import httpx
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    try:
+        store_uuid = UUID(store_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid store_id")
+
+    result = await db.execute(select(Store).where(Store.id == store_uuid))
+    store = result.scalar_one_or_none()
+    if not store:
+        raise HTTPException(status_code=404, detail="Магазин не найден")
+
+    imported = 0
+    skipped = 0
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        for page in range(1, pages + 1):
+            url = (
+                f"https://world.openfoodfacts.org/api/v2/search"
+                f"?countries_tags_en={country}"
+                f"&fields=code,product_name,product_name_ru,brands,categories_tags_en,quantity"
+                f"&page_size=200&page={page}"
+            )
+            try:
+                resp = await client.get(url, headers={"User-Agent": "net1c-helper/1.0"})
+                data = resp.json()
+            except Exception as e:
+                logger.warning(f"OFF API page {page} error: {e}")
+                break
+
+            products_raw = data.get("products", [])
+            if not products_raw:
+                break
+
+            batch = []
+            for item in products_raw:
+                name = (
+                    item.get("product_name_ru")
+                    or item.get("product_name")
+                    or ""
+                ).strip()
+                if not name or len(name) < 2:
+                    skipped += 1
+                    continue
+
+                brand = (item.get("brands") or "").split(",")[0].strip()
+                if brand and brand.lower() not in name.lower():
+                    name = f"{name} {brand}".strip()
+
+                barcode = (item.get("code") or "").strip()
+                if not barcode.isdigit():
+                    barcode = None
+
+                cats = item.get("categories_tags_en") or []
+                category = None
+                for c in cats:
+                    c = c.replace("en:", "").replace("-", " ").title()
+                    if len(c) > 3:
+                        category = c[:60]
+                        break
+
+                batch.append(ProductCache(
+                    id=_uuid.uuid4(),
+                    store_id=store_uuid,
+                    name=name[:255],
+                    barcode=barcode,
+                    category=category,
+                    unit="шт",
+                    is_active=True,
+                    created_at=datetime.now(timezone.utc),
+                ))
+
+            db.add_all(batch)
+            await db.flush()
+            imported += len(batch)
+            skipped += len(products_raw) - len(batch)
+
+    await db.commit()
+    return {"imported": imported, "skipped": skipped, "pages_fetched": pages, "country": country}
+
+
 @router.delete("/products/bulk-delete")
 async def admin_bulk_delete_products(
     body: AdminBulkDeleteRequest,
