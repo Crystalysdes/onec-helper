@@ -49,9 +49,10 @@ export default function Admin() {
   const [grantUserId, setGrantUserId] = useState(null)
   const [grantDays, setGrantDays] = useState(30)
   const [backfillLoading, setBackfillLoading] = useState(false)
-  const [offLoading, setOffLoading] = useState(false)
-  const [offResult, setOffResult] = useState(null)
-  const [offPages, setOffPages] = useState(20)
+  const [catLoading, setCatLoading] = useState(false)
+  const [catResult, setCatResult] = useState(null)
+  const [catLimit, setCatLimit] = useState(100000)
+  const [catProgress, setCatProgress] = useState(null)
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -274,57 +275,75 @@ export default function Admin() {
                 </div>
               </button>
 
-              {/* Open Food Facts import */}
+              {/* catalog.app Russian database import */}
               <div className="card flex flex-col gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xl">🌍</span>
+                  <span className="text-xl">�🇺</span>
                   <div>
-                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Импорт Open Food Facts</p>
-                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Загрузить реальные товары с баркодами</p>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Товары загружаются в общую базу бота (GlobalCatalog) и доступны всем пользователям при поиске</p>
-                  <div className="flex gap-2 items-center">
-                    <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Страниц:</span>
-                    {[5, 10, 20, 50].map(n => (
-                      <button key={n}
-                        className="px-3 py-1 rounded-lg text-xs font-medium active:opacity-70"
-                        style={{
-                          background: offPages === n ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
-                          color: offPages === n ? 'white' : 'var(--tg-theme-hint-color)',
-                        }}
-                        onClick={() => setOffPages(n)}
-                      >{n}</button>
-                    ))}
-                    <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>≈{offPages * 200} товаров</span>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>База российских товаров</p>
+                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>1 816 200 товаров с баркодами · catalog.app</p>
                   </div>
                 </div>
 
-                {offResult && (
-                  <div className="p-3 rounded-xl" style={{ background: 'rgba(34,197,94,0.08)' }}>
-                    <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Импортировано: {offResult.imported}</p>
-                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Пропущено: {offResult.skipped}</p>
+                <div className="flex gap-2 items-center flex-wrap">
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Лимит:</span>
+                  {[50000, 100000, 500000, 1800000].map(n => (
+                    <button key={n}
+                      className="px-2.5 py-1 rounded-lg text-xs font-medium active:opacity-70"
+                      style={{
+                        background: catLimit === n ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
+                        color: catLimit === n ? 'white' : 'var(--tg-theme-hint-color)',
+                      }}
+                      onClick={() => setCatLimit(n)}
+                    >{n >= 1000000 ? `${n/1000000}млн` : `${n/1000}к`}</button>
+                  ))}
+                </div>
+
+                {catProgress && (
+                  <div className="p-3 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                    {catProgress.error ? (
+                      <p className="text-xs" style={{ color: '#ef4444' }}>❌ {catProgress.error}</p>
+                    ) : catProgress.done ? (
+                      <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Готово! Загружено: {catProgress.imported.toLocaleString('ru-RU')}</p>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                        <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          Загружено: <b style={{ color: 'var(--tg-theme-text-color)' }}>{catProgress.imported.toLocaleString('ru-RU')}</b> · Пропущено: {catProgress.skipped.toLocaleString('ru-RU')}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 <button
                   className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
-                  disabled={offLoading}
+                  disabled={catLoading}
                   onClick={async () => {
-                    setOffLoading(true)
-                    setOffResult(null)
+                    setCatLoading(true)
+                    setCatProgress(null)
                     try {
-                      const res = await adminAPI.importOpenFoodFacts('russia', offPages)
-                      setOffResult(res.data)
-                      toast.success(`Импортировано ${res.data.imported} товаров`)
-                    } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
-                    finally { setOffLoading(false) }
+                      await adminAPI.importCatalog(catLimit)
+                      toast.success('Импорт запущен в фоне...')
+                      const poll = setInterval(async () => {
+                        try {
+                          const st = await adminAPI.catalogImportStatus()
+                          setCatProgress(st.data)
+                          if (st.data.done || st.data.error) {
+                            clearInterval(poll)
+                            setCatLoading(false)
+                          }
+                        } catch { clearInterval(poll); setCatLoading(false) }
+                      }, 3000)
+                    } catch (e) {
+                      toast.error(e.response?.data?.detail || 'Ошибка')
+                      setCatLoading(false)
+                    }
                   }}
                 >
-                  {offLoading
-                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Загрузка... (~1 мин)</>
-                    : '📥 Импортировать товары России'}
+                  {catLoading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Импорт идёт...</>
+                    : '📥 Загрузить русские товары'}
                 </button>
               </div>
             </>

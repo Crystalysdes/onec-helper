@@ -401,85 +401,115 @@ async def admin_get_product(
     }
 
 
-@router.post("/import-openfoodfacts")
-async def import_openfoodfacts(
-    country: str = "russia",
-    pages: int = 10,
+_catalog_import_status: dict = {"running": False, "imported": 0, "skipped": 0, "done": False, "error": None}
+
+
+@router.get("/catalog-import-status")
+async def catalog_import_status(current_user: User = Depends(get_current_admin)):
+    return _catalog_import_status
+
+
+@router.post("/import-catalog")
+async def import_russian_catalog(
+    limit: int = 100000,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Fetch products from Open Food Facts API and import into GlobalProduct catalog."""
+    """Download and import catalog.app Russian barcode database into GlobalProduct."""
+    if _catalog_import_status["running"]:
+        raise HTTPException(status_code=409, detail="Импорт уже запущен")
+    background_tasks.add_task(_run_catalog_import, limit)
+    _catalog_import_status.update({"running": True, "imported": 0, "skipped": 0, "done": False, "error": None})
+    return {"status": "started", "message": f"Импорт запущен в фоне (лимит {limit} товаров)"}
+
+
+async def _run_catalog_import(limit: int):
     import httpx
+    import csv
+    import io
+    import zipfile
     import uuid as _uuid
     from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from backend.database.connection import AsyncSessionLocal as async_session_maker
 
-    imported = 0
-    skipped = 0
+    URL = "https://catalog.app/public-opportunities/download-public-file?fileName=barcodes_csv.zip"
+    _catalog_import_status["running"] = True
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        for page in range(1, pages + 1):
-            url = (
-                "https://world.openfoodfacts.org/api/v2/search"
-                f"?countries_tags_en={country}"
-                "&fields=code,product_name,product_name_ru,brands,categories_tags_en"
-                f"&page_size=200&page={page}"
-            )
-            try:
-                resp = await client.get(url, headers={"User-Agent": "net1c-helper/1.0"})
-                data = resp.json()
-            except Exception as e:
-                logger.warning(f"OFF API page {page} error: {e}")
-                break
+    try:
+        async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+            logger.info("Downloading catalog.app barcode database...")
+            resp = await client.get(URL, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            raw_zip = resp.content
 
-            products_raw = data.get("products", [])
-            if not products_raw:
-                break
+        with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+            csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
+            if not csv_name:
+                raise ValueError("CSV не найден в архиве")
+            csv_bytes = zf.read(csv_name)
 
-            rows = []
-            for item in products_raw:
-                barcode = (item.get("code") or "").strip()
+        try:
+            text = csv_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = csv_bytes.decode("cp1251", errors="replace")
+
+        reader = csv.DictReader(io.StringIO(text))
+        imported = 0
+        skipped = 0
+        batch = []
+        BATCH_SIZE = 500
+
+        async with async_session_maker() as db:
+            for row in reader:
+                if imported + skipped >= limit:
+                    break
+
+                barcode = (row.get("Barcode") or row.get("barcode") or "").strip()
                 if not barcode or not barcode.isdigit():
                     skipped += 1
                     continue
 
-                name = (
-                    item.get("product_name_ru") or item.get("product_name") or ""
-                ).strip()
+                name = (row.get("Name") or row.get("name") or "").strip()
                 if not name or len(name) < 2:
                     skipped += 1
                     continue
 
-                brand = (item.get("brands") or "").split(",")[0].strip()
-                if brand and brand.lower() not in name.lower():
-                    name = f"{name} {brand}".strip()
+                vendor = (row.get("Vendor") or row.get("vendor") or "").strip()
+                if vendor and vendor.lower() not in name.lower():
+                    name = f"{name} {vendor}".strip()
 
-                cats = item.get("categories_tags_en") or []
-                category = None
-                for c in cats:
-                    label = c.replace("en:", "").replace("-", " ").title()
-                    if len(label) > 3:
-                        category = label[:60]
-                        break
-
-                rows.append({
+                batch.append({
                     "id": _uuid.uuid4(),
                     "barcode": barcode,
                     "name": name[:255],
-                    "category": category,
+                    "category": (row.get("Category") or row.get("category") or "")[:60] or None,
+                    "article": (row.get("Article") or row.get("article") or "")[:60] or None,
                     "unit": "шт",
                 })
 
-            if rows:
-                stmt = pg_insert(GlobalProduct).values(rows)
+                if len(batch) >= BATCH_SIZE:
+                    stmt = pg_insert(GlobalProduct).values(batch)
+                    stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
+                    await db.execute(stmt)
+                    await db.commit()
+                    imported += len(batch)
+                    batch = []
+                    _catalog_import_status["imported"] = imported
+                    _catalog_import_status["skipped"] = skipped
+
+            if batch:
+                stmt = pg_insert(GlobalProduct).values(batch)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
                 await db.execute(stmt)
-                await db.flush()
-                imported += len(rows)
+                await db.commit()
+                imported += len(batch)
 
-            skipped += len(products_raw) - len(rows)
+        _catalog_import_status.update({"running": False, "imported": imported, "skipped": skipped, "done": True, "error": None})
+        logger.info(f"Catalog import done: {imported} imported, {skipped} skipped")
 
-    await db.commit()
-    return {"imported": imported, "skipped": skipped, "pages_fetched": pages, "country": country}
+    except Exception as e:
+        logger.error(f"Catalog import error: {e}")
+        _catalog_import_status.update({"running": False, "done": True, "error": str(e)})
 
 
 @router.delete("/products/bulk-delete")
