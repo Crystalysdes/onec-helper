@@ -113,23 +113,27 @@ class OneCClient:
     async def get_stock_balances(self, store_id: str = None) -> Tuple[bool, List[dict]]:
         """Get stock balances from 1C. Tries multiple register names for different 1C configs."""
         registers = [
-            ("AccumulationRegister_ТоварыНаСкладах/Balance", "КоличествоБалансе"),
-            ("AccumulationRegister_ОстаткиТоваров/Balance", "КоличествоБалансе"),
-            ("AccumulationRegister_Товары/Balance", "КоличествоБалансе"),
+            ("InformationRegister_ОстаткиТоваров", "Количество", "СтруктурнаяЕдиница", False),
+            ("AccumulationRegister_ТоварыНаСкладах/Balance", "КоличествоБаланс", "Склад_Key", True),
+            ("AccumulationRegister_ЗапасыКПоступлениюНаСклады/Balance", "КоличествоБаланс", "Склад_Key", True),
         ]
-        for reg_path, qty_field in registers:
+        for reg_path, qty_field, wh_field, wh_is_guid in registers:
             path = f"odata/standard.odata/{reg_path}?$format=json&$select=Номенклатура_Key,{qty_field}"
             if store_id:
-                path += f"&$filter=Склад_Key eq guid'{store_id}'"
+                if wh_is_guid:
+                    path += f"&$filter={wh_field} eq guid'{store_id}'"
+                else:
+                    path += f"&$filter={wh_field} eq '{store_id}'"
             success, data = await self._request("GET", path)
             if success:
                 items = data.get("value", []) if isinstance(data, dict) else []
                 balances = [
                     {
-                        "onec_id": item.get("Номенклатура_Key"),
-                        "quantity": item.get(qty_field, 0),
+                        "onec_id": str(item.get("Номенклатура_Key", "")),
+                        "quantity": item.get(qty_field, 0) or 0,
                     }
                     for item in items
+                    if item.get("Номенклатура_Key")
                 ]
                 return True, balances
         return False, []
