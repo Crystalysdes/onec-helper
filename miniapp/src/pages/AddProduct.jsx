@@ -240,7 +240,8 @@ export default function AddProduct() {
   const [barScan, setBarScan] = useState(null)
 
   // ── Photo tab state ──────────────────────────────────────────────
-  const [photoState, setPhotoState] = useState(null) // null | 'processing' | 'done'
+  const [photoState, setPhotoState] = useState(null) // null | 'processing' | 'scan' | 'done'
+  const [photoProduct, setPhotoProduct] = useState(null)
   const photoRef = useRef()
 
   // ── Manual form ──────────────────────────────────────────────────
@@ -405,7 +406,7 @@ export default function AddProduct() {
     try {
       const res = await productsAPI.quickAdd(currentStore.id, aiText.trim() || aiPreview.name, aiScan?.code || null)
       toast.success(`"${res.data.name}" добавлен!`)
-      setAiText(''); setAiScan(null); setAiPreview(null)
+      setAiText(''); setAiScan(null); setAiPreview(null); setPhotoState(null); setPhotoProduct(null)
       navigate('/products')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка добавления')
@@ -424,7 +425,7 @@ export default function AddProduct() {
     setValue('unit', aiPreview.unit || 'шт')
     setValue('quantity', aiPreview.quantity ?? 0)
     setValue('description', aiPreview.description || '')
-    setAiPreview(null)
+    setAiPreview(null); setPhotoState(null); setPhotoProduct(null)
     setMethod('manual')
   }, [aiPreview, aiScan, setValue])
 
@@ -465,9 +466,8 @@ export default function AddProduct() {
       const res = await productsAPI.recognizePhoto(fd)
       const r = res.data.recognized || res.data
       if (r?.name) {
-        Object.entries(r).forEach(([k, v]) => { if (v != null) setValue(k, v) })
-        setPhotoState('done')
-        toast.success('Товар распознан — проверьте и сохраните')
+        setPhotoProduct(r)
+        setPhotoState('scan')
       } else {
         setPhotoState(null)
         toast.error('Не удалось распознать товар')
@@ -476,7 +476,22 @@ export default function AddProduct() {
       setPhotoState(null)
       toast.error('Ошибка распознавания')
     }
-  }, [currentStore, setValue])
+  }, [currentStore])
+
+  const handlePhotoBarcodeScan = useCallback(() => {
+    openScanner((code) => {
+      if (!code) return
+      setAiPreview({ ...photoProduct, barcode: code })
+      setPhotoState(null)
+      setPhotoProduct(null)
+    })
+  }, [openScanner, photoProduct])
+
+  const skipPhotoBarcode = useCallback(() => {
+    setAiPreview(photoProduct)
+    setPhotoState(null)
+    setPhotoProduct(null)
+  }, [photoProduct])
 
   // ════════════════════════════════════════════════════════════════
   //  MANUAL FORM submit
@@ -940,27 +955,36 @@ export default function AddProduct() {
             </div>
           )}
 
-          {photoState === 'done' && (
-            <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  ИИ распознал товар — проверьте и сохраните
-                </p>
-                <button type="button" className="flex items-center gap-1 text-xs active:opacity-60"
-                  style={{ color: 'var(--tg-theme-button-color)' }}
-                  onClick={() => photoRef.current?.click()}>
-                  <RefreshCw size={11} />
-                  Переснять
-                </button>
+          {photoState === 'scan' && photoProduct && (
+            <div className="rounded-2xl p-4 flex flex-col gap-3"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(34,197,94,0.12)' }}>
+                  <Check size={18} color="#22c55e" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>ИИ определил товар по фото</p>
+                  <p className="text-sm font-bold truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{photoProduct.name}</p>
+                  {photoProduct.category && <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{photoProduct.category}</p>}
+                </div>
               </div>
-              <ProductFields register={register} errors={errors} onScanBarcode={scanForForm} />
-              <button type="submit" className="btn-primary flex items-center justify-center gap-2" disabled={loading}>
-                {loading
-                  ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  : <Check size={18} />}
-                {loading ? 'Сохранение...' : 'Добавить товар'}
+              <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                Отсканируйте штрих-код / QR-код товара, чтобы добавить его к карточке
+              </p>
+              <button className="btn-primary flex items-center justify-center gap-2" onClick={handlePhotoBarcodeScan}>
+                <ScanLine size={15} />
+                Сканировать штрих-код
               </button>
-            </form>
+              <button className="btn-secondary text-sm" onClick={skipPhotoBarcode}>
+                Пропустить (без штрих-кода)
+              </button>
+              <button className="btn-secondary text-sm flex items-center justify-center gap-2"
+                onClick={() => { setPhotoState(null); setPhotoProduct(null); setTimeout(() => photoRef.current?.click(), 100) }}>
+                <RefreshCw size={13} />
+                Переснять фото
+              </button>
+            </div>
           )}
         </div>
       )}
