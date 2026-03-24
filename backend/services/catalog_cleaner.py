@@ -87,14 +87,28 @@ def translate_category(raw: Optional[str]) -> Optional[str]:
     if not raw:
         return None
     s = raw.strip()
+    # OFF format: "en:dairy-products,en:cheeses,..." — pick best tag
+    if ":" in s:
+        for tag in s.split(","):
+            tag = tag.strip()
+            label = re.sub(r'^[a-z]{2}:', '', tag).replace("-", " ").strip()
+            if len(label) < 3:
+                continue
+            lower = label.lower()
+            for en, ru in _CAT_MAP.items():
+                if en in lower:
+                    return ru
+            if re.search(r'[а-яёА-ЯЁ]', label):
+                return label[:60]
+            if len(label) > 3:
+                return label.title()[:60]
+        return None
     lower = s.lower()
     for en, ru in _CAT_MAP.items():
         if en in lower:
             return ru
-    # If already has Cyrillic, keep as-is (truncated)
     if re.search(r'[а-яёА-ЯЁ]', s):
         return s[:60]
-    # Titlecase English otherwise
     return s.title()[:60]
 
 
@@ -149,17 +163,32 @@ def normalize_name(name: str, vendor: str = "") -> Optional[str]:
 
 def clean_record(row: dict) -> Optional[dict]:
     """
-    Process a raw catalog.app CSV row.
+    Process a CSV row from catalog.app OR Open Food Facts format.
     Returns cleaned dict or None if record should be skipped.
     """
-    barcode = (row.get("Barcode") or row.get("barcode") or "").strip()
+    # Barcode: OFF uses 'code', catalog.app uses 'Barcode'/'barcode'
+    barcode = (row.get("code") or row.get("Barcode") or row.get("barcode") or "").strip()
     if not barcode or not barcode.isdigit() or len(barcode) < 8:
         return None
 
-    raw_name = (row.get("Name") or row.get("name") or "").strip()
-    vendor = (row.get("Vendor") or row.get("vendor") or "").strip()
+    # Name: OFF has product_name_ru (best), product_name (fallback); catalog.app has Name
+    raw_name = (
+        row.get("product_name_ru") or row.get("product_name_fr") or
+        row.get("product_name") or row.get("Name") or row.get("name") or ""
+    ).strip()
+
+    # Vendor/brand
+    vendor = (
+        row.get("brands") or row.get("Vendor") or row.get("vendor") or ""
+    ).split(",")[0].strip()
+
+    # Article (catalog.app only)
     raw_article = (row.get("Article") or row.get("article") or "").strip()
-    raw_category = (row.get("Category") or row.get("category") or "").strip()
+
+    # Category: OFF uses categories_tags ("en:dairy,..."), catalog.app uses Category
+    raw_category = (
+        row.get("categories_tags") or row.get("Category") or row.get("category") or ""
+    ).strip()
 
     name = normalize_name(raw_name, vendor)
     if not name:

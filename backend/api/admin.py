@@ -413,14 +413,11 @@ async def catalog_import_status(current_user: User = Depends(get_current_admin))
 @router.get("/catalog-file-check")
 async def catalog_file_check(current_user: User = Depends(get_current_admin)):
     import os
-    csv_path = os.path.join(CATALOG_DIR, "barcodes.csv")
-    zip_path = os.path.join(CATALOG_DIR, "barcodes_csv.zip")
-    if os.path.exists(csv_path):
-        size_mb = round(os.path.getsize(csv_path) / 1024 / 1024, 1)
-        return {"found": True, "file": "barcodes.csv", "size_mb": size_mb}
-    if os.path.exists(zip_path):
-        size_mb = round(os.path.getsize(zip_path) / 1024 / 1024, 1)
-        return {"found": True, "file": "barcodes_csv.zip", "size_mb": size_mb}
+    for fname in ("products.csv", "barcodes.csv", "barcodes_csv.zip"):
+        path = os.path.join(CATALOG_DIR, fname)
+        if os.path.exists(path):
+            size_mb = round(os.path.getsize(path) / 1024 / 1024, 1)
+            return {"found": True, "file": fname, "size_mb": size_mb}
     return {"found": False, "file": None, "size_mb": 0}
 
 
@@ -457,7 +454,11 @@ async def _run_catalog_import(limit: int):
     try:
         # Look for CSV or ZIP in /app/catalog/
         catalog_dir = CATALOG_DIR
-        csv_path = os.path.join(catalog_dir, "barcodes.csv")
+        csv_path = next(
+            (os.path.join(catalog_dir, f) for f in ("products.csv", "barcodes.csv")
+             if os.path.exists(os.path.join(catalog_dir, f))),
+            os.path.join(catalog_dir, "barcodes.csv")
+        )
         zip_path = os.path.join(catalog_dir, "barcodes_csv.zip")
 
         text = None

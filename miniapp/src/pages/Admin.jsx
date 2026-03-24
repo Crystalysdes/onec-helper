@@ -289,22 +289,11 @@ export default function Admin() {
 
                 {/* Instructions */}
                 <div className="p-3 rounded-xl flex flex-col gap-1.5" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
-                  <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📝 Как загрузить:</p>
-                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>1. Скачай файл с catalog.app (ссылка ниже)</p>
-                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>2. Залей через SFTP/SCP на сервер:</p>
-                  <div className="rounded-lg px-3 py-2 font-mono text-xs select-all" style={{ background: 'rgba(0,0,0,0.2)', color: '#a5b4fc' }}>
-                    /app/catalog/barcodes_csv.zip
+                  <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📝 Скачать базу на сервер (SSH):</p>
+                  <div className="rounded-lg px-3 py-2 font-mono text-xs select-all" style={{ background: 'rgba(0,0,0,0.2)', color: '#a5b4fc', wordBreak: 'break-all' }}>
+                    {`wget -O /app/catalog/products.csv "https://world.openfoodfacts.org/cgi/search.pl?action=process&tagtype_0=countries&tag_contains_0=contains&tag_0=russia&download=1&format=csv"`}
                   </div>
-                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>3. Нажми кнопку ниже</p>
-                  <a
-                    href="https://catalog.app/public-opportunities/download-barcodes"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs underline active:opacity-70"
-                    style={{ color: '#6366f1' }}
-                  >
-                    ⬇️ Открыть страницу скачивания
-                  </a>
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Open Food Facts · только товары России · ~100k записей · русские названия</p>
                 </div>
 
                 {/* File status */}
