@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   RefreshCw, Users, Store, Package, ToggleLeft, ToggleRight,
@@ -55,6 +55,9 @@ export default function Admin() {
   const [catFile, setCatFile] = useState(null)
   const [aiCleanLoading, setAiCleanLoading] = useState(false)
   const [aiCleanProgress, setAiCleanProgress] = useState(null)
+  const [autoAiClean, setAutoAiClean] = useState(false)
+  const catPollRef = useRef(null)
+  const aiPollRef = useRef(null)
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -67,13 +70,85 @@ export default function Admin() {
   const [userModal, setUserModal] = useState(null)
   const [userLoading, setUserLoading] = useState(false)
 
+  // helpers to start polling loops
+  const startCatPoll = (onDone) => {
+    if (catPollRef.current) clearInterval(catPollRef.current)
+    catPollRef.current = setInterval(async () => {
+      try {
+        const st = await adminAPI.catalogImportStatus()
+        setCatProgress(st.data)
+        if (st.data.done || st.data.error) {
+          clearInterval(catPollRef.current)
+          catPollRef.current = null
+          setCatLoading(false)
+          if (onDone) onDone(st.data)
+        }
+      } catch { clearInterval(catPollRef.current); catPollRef.current = null; setCatLoading(false) }
+    }, 3000)
+  }
+
+  const startAiPoll = () => {
+    if (aiPollRef.current) clearInterval(aiPollRef.current)
+    aiPollRef.current = setInterval(async () => {
+      try {
+        const st = await adminAPI.aiCleanupStatus()
+        setAiCleanProgress(st.data)
+        if (st.data.done || st.data.error) {
+          clearInterval(aiPollRef.current)
+          aiPollRef.current = null
+          setAiCleanLoading(false)
+        }
+      } catch { clearInterval(aiPollRef.current); aiPollRef.current = null; setAiCleanLoading(false) }
+    }, 3000)
+  }
+
   useEffect(() => {
     if (!isAdmin()) {
       navigate('/')
       return
     }
     loadTab('stats')
+    // Resume polling if tasks were running before navigation
+    ;(async () => {
+      try {
+        const [catSt, aiSt] = await Promise.all([
+          adminAPI.catalogImportStatus(),
+          adminAPI.aiCleanupStatus(),
+        ])
+        if (catSt.data.running) {
+          setCatLoading(true)
+          setCatProgress(catSt.data)
+          startCatPoll((done) => {
+            if (autoAiClean && done.done && !done.error) {
+              triggerAiClean()
+            }
+          })
+        }
+        if (aiSt.data.running) {
+          setAiCleanLoading(true)
+          setAiCleanProgress(aiSt.data)
+          startAiPoll()
+        }
+      } catch {}
+    })()
+    return () => {
+      clearInterval(catPollRef.current)
+      clearInterval(aiPollRef.current)
+    }
   }, [])
+
+  const triggerAiClean = async () => {
+    setAiCleanLoading(true)
+    setAiCleanProgress(null)
+    try {
+      await adminAPI.aiCleanupCatalog()
+      toast.success('ИИ-очистка запущена...')
+      startAiPoll()
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка ИИ-очистки')
+      setAiCleanLoading(false)
+    }
+  }
 
   const loadTab = async (t = tab) => {
     setLoading(true)
@@ -350,6 +425,21 @@ export default function Admin() {
                   </div>
                 )}
 
+                {/* Auto AI cleanup toggle */}
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <div
+                    className="w-9 h-5 rounded-full relative transition-colors"
+                    style={{ background: autoAiClean ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)' }}
+                    onClick={() => setAutoAiClean(v => !v)}
+                  >
+                    <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all"
+                      style={{ left: autoAiClean ? '18px' : '2px' }} />
+                  </div>
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    После импорта → автоматически ИИ-очистка
+                  </span>
+                </label>
+
                 <button
                   className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
                   disabled={catLoading}
@@ -359,16 +449,9 @@ export default function Admin() {
                     try {
                       await adminAPI.importCatalog(catLimit)
                       toast.success('Импорт запущен...')
-                      const poll = setInterval(async () => {
-                        try {
-                          const st = await adminAPI.catalogImportStatus()
-                          setCatProgress(st.data)
-                          if (st.data.done || st.data.error) {
-                            clearInterval(poll)
-                            setCatLoading(false)
-                          }
-                        } catch { clearInterval(poll); setCatLoading(false) }
-                      }, 3000)
+                      startCatPoll((done) => {
+                        if (autoAiClean && done.done && !done.error) triggerAiClean()
+                      })
                     } catch (e) {
                       toast.error(e.response?.data?.detail || 'Ошибка')
                       setCatLoading(false)
@@ -416,27 +499,7 @@ export default function Admin() {
                 <button
                   className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
                   disabled={aiCleanLoading}
-                  onClick={async () => {
-                    setAiCleanLoading(true)
-                    setAiCleanProgress(null)
-                    try {
-                      await adminAPI.aiCleanupCatalog()
-                      toast.success('ИИ-очистка запущена...')
-                      const poll = setInterval(async () => {
-                        try {
-                          const st = await adminAPI.aiCleanupStatus()
-                          setAiCleanProgress(st.data)
-                          if (st.data.done || st.data.error) {
-                            clearInterval(poll)
-                            setAiCleanLoading(false)
-                          }
-                        } catch { clearInterval(poll); setAiCleanLoading(false) }
-                      }, 3000)
-                    } catch (e) {
-                      toast.error(e.response?.data?.detail || 'Ошибка')
-                      setAiCleanLoading(false)
-                    }
-                  }}
+                  onClick={() => triggerAiClean()}
                 >
                   {aiCleanLoading
                     ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Очистка идёт...</>
