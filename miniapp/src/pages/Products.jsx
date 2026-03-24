@@ -221,11 +221,20 @@ export default function Products() {
 
       {/* FAB — hidden in select mode */}
       {!selectMode && (
-        <div className="fixed bottom-20 right-4 z-40">
+        <div className="fixed bottom-20 right-4 z-40 flex flex-col gap-2 items-end">
+          <button
+            className="w-12 h-12 rounded-2xl shadow-lg flex items-center justify-center active:scale-90 transition-transform"
+            style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
+            onClick={() => navigate('/import-csv')}
+            title="Импорт CSV"
+          >
+            <span className="text-lg">📥</span>
+          </button>
           <button
             className="w-14 h-14 rounded-2xl shadow-lg flex items-center justify-center active:scale-90 transition-transform"
             style={{ background: 'var(--tg-theme-button-color)' }}
             onClick={() => navigate('/upload-invoice')}
+            title="Загрузить накладную"
           >
             <span className="text-xl">📄</span>
           </button>

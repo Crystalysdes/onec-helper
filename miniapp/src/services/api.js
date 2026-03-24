@@ -90,6 +90,12 @@ export const productsAPI = {
     })
   },
   bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),
+  importCSV: (storeId, file) => {
+    const fd = new FormData()
+    fd.append('store_id', storeId)
+    fd.append('file', file)
+    return api.post('/products/import-csv', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
+  },
 }
 
 export const reportsAPI = {

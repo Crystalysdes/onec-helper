@@ -617,6 +617,131 @@ async def delete_product(
     await db.commit()
 
 
+def _detect_col(headers: list, candidates: list) -> Optional[str]:
+    """Find first matching column name (case-insensitive)."""
+    low = {h.lower().strip(): h for h in headers}
+    for c in candidates:
+        if c.lower() in low:
+            return low[c.lower()]
+    return None
+
+
+def _parse_float(val: str) -> Optional[float]:
+    if not val:
+        return None
+    try:
+        return float(val.replace(',', '.').replace(' ', '').replace('\u00a0', ''))
+    except Exception:
+        return None
+
+
+@router.post("/import-csv")
+async def import_csv(
+    store_id: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import products from CSV. Supports Open Food Facts and custom CSV formats."""
+    import csv
+    import io
+
+    store_id_uuid = UUID(store_id)
+    await _check_store_access(store_id_uuid, current_user, db)
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1251", errors="replace")
+
+    reader = csv.DictReader(io.StringIO(text), delimiter="\t" if "\t" in text[:500] else ",")
+    headers = reader.fieldnames or []
+
+    col_name = _detect_col(headers, [
+        "product_name_ru", "product_name_fr", "product_name",
+        "name", "название", "наименование", "товар", "Наименование",
+    ])
+    col_barcode = _detect_col(headers, ["code", "barcode", "ean", "штрих-код", "штрих_код", "Штрихкод"])
+    col_category = _detect_col(headers, [
+        "main_category_ru", "categories_ru", "category", "categories",
+        "категория", "Категория", "группа",
+    ])
+    col_price = _detect_col(headers, ["price", "цена", "Цена", "стоимость"])
+    col_purchase = _detect_col(headers, ["purchase_price", "закупка", "Закупка", "себестоимость"])
+    col_unit = _detect_col(headers, ["unit", "единица", "Единица", "ед.изм", "quantity"])
+    col_brand = _detect_col(headers, ["brands", "brand", "бренд", "производитель"])
+    col_desc = _detect_col(headers, ["generic_name_ru", "generic_name", "description", "описание"])
+
+    if not col_name:
+        raise HTTPException(status_code=400, detail="Не найдена колонка с названием товара. Ожидается: name, product_name, название")
+
+    created_count = 0
+    skipped_count = 0
+    batch = []
+    BATCH_SIZE = 200
+
+    async def flush_batch(b: list):
+        nonlocal created_count
+        db.add_all(b)
+        await db.flush()
+        created_count += len(b)
+
+    for row in reader:
+        name = row.get(col_name, "").strip() if col_name else ""
+        if not name or len(name) < 2:
+            skipped_count += 1
+            continue
+
+        barcode = row.get(col_barcode, "").strip() if col_barcode else None
+        if barcode and not barcode.isdigit():
+            barcode = None
+
+        brand = row.get(col_brand, "").strip() if col_brand else ""
+        if brand and brand.lower() not in name.lower():
+            name = f"{name} {brand}".strip()
+
+        category_raw = row.get(col_category, "").strip() if col_category else None
+        category = None
+        if category_raw:
+            parts = [p.strip() for p in category_raw.replace(";", ",").split(",") if p.strip()]
+            category = parts[0][:60] if parts else None
+
+        product = ProductCache(
+            id=uuid.uuid4(),
+            store_id=store_id_uuid,
+            name=name[:255],
+            barcode=barcode,
+            category=category,
+            price=_parse_float(row.get(col_price, "") if col_price else ""),
+            purchase_price=_parse_float(row.get(col_purchase, "") if col_purchase else ""),
+            unit=(row.get(col_unit, "").strip()[:20] if col_unit else None) or "шт",
+            description=(row.get(col_desc, "").strip()[:500] if col_desc else None) or None,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        batch.append(product)
+        if len(batch) >= BATCH_SIZE:
+            await flush_batch(batch)
+            batch = []
+
+    if batch:
+        await flush_batch(batch)
+
+    await db.commit()
+    return {
+        "imported": created_count,
+        "skipped": skipped_count,
+        "columns_detected": {
+            "name": col_name,
+            "barcode": col_barcode,
+            "category": col_category,
+            "price": col_price,
+            "unit": col_unit,
+        },
+    }
+
+
 class BulkDeleteRequest(BaseModel):
     ids: List[UUID]
 
