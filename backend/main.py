@@ -16,9 +16,17 @@ from backend.tasks.auto_renewal import renewal_loop
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting 1С Helper API...")
-    await init_db()
-    logger.info("Database initialized")
-    await backfill_global_products()
+    try:
+        await asyncio.wait_for(init_db(), timeout=30)
+        logger.info("Database initialized")
+    except asyncio.TimeoutError:
+        logger.error("init_db timed out — server starting without DB init")
+    except Exception as e:
+        logger.error(f"init_db failed: {e} — server starting anyway")
+    try:
+        await asyncio.wait_for(backfill_global_products(), timeout=20)
+    except Exception as e:
+        logger.warning(f"backfill skipped: {e}")
     task = asyncio.create_task(renewal_loop())
     yield
     task.cancel()
