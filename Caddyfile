@@ -1,0 +1,13 @@
+{$BACKEND_DOMAIN} {
+    handle /api/* {
+        reverse_proxy app:8000
+    }
+    handle /uploads/* {
+        reverse_proxy app:8000
+    }
+    handle {
+        root * /srv/miniapp
+        file_server
+        try_files {path} /index.html
+    }
+}
