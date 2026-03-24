@@ -27,7 +27,8 @@ class AIService:
                 timeout=40.0,
             )
             self._model = settings.OPENROUTER_MODEL
-            logger.info(f"AIService: OpenRouter mode, model={self._model}")
+            self._fast_model = settings.OPENROUTER_FAST_MODEL
+            logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}")
         else:
             import anthropic
             self._mode = "anthropic"
@@ -35,6 +36,7 @@ class AIService:
                 api_key=settings.ANTHROPIC_API_KEY,
                 timeout=40.0,
             )
+            self._fast_model = settings.CLAUDE_MODEL
             self._model = settings.CLAUDE_MODEL
             logger.info(f"AIService: Anthropic direct mode, model={self._model}")
 
@@ -43,14 +45,15 @@ class AIService:
             return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
         return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
 
-    async def _call(self, messages: list, system: str = None, max_tokens: int = 1024) -> str:
+    async def _call(self, messages: list, system: str = None, max_tokens: int = 1024, fast: bool = False) -> str:
+        model = self._fast_model if fast else self._model
         if self._mode == "openai":
             msgs = ([{"role": "system", "content": system}] if system else []) + messages
             r = await self._client.chat.completions.create(
-                model=self._model, max_tokens=max_tokens, messages=msgs
+                model=model, max_tokens=max_tokens, messages=msgs
             )
             return r.choices[0].message.content.strip()
-        kwargs = {"model": self._model, "max_tokens": max_tokens, "messages": messages}
+        kwargs = {"model": model, "max_tokens": max_tokens, "messages": messages}
         if system:
             kwargs["system"] = system
         r = await self._client.messages.create(**kwargs)
@@ -215,58 +218,24 @@ class AIService:
 
     async def extract_product_from_text(self, text: str) -> dict:
         """Extract and normalize product info from free-form text message."""
-        prompt = f"""Ты — система нормализации товаров для розничного магазина.
-Пользователь вводит описание товара в произвольном формате — сокращения, неправильный регистр, произвольный порядок слов.
-Твоя задача: нормализовать и вернуть правильно оформленный JSON.
+        prompt = f"""Нормализуй товар для розничного магазина. Текст: "{text}"
 
-Текст: "{text}"
+Правила:
+- name: [Вид] [Бренд] [объём/вес сокращённо]. Регистр: первое слово заглавное, бренды заглавные. Убери: цена/руб/р/₽/закуп/шт/упак/пак и числа-количества.
+  Примеры: "крым лимонад 2 литра пак"→"Лимонад Крым 2л", "МОЛОКО простоквашино 1Л"→"Молоко Простоквашино 1л", "стир порошок тайд 3кг"→"Порошок стиральный Tide 3кг"
+- quantity: кол-во единиц (не объём), по умолч. 1
+- unit: пак/упак/пачка→"упак"; шт/штук→"шт"; кг/кило→"кг"; по умолч. "шт"
+- price: после цена/₽/р/руб
+- purchase_price: после закуп/себест/приход
+- barcode: только цифры 8-13 знаков
+- article: после арт/артикул
+- category: Напитки/Молочные продукты/Выпечка/Хозтовары/Бакалея/Снеки/Мясо и птица/Кондитерские/Алкоголь/Косметика
 
-Правила нормализации:
-
-1. name — нормализованное торговое название:
-   - Правильный регистр: первое слово с заглавной, остальные строчными (бренды — с заглавной)
-   - Порядок слов: [Вид товара] [Бренд] [Вкус/сорт] [Объём/вес]
-   - Объём/вес включай в название в сокращении: "2 литра"→"2л", "500 грамм"→"500г", "1.5 литра"→"1.5л"
-   - Убери из названия: слова цена/руб/р/₽/закуп/шт/штук/упак/пак/пачек и числа-количества
-   - Примеры нормализации:
-     "крым лимонад 2 литра пак" → "Лимонад Крым 2л"
-     "молоко 3.2% 1л простоквашино" → "Молоко 3.2% 1л Простоквашино"
-     "ЧИПСЫ ЛЕЙЗ 150Г" → "Чипсы Lays 150г"
-     "стир порошок тайд 3кг" → "Порошок стиральный Tide 3кг"
-
-2. quantity — количество единиц товара (по умолчанию 1)
-   - "5шт", "5 штук", "5 упак" → quantity: 5
-   - Объём товара (2л, 500мл) — НЕ количество, включай в название
-
-3. unit — единица измерения:
-   - "пак"/"упак"/"пачка"/"пачек"/"упаковок" → "упак"
-   - "штук"/"шт"/"штуки" → "шт"
-   - "кило"/"килограмм"/"кг" → "кг"
-   - "литр"/"л" как единица товара (не объём) → "л"
-   - по умолчанию: "шт"
-
-4. price — цена продажи (число после "цена"/"₽"/"р"/"руб", без НДС)
-5. purchase_price — закупочная цена (после "закуп"/"себест"/"закупка"/"приход")
-6. barcode — только цифры 8–13 знаков (EAN-8, EAN-13, UPC-A)
-7. article — после "арт"/"артикул"/"код"
-8. category — определи по смыслу:
-   Напитки / Молочные продукты / Выпечка / Хозтовары / Бакалея /
-   Кондитерские / Мясо и птица / Снеки / Заморозка / Алкоголь / Косметика
-
-Примеры ответов:
-"крым лимонад 2 литра пак" →
-{{"name":"Лимонад Крым 2л","unit":"упак","quantity":1,"category":"Напитки","price":null,"purchase_price":null,"barcode":null,"article":null,"description":null}}
-
-"молоко 3.2% 1л простоквашино цена 89 закуп 65 10шт" →
-{{"name":"Молоко 3.2% 1л Простоквашино","price":89,"purchase_price":65,"unit":"шт","quantity":10,"category":"Молочные продукты","barcode":null,"article":null,"description":null}}
-
-"хлеб белый нарезной 450г 4601234567890 45р" →
-{{"name":"Хлеб белый нарезной 450г","price":45,"barcode":"4601234567890","category":"Выпечка","unit":"шт","quantity":1,"purchase_price":null,"article":null,"description":null}}
-
-Верни ТОЛЬКО JSON объект без пояснений."""
+Верни ТОЛЬКО JSON без пояснений:
+{{"name":"...","price":null,"purchase_price":null,"barcode":null,"article":null,"category":null,"quantity":1,"unit":"шт","description":null}}"""
 
         try:
-            content = await self._call([{"role": "user", "content": prompt}], max_tokens=512)
+            content = await self._call([{"role": "user", "content": prompt}], max_tokens=200, fast=True)
             return json.loads(_strip_json(content))
         except Exception as e:
             logger.error(f"AI text extraction error: {e}")

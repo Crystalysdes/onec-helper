@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     # AI
     ANTHROPIC_API_KEY: str = ""
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "anthropic/claude-3.7-sonnet"
+    OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4-6"
+    OPENROUTER_FAST_MODEL: str = "anthropic/claude-haiku-4-5"
     CLAUDE_MODEL: str = "claude-3-5-sonnet-20241022"
 
     # MiniApp
