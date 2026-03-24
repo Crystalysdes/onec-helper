@@ -122,6 +122,7 @@ export const adminAPI = {
   importCatalog: (limit) =>
     api.post('/admin/import-catalog', null, { params: { limit }, timeout: 60000 }),
   catalogImportStatus: () => api.get('/admin/catalog-import-status'),
+  catalogFileCheck: () => api.get('/admin/catalog-file-check'),
   aiCleanupCatalog: (batchSize) =>
     api.post('/admin/ai-cleanup-catalog', null, { params: { batch_size: batchSize }, timeout: 60000 }),
   aiCleanupStatus: () => api.get('/admin/ai-cleanup-status'),

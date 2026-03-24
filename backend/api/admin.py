@@ -410,6 +410,20 @@ async def catalog_import_status(current_user: User = Depends(get_current_admin))
     return _catalog_import_status
 
 
+@router.get("/catalog-file-check")
+async def catalog_file_check(current_user: User = Depends(get_current_admin)):
+    import os
+    csv_path = os.path.join(CATALOG_DIR, "barcodes.csv")
+    zip_path = os.path.join(CATALOG_DIR, "barcodes_csv.zip")
+    if os.path.exists(csv_path):
+        size_mb = round(os.path.getsize(csv_path) / 1024 / 1024, 1)
+        return {"found": True, "file": "barcodes.csv", "size_mb": size_mb}
+    if os.path.exists(zip_path):
+        size_mb = round(os.path.getsize(zip_path) / 1024 / 1024, 1)
+        return {"found": True, "file": "barcodes_csv.zip", "size_mb": size_mb}
+    return {"found": False, "file": None, "size_mb": 0}
+
+
 @router.post("/import-catalog")
 async def import_russian_catalog(
     limit: int = 100000,
@@ -424,38 +438,56 @@ async def import_russian_catalog(
     return {"status": "started", "message": f"Импорт запущен в фоне (лимит {limit} товаров)"}
 
 
+CATALOG_DIR = "/app/catalog"
+
+
 async def _run_catalog_import(limit: int):
-    import httpx
     import csv
     import io
+    import os
     import zipfile
     import uuid as _uuid
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from backend.database.connection import AsyncSessionLocal as async_session_maker
     from backend.services.catalog_cleaner import clean_record
 
-    URL = "https://catalog.app/public-opportunities/download-public-file?fileName=barcodes_csv.zip"
     _catalog_import_status["running"] = True
-    _catalog_import_status["stage"] = "downloading"
+    _catalog_import_status["stage"] = "reading"
 
     try:
-        async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
-            logger.info("Downloading catalog.app barcode database...")
-            resp = await client.get(URL, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            raw_zip = resp.content
-        _catalog_import_status["stage"] = "parsing"
+        # Look for CSV or ZIP in /app/catalog/
+        catalog_dir = CATALOG_DIR
+        csv_path = os.path.join(catalog_dir, "barcodes.csv")
+        zip_path = os.path.join(catalog_dir, "barcodes_csv.zip")
 
-        with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
-            csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
-            if not csv_name:
-                raise ValueError("CSV не найден в архиве")
-            csv_bytes = zf.read(csv_name)
+        text = None
 
-        try:
-            text = csv_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            text = csv_bytes.decode("cp1251", errors="replace")
+        if os.path.exists(csv_path):
+            logger.info(f"Reading CSV from {csv_path}")
+            with open(csv_path, "rb") as f:
+                raw = f.read()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1251", errors="replace")
+
+        elif os.path.exists(zip_path):
+            logger.info(f"Reading ZIP from {zip_path}")
+            _catalog_import_status["stage"] = "parsing"
+            with zipfile.ZipFile(zip_path) as zf:
+                csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
+                if not csv_name:
+                    raise ValueError("CSV не найден в архиве")
+                raw = zf.read(csv_name)
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1251", errors="replace")
+
+        else:
+            raise FileNotFoundError(
+                f"Файл не найден. Положите barcodes.csv или barcodes_csv.zip в папку {catalog_dir} на сервере"
+            )
 
         reader = csv.DictReader(io.StringIO(text))
         imported = 0

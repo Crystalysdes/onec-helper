@@ -50,9 +50,9 @@ export default function Admin() {
   const [grantDays, setGrantDays] = useState(30)
   const [backfillLoading, setBackfillLoading] = useState(false)
   const [catLoading, setCatLoading] = useState(false)
-  const [catResult, setCatResult] = useState(null)
   const [catLimit, setCatLimit] = useState(100000)
   const [catProgress, setCatProgress] = useState(null)
+  const [catFile, setCatFile] = useState(null)
   const [aiCleanLoading, setAiCleanLoading] = useState(false)
   const [aiCleanProgress, setAiCleanProgress] = useState(null)
   const [aiCleanBatch, setAiCleanBatch] = useState(200)
@@ -281,12 +281,51 @@ export default function Admin() {
               {/* catalog.app Russian database import */}
               <div className="card flex flex-col gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xl">�🇺</span>
+                  <span className="text-xl">🇷🇺</span>
                   <div>
                     <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>База российских товаров</p>
                     <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>1 816 200 товаров с баркодами · catalog.app</p>
                   </div>
                 </div>
+
+                {/* Instructions */}
+                <div className="p-3 rounded-xl flex flex-col gap-1.5" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📝 Как загрузить:</p>
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>1. Скачай файл с catalog.app (ссылка ниже)</p>
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>2. Залей через SFTP/SCP на сервер:</p>
+                  <div className="rounded-lg px-3 py-2 font-mono text-xs select-all" style={{ background: 'rgba(0,0,0,0.2)', color: '#a5b4fc' }}>
+                    /app/catalog/barcodes_csv.zip
+                  </div>
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>3. Нажми кнопку ниже</p>
+                  <a
+                    href="https://catalog.app/public-opportunities/download-barcodes"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs underline active:opacity-70"
+                    style={{ color: '#6366f1' }}
+                  >
+                    ⬇️ Открыть страницу скачивания
+                  </a>
+                </div>
+
+                {/* File status */}
+                <button
+                  className="flex items-center gap-2 text-xs active:opacity-70"
+                  style={{ color: 'var(--tg-theme-hint-color)' }}
+                  onClick={async () => {
+                    try {
+                      const r = await adminAPI.catalogFileCheck()
+                      setCatFile(r.data)
+                    } catch { setCatFile({ found: false }) }
+                  }}
+                >
+                  🔄 Проверить наличие файла
+                </button>
+                {catFile && (
+                  catFile.found
+                    ? <p className="text-xs" style={{ color: '#22c55e' }}>✅ Найден: {catFile.file} ({catFile.size_mb} МБ) — готов к импорту</p>
+                    : <p className="text-xs" style={{ color: '#ef4444' }}>❌ Файл не найден — положи его в /app/catalog/</p>
+                )}
 
                 <div className="flex gap-2 items-center flex-wrap">
                   <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Лимит:</span>
@@ -307,15 +346,15 @@ export default function Admin() {
                     {catProgress.error ? (
                       <p className="text-xs" style={{ color: '#ef4444' }}>❌ {catProgress.error}</p>
                     ) : catProgress.done ? (
-                      <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Готово! Загружено: {catProgress.imported.toLocaleString('ru-RU')}</p>
+                      <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Готово! Загружено: {(catProgress.imported||0).toLocaleString('ru-RU')}</p>
                     ) : (
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                         <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          {catProgress.stage === 'downloading' && '⬇️ Скачиваем файл (~150 МБ)...'}
-                          {catProgress.stage === 'parsing' && '📂 Распаковываем и читаем CSV...'}
+                          {catProgress.stage === 'reading' && '📄 Читаем файл...'}
+                          {catProgress.stage === 'parsing' && '📂 Распаковываем ZIP...'}
                           {(!catProgress.stage || catProgress.stage === 'importing') && (
-                            <>Загружено: <b style={{ color: 'var(--tg-theme-text-color)' }}>{(catProgress.imported || 0).toLocaleString('ru-RU')}</b> · Пропущено: {(catProgress.skipped || 0).toLocaleString('ru-RU')}</>
+                            <>Загружено: <b style={{ color: 'var(--tg-theme-text-color)' }}>{(catProgress.imported||0).toLocaleString('ru-RU')}</b> · Пропущено: {(catProgress.skipped||0).toLocaleString('ru-RU')}</>
                           )}
                         </p>
                       </div>
@@ -331,7 +370,7 @@ export default function Admin() {
                     setCatProgress(null)
                     try {
                       await adminAPI.importCatalog(catLimit)
-                      toast.success('Импорт запущен в фоне...')
+                      toast.success('Импорт запущен...')
                       const poll = setInterval(async () => {
                         try {
                           const st = await adminAPI.catalogImportStatus()
@@ -350,7 +389,7 @@ export default function Admin() {
                 >
                   {catLoading
                     ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Импорт идёт...</>
-                    : '📥 Загрузить русские товары'}
+                    : '📥 Запустить импорт'}
                 </button>
               </div>
 
