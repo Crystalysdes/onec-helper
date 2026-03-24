@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus, Store, Plug, Check, ChevronLeft, ChevronRight, TestTube2,
   CreditCard, RefreshCw, Users, Copy, CheckCircle2,
-  AlertCircle, Crown, Zap, ExternalLink, RotateCcw,
+  AlertCircle, Crown, Zap, ExternalLink, RotateCcw, Pencil,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
@@ -33,8 +33,11 @@ export default function Settings() {
   const [refCode, setRefCode] = useState('')
   const [payLoading, setPayLoading] = useState(false)
 
+  const [editingIntegration, setEditingIntegration] = useState(null)
+
   const storeForm = useForm()
   const intForm = useForm({ defaultValues: { name: '1C Integration' } })
+  const editForm = useForm()
 
   const loadStoreDetail = async (storeId) => {
     if (!storeId) return
@@ -141,6 +144,36 @@ export default function Settings() {
       toast.error('Ошибка тестирования')
     } finally {
       setTestLoading(false)
+    }
+  }
+
+  const startEditIntegration = (int) => {
+    setEditingIntegration(int.id)
+    editForm.reset({
+      name: int.name,
+      onec_url: int.onec_url,
+      onec_username: int.onec_username || '',
+      onec_password: '',
+    })
+  }
+
+  const updateIntegration = async (data) => {
+    if (!currentStore) return
+    setLoading(true)
+    try {
+      await storesAPI.updateIntegration(currentStore.id, editingIntegration, {
+        onec_url: data.onec_url,
+        onec_username: data.onec_username,
+        ...(data.onec_password ? { onec_password: data.onec_password } : {}),
+        name: data.name || '1C Integration',
+      })
+      toast.success('Интеграция обновлена!')
+      setEditingIntegration(null)
+      await loadStoreDetail(currentStore.id)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка обновления')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -550,6 +583,22 @@ export default function Settings() {
               )}
               {storeDetail?.integrations?.map((int) => (
                 <div key={int.id} className="card flex flex-col gap-3">
+                  {editingIntegration === int.id ? (
+                    <form onSubmit={editForm.handleSubmit(updateIntegration)} className="flex flex-col gap-3">
+                      <div className="flex items-center justify-between">
+                        <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Редактировать</p>
+                        <button type="button" className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }} onClick={() => setEditingIntegration(null)}>Отмена</button>
+                      </div>
+                      <input className="input-field" placeholder="URL сервера 1С *" {...editForm.register('onec_url', { required: true })} />
+                      <input className="input-field" placeholder="Имя пользователя *" {...editForm.register('onec_username', { required: true })} />
+                      <input className="input-field" type="password" placeholder="Новый пароль (оставьте пустым чтобы не менять)" {...editForm.register('onec_password')} />
+                      <input className="input-field" placeholder="Название интеграции" {...editForm.register('name')} />
+                      <button type="submit" className="btn-primary" disabled={loading}>
+                        {loading ? '...' : 'Сохранить'}
+                      </button>
+                    </form>
+                  ) : (
+                    <>
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center flex-shrink-0">
                       <Plug size={18} className="text-purple-500" />
@@ -562,9 +611,18 @@ export default function Settings() {
                         {int.onec_url}
                       </p>
                     </div>
-                    <span className={`badge ${int.status === 'active' ? 'badge-green' : int.status === 'error' ? 'badge-red' : 'badge-yellow'}`}>
-                      {int.status === 'active' ? 'Активна' : int.status === 'error' ? 'Ошибка' : 'Не активна'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-60"
+                        style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
+                        onClick={() => startEditIntegration(int)}
+                      >
+                        <Pencil size={13} style={{ color: 'var(--tg-theme-hint-color)' }} />
+                      </button>
+                      <span className={`badge ${int.status === 'active' ? 'badge-green' : int.status === 'error' ? 'badge-red' : 'badge-yellow'}`}>
+                        {int.status === 'active' ? 'Активна' : int.status === 'error' ? 'Ошибка' : 'Не активна'}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -618,6 +676,8 @@ export default function Settings() {
                       </div>
                     )
                   })()}
+                  </>
+                  )}
                 </div>
               ))}
 
