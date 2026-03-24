@@ -17,6 +17,8 @@ import LoadingScreen from './components/LoadingScreen'
 function App() {
   const { token, setToken, setUser, setStores, setCurrentStore, isAdmin } = useStore()
   const [initializing, setInitializing] = useState(true)
+  const [loadingMessage, setLoadingMessage] = useState(null)
+  const [noTelegram, setNoTelegram] = useState(false)
 
   // ── Keyboard / viewport fix ────────────────────────────────────────
   useEffect(() => {
@@ -67,10 +69,10 @@ function App() {
         if (initData) {
           const tryAuth = async (isRetry = false) => {
             if (isRetry) {
-              toast.loading('Сервер запускается, подождите...', { id: 'wakeup' })
+              setLoadingMessage('Сервер запускается...')
             }
             const res = await authAPI.telegramAuth(initData)
-            toast.dismiss('wakeup')
+            setLoadingMessage(null)
             return res
           }
 
@@ -113,7 +115,7 @@ function App() {
             localStorage.removeItem('access_token')
           }
         } else {
-          toast.error('Откройте приложение через Telegram', { duration: 8000 })
+          setNoTelegram(true)
         }
 
         if (authenticated) {
@@ -138,7 +140,20 @@ function App() {
     init()
   }, [])
 
-  if (initializing) return <LoadingScreen />
+  if (noTelegram) return (
+    <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-8 text-center">
+      <div className="w-16 h-16 rounded-2xl bg-orange-500 flex items-center justify-center shadow-lg">
+        <span className="text-3xl">🤖</span>
+      </div>
+      <h1 className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>Откройте через бота</h1>
+      <p className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>
+        Найдите <b>@oneshelperbot</b> в Telegram, отправьте <code>/start</code> и нажмите кнопку
+        <b> «🛍 Открыть магазин»</b>
+      </p>
+    </div>
+  )
+
+  if (initializing) return <LoadingScreen message={loadingMessage} />
 
   return (
     <BrowserRouter>
