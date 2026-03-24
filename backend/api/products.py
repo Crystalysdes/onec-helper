@@ -47,37 +47,38 @@ class ProductUpdate(BaseModel):
 
 async def _upsert_global_product(db: AsyncSession, p: ProductCache):
     """Insert or update the shared GlobalProduct catalog entry for this barcode.
-    Uses raw SQL to avoid ORM mapper validation issues. Best-effort — never propagates failures."""
+    Uses a savepoint so any failure never corrupts the outer transaction."""
     if not p.barcode or not p.barcode.strip():
         return
     try:
         from sqlalchemy import text as _text
         import uuid as _uuid
         bc = p.barcode.strip()
-        row = (await db.execute(
-            _text("SELECT id FROM global_products WHERE barcode = :bc LIMIT 1"), {"bc": bc}
-        )).fetchone()
-        if row:
-            await db.execute(_text(
-                "UPDATE global_products SET "
-                "name=:name, price=COALESCE(:price, price), "
-                "purchase_price=COALESCE(:pp, purchase_price), "
-                "article=COALESCE(:article, article), "
-                "category=COALESCE(:category, category), "
-                "unit=COALESCE(:unit, unit) "
-                "WHERE barcode=:bc"
-            ), {"name": p.name, "price": p.price, "pp": p.purchase_price,
-                "article": p.article, "category": p.category,
-                "unit": p.unit or None, "bc": bc})
-        else:
-            await db.execute(_text(
-                "INSERT INTO global_products "
-                "(id, barcode, name, price, purchase_price, article, category, unit, description) "
-                "VALUES (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)"
-            ), {"id": str(_uuid.uuid4()), "bc": bc, "name": p.name,
-                "price": p.price, "pp": p.purchase_price,
-                "article": p.article, "category": p.category,
-                "unit": p.unit or "шт", "desc": p.description})
+        async with db.begin_nested():  # savepoint — rolls back only this block on error
+            row = (await db.execute(
+                _text("SELECT id FROM global_products WHERE barcode = :bc LIMIT 1"), {"bc": bc}
+            )).fetchone()
+            if row:
+                await db.execute(_text(
+                    "UPDATE global_products SET "
+                    "name=:name, price=COALESCE(:price, price), "
+                    "purchase_price=COALESCE(:pp, purchase_price), "
+                    "article=COALESCE(:article, article), "
+                    "category=COALESCE(:category, category), "
+                    "unit=COALESCE(:unit, unit) "
+                    "WHERE barcode=:bc"
+                ), {"name": p.name, "price": p.price, "pp": p.purchase_price,
+                    "article": p.article, "category": p.category,
+                    "unit": p.unit or None, "bc": bc})
+            else:
+                await db.execute(_text(
+                    "INSERT INTO global_products "
+                    "(id, barcode, name, price, purchase_price, article, category, unit, description) "
+                    "VALUES (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)"
+                ), {"id": _uuid.uuid4(), "bc": bc, "name": p.name,
+                    "price": p.price, "pp": p.purchase_price,
+                    "article": p.article, "category": p.category,
+                    "unit": p.unit or "шт", "desc": p.description})
     except Exception as exc:
         from loguru import logger
         logger.warning(f"_upsert_global_product failed for barcode={p.barcode}: {exc}")
@@ -124,7 +125,9 @@ async def check_barcode_global(
     """Check barcode: own stores first (raw SQL), then any other store (cross-tenant)."""
     from sqlalchemy import text as _text
     from backend.database.connection import _is_sqlite
-    uid = str(current_user.id).replace('-', '') if _is_sqlite else str(current_user.id)
+    # asyncpg (PostgreSQL) requires uuid.UUID objects for UUID columns; SQLite needs hex string
+    uid = str(current_user.id).replace('-', '') if _is_sqlite else current_user.id
+    bc = barcode.strip()
 
     # 1. Own stores — raw SQL, no ORM
     own = (await db.execute(_text(
@@ -135,7 +138,7 @@ async def check_barcode_global(
         "JOIN stores s ON pc.store_id = s.id "
         "WHERE s.owner_id = :uid AND pc.barcode = :bc AND pc.is_active = :active "
         "LIMIT 1"
-    ), {"uid": uid, "bc": barcode, "active": True})).fetchone()
+    ), {"uid": uid, "bc": bc, "active": True})).fetchone()
 
     if own:
         return {
@@ -159,7 +162,7 @@ async def check_barcode_global(
         "JOIN stores s ON pc.store_id = s.id "
         "WHERE s.owner_id != :uid AND pc.barcode = :bc AND pc.is_active = :active "
         "LIMIT 1"
-    ), {"uid": uid, "bc": barcode, "active": True})).fetchone()
+    ), {"uid": uid, "bc": bc, "active": True})).fetchone()
 
     if other:
         return {
@@ -191,12 +194,11 @@ async def search_global_catalog(
         return []
     from sqlalchemy import text as _text
     rows = (await db.execute(_text(
-        "SELECT pc.barcode, pc.name, pc.price, pc.purchase_price, "
+        "SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
         "pc.article, pc.category, pc.unit, pc.description "
         "FROM products_cache pc "
         "JOIN stores s ON pc.store_id = s.id "
-        "WHERE pc.name LIKE :q AND pc.is_active = :active "
-        "GROUP BY pc.name "
+        "WHERE lower(pc.name) LIKE lower(:q) AND pc.is_active = :active "
         "LIMIT :lim"
     ), {"q": f"%{q}%", "lim": limit, "active": True})).fetchall()
     return [
