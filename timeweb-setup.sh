@@ -94,8 +94,7 @@ echo "     miniapp собран → /app/miniapp/dist"
 
 # ── 8. Конфигурируем и перезапускаем Caddy ───────────────────────────
 echo "[6c] Настраиваю Caddy..."
-export BACKEND_DOMAIN="${DOMAIN}"
-envsubst < /app/Caddyfile > /etc/caddy/Caddyfile
+cp /app/Caddyfile /etc/caddy/Caddyfile
 
 systemctl enable caddy
 systemctl restart caddy
