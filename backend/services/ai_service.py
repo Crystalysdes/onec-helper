@@ -25,7 +25,7 @@ class AIService:
                 base_url="https://openrouter.ai/api/v1",
                 default_headers={"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
             )
-            self._model = "anthropic/claude-3.5-sonnet"
+            self._model = settings.OPENROUTER_MODEL
         else:
             import anthropic
             self._mode = "anthropic"
