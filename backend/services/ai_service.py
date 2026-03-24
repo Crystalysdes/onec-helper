@@ -24,13 +24,19 @@ class AIService:
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1",
                 default_headers={"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
+                timeout=40.0,
             )
             self._model = settings.OPENROUTER_MODEL
+            logger.info(f"AIService: OpenRouter mode, model={self._model}")
         else:
             import anthropic
             self._mode = "anthropic"
-            self._client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            self._client = anthropic.AsyncAnthropic(
+                api_key=settings.ANTHROPIC_API_KEY,
+                timeout=40.0,
+            )
             self._model = settings.CLAUDE_MODEL
+            logger.info(f"AIService: Anthropic direct mode, model={self._model}")
 
     def _img_block(self, b64: str) -> dict:
         if self._mode == "openai":
@@ -208,37 +214,56 @@ class AIService:
             return "Извините, произошла ошибка. Попробуйте позже."
 
     async def extract_product_from_text(self, text: str) -> dict:
-        """Extract product info from free-form text message."""
-        prompt = f"""Ты — система разбора описания товара для розничного магазина.
-Пользователь вводит текст в произвольном формате. Разбери его и верни JSON.
+        """Extract and normalize product info from free-form text message."""
+        prompt = f"""Ты — система нормализации товаров для розничного магазина.
+Пользователь вводит описание товара в произвольном формате — сокращения, неправильный регистр, произвольный порядок слов.
+Твоя задача: нормализовать и вернуть правильно оформленный JSON.
 
-Текст пользователя:
-"{text}"
+Текст: "{text}"
 
-Правила разбора:
-- "цена NNN" или "NNN р/руб/₽" → price
-- "закуп NNN" или "себест NNN" → purchase_price  
-- "NNNшт/кг/л/упак/пара" или "N штук/килограмм" → quantity + unit
-- числовой баркод (8-13 цифр) или "штрих-код NNNNN" → barcode
-- "арт NNN" или "артикул NNN" → article
-- название бренда/производителя (Простоквашино, Nestle и т.д.) → добавь в name
-- категорию можно определить по смыслу (молочные, выпечка, хозтовары и т.д.)
-- слова "штрих код", "qr", "qr код" без числа — игнорируй
+Правила нормализации:
 
-Примеры:
-"молоко 3.2% 1л Простоквашино цена 89 закуп 65" →
-{{"name":"Молоко 3.2% 1л Простоквашино","price":89,"purchase_price":65,"unit":"л","quantity":1,"category":"Молочные продукты"}}
+1. name — нормализованное торговое название:
+   - Правильный регистр: первое слово с заглавной, остальные строчными (бренды — с заглавной)
+   - Порядок слов: [Вид товара] [Бренд] [Вкус/сорт] [Объём/вес]
+   - Объём/вес включай в название в сокращении: "2 литра"→"2л", "500 грамм"→"500г", "1.5 литра"→"1.5л"
+   - Убери из названия: слова цена/руб/р/₽/закуп/шт/штук/упак/пак/пачек и числа-количества
+   - Примеры нормализации:
+     "крым лимонад 2 литра пак" → "Лимонад Крым 2л"
+     "молоко 3.2% 1л простоквашино" → "Молоко 3.2% 1л Простоквашино"
+     "ЧИПСЫ ЛЕЙЗ 150Г" → "Чипсы Lays 150г"
+     "стир порошок тайд 3кг" → "Порошок стиральный Tide 3кг"
 
-"салфетки большие цена 120 8шт штрих код" →
-{{"name":"Салфетки большие","price":120,"quantity":8,"unit":"шт","category":"Хозтовары"}}
+2. quantity — количество единиц товара (по умолчанию 1)
+   - "5шт", "5 штук", "5 упак" → quantity: 5
+   - Объём товара (2л, 500мл) — НЕ количество, включай в название
 
-"хлеб белый нарезной 450г 4601234567890 45р категория выпечка" →
-{{"name":"Хлеб белый нарезной 450г","price":45,"barcode":"4601234567890","category":"Выпечка","unit":"шт","quantity":1}}
+3. unit — единица измерения:
+   - "пак"/"упак"/"пачка"/"пачек"/"упаковок" → "упак"
+   - "штук"/"шт"/"штуки" → "шт"
+   - "кило"/"килограмм"/"кг" → "кг"
+   - "литр"/"л" как единица товара (не объём) → "л"
+   - по умолчанию: "шт"
 
-Верни ТОЛЬКО JSON объект с полями (null если не найдено):
-name, price, purchase_price, barcode, article, category, quantity, unit, description
+4. price — цена продажи (число после "цена"/"₽"/"р"/"руб", без НДС)
+5. purchase_price — закупочная цена (после "закуп"/"себест"/"закупка"/"приход")
+6. barcode — только цифры 8–13 знаков (EAN-8, EAN-13, UPC-A)
+7. article — после "арт"/"артикул"/"код"
+8. category — определи по смыслу:
+   Напитки / Молочные продукты / Выпечка / Хозтовары / Бакалея /
+   Кондитерские / Мясо и птица / Снеки / Заморозка / Алкоголь / Косметика
 
-Верни только JSON без пояснений."""
+Примеры ответов:
+"крым лимонад 2 литра пак" →
+{{"name":"Лимонад Крым 2л","unit":"упак","quantity":1,"category":"Напитки","price":null,"purchase_price":null,"barcode":null,"article":null,"description":null}}
+
+"молоко 3.2% 1л простоквашино цена 89 закуп 65 10шт" →
+{{"name":"Молоко 3.2% 1л Простоквашино","price":89,"purchase_price":65,"unit":"шт","quantity":10,"category":"Молочные продукты","barcode":null,"article":null,"description":null}}
+
+"хлеб белый нарезной 450г 4601234567890 45р" →
+{{"name":"Хлеб белый нарезной 450г","price":45,"barcode":"4601234567890","category":"Выпечка","unit":"шт","quantity":1,"purchase_price":null,"article":null,"description":null}}
+
+Верни ТОЛЬКО JSON объект без пояснений."""
 
         try:
             content = await self._call([{"role": "user", "content": prompt}], max_tokens=512)

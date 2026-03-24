@@ -577,6 +577,30 @@ async def update_product(
     return result
 
 
+@router.get("/ai-status")
+async def ai_status(current_user: User = Depends(get_current_user)):
+    """Diagnostic endpoint: check which AI mode is active and test a quick call."""
+    from backend.services.ai_service import AIService
+    from backend.config import settings
+    svc = AIService()
+    test_ok = False
+    test_result = None
+    try:
+        result = await svc.extract_product_from_text("тест молоко 1л")
+        test_ok = bool(result.get("name"))
+        test_result = result.get("name")
+    except Exception as e:
+        test_result = str(e)
+    return {
+        "mode": svc._mode,
+        "model": svc._model,
+        "openrouter_key_set": bool(settings.OPENROUTER_API_KEY),
+        "anthropic_key_set": bool(settings.ANTHROPIC_API_KEY),
+        "test_ok": test_ok,
+        "test_name": test_result,
+    }
+
+
 @router.delete("/detail/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(
     product_id: UUID,
