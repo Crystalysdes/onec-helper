@@ -1,4 +1,4 @@
-name: Keep Render Alive
+name: Keep Timeweb Alive
 
 on:
   schedule:
@@ -9,7 +9,7 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Render backend
+      - name: Ping Timeweb backend
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://onec-helper-1.onrender.com/health)
-          echo "Render /health → $STATUS"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://net1c.ru/health)
+          echo "Timeweb /health → $STATUS"
