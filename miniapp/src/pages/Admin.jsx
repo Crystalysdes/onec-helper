@@ -500,7 +500,11 @@ export default function Admin() {
                           {catProgress.stage === 'reading' && '📄 Читаем файл...'}
                           {catProgress.stage === 'parsing' && '📂 Распаковываем ZIP...'}
                           {(!catProgress.stage || catProgress.stage === 'importing') && (
-                            <>Загружено: <b style={{ color: 'var(--tg-theme-text-color)' }}>{(catProgress.imported||0).toLocaleString('ru-RU')}</b> · Пропущено: {(catProgress.skipped||0).toLocaleString('ru-RU')}</>
+                            <span>
+                              Обработано: <b style={{ color: 'var(--tg-theme-text-color)' }}>{((catProgress.imported||0) + (catProgress.skipped||0)).toLocaleString('ru-RU')}</b>
+                              {' · '}В базе: <b style={{ color: '#22c55e' }}>{(catProgress.imported||0).toLocaleString('ru-RU')}</b>
+                              {' · '}Отфильтровано: <span style={{ color: 'var(--tg-theme-hint-color)' }}>{(catProgress.skipped||0).toLocaleString('ru-RU')}</span>
+                            </span>
                           )}
                         </p>
                       </div>

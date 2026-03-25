@@ -134,8 +134,10 @@ async def run_import(job_id: str, limit: int = 2_000_000):
         await _update_job(job_id, stage="importing", file_name=file_name)
         logger.info(f"[import:{job_id[:8]}] streaming {csv_path} enc={encoding} delim={repr(delimiter)} limit={limit}")
 
-        imported = 0
-        skipped = 0
+        imported = 0   # actually inserted into DB
+        skipped = 0    # filtered out (bad data)
+        duplicates = 0 # barcode already in DB (ON CONFLICT DO NOTHING)
+        total_rows = 0
         batch: list[dict] = []
 
         with open(csv_path, "r", encoding=encoding, errors="replace", newline="") as fh:
@@ -151,6 +153,7 @@ async def run_import(job_id: str, limit: int = 2_000_000):
                 if row_count % YIELD_EVERY == 0:
                     await asyncio.sleep(0)
 
+                total_rows += 1
                 cleaned = clean_record(row)
                 if not cleaned:
                     skipped += 1
@@ -162,32 +165,36 @@ async def run_import(job_id: str, limit: int = 2_000_000):
                     async with AsyncSessionLocal() as db:
                         stmt = pg_insert(GlobalProduct).values(batch)
                         stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
-                        await db.execute(stmt)
+                        result = await db.execute(stmt)
                         await db.commit()
-                    imported += len(batch)
+                    actually_inserted = result.rowcount if result.rowcount >= 0 else len(batch)
+                    duplicates += len(batch) - actually_inserted
+                    imported += actually_inserted
                     batch.clear()
 
-                    if imported % UPDATE_DB_EVERY == 0:
-                        await _update_job(job_id, imported=imported, skipped=skipped)
-                        logger.info(f"[import:{job_id[:8]}] {imported:,} imported, {skipped:,} skipped")
+                    if (imported + duplicates) % UPDATE_DB_EVERY == 0:
+                        await _update_job(job_id, imported=imported, skipped=skipped + duplicates)
+                        logger.info(f"[import:{job_id[:8]}] {imported:,} inserted, {skipped:,} filtered, {duplicates:,} dupes")
 
         if batch:
             async with AsyncSessionLocal() as db:
                 stmt = pg_insert(GlobalProduct).values(batch)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
-                await db.execute(stmt)
+                result = await db.execute(stmt)
                 await db.commit()
-            imported += len(batch)
+            actually_inserted = result.rowcount if result.rowcount >= 0 else len(batch)
+            duplicates += len(batch) - actually_inserted
+            imported += actually_inserted
 
         await _update_job(
             job_id,
             status="done",
             stage="done",
             imported=imported,
-            skipped=skipped,
+            skipped=skipped + duplicates,
             finished_at=datetime.now(timezone.utc),
         )
-        logger.info(f"[import:{job_id[:8]}] DONE — {imported:,} imported, {skipped:,} skipped")
+        logger.info(f"[import:{job_id[:8]}] DONE — {total_rows:,} total, {imported:,} inserted, {skipped:,} filtered, {duplicates:,} dupes")
 
         await _ensure_trgm_index()
 
