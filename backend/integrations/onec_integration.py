@@ -195,21 +195,27 @@ class OneCClient:
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
         price_type_key = await self._get_or_fetch_price_type_key()
-
-        # ── 1. PATCH Catalog_Номенклатура directly (confirmed working in 1C Fresh)
-        for price_field in ("Цена", "ЦенаРозничная", "ЦенаЗакупка"):
-            ok, resp = await self._request(
-                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
-                json={price_field: price}
-            )
-            if ok:
-                logger.info(f"1C price set via PATCH Catalog_Ном/{price_field}: {onec_id} → {price}")
-                return True
-            logger.warning(f"1C price PATCH Catalog_Ном/{price_field}: {resp}")
-
-        # ── 2. InformationRegister fallback
         _zero = "00000000-0000-0000-0000-000000000000"
         vid_key = price_type_key or _zero
+
+        # ── 1. Document_УстановкаЦенНоменклатуры (tabular section = Запасы)
+        org_key = await self._get_org_key()
+        row = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": price,
+               "Характеристика_Key": _zero}
+        doc = {"Дата": period, "ВидЦены_Key": vid_key,
+                "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
+                "Запасы": [row]}
+        if org_key:
+            doc["Организация_Key"] = org_key
+        ok, resp = await self._request(
+            "POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc
+        )
+        if ok:
+            logger.info(f"1C price set via Document_УстановкаЦен/Запасы: {onec_id} → {price}")
+            return True
+        logger.warning(f"1C price Document_УстановкаЦен/Запасы failed: {resp}")
+
+        # ── 2. InformationRegister fallback
         period0 = "0001-01-01T00:00:00"
         registers = ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены")
         for register in registers:
@@ -451,6 +457,18 @@ class OneCClient:
         logger.warning("1C price type key not found — will attempt price write without ВидЦены_Key")
         return None
 
+    async def _get_org_key(self) -> str | None:
+        """Return GUID of the first organisation from 1C."""
+        if hasattr(self, "_org_key_cache") and self._org_key_cache:
+            return self._org_key_cache
+        ok, data = await self._request(
+            "GET", "odata/standard.odata/Catalog_Организации?$format=json&$top=1"
+        )
+        if ok and isinstance(data, dict) and data.get("value"):
+            self._org_key_cache = str(data["value"][0].get("Ref_Key", "")).strip("{}")
+            return self._org_key_cache
+        return None
+
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
         """Create a barcode record in 1C.
 
@@ -463,32 +481,31 @@ class OneCClient:
         _zero = "00000000-0000-0000-0000-000000000000"
         owner_type = "StandardODATA.Catalog_Номенклатура"
 
-        # ── 1. PATCH Catalog_Номенклатура tabular section (подтверждено работает в 1C Fresh)
-        for key_name, items in [
-            ("ШтрихкодыНоменклатуры", [{"LineNumber": 1, "Штрихкод": barcode, "ТипШтрихкода": bc_type}]),
-            ("ШтрихкодыНоменклатуры", [{"LineNumber": 1, "Штрихкод": barcode}]),
-            ("Штрихкоды", [{"LineNumber": 1, "Штрихкод": barcode, "ТипШтрихкода": bc_type}]),
-        ]:
-            ok, resp = await self._request(
-                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
-                json={key_name: items}
-            )
-            if ok:
-                logger.info(f"1C barcode created (PATCH/{key_name}): {barcode} → {onec_id}")
-                return True
-            logger.warning(f"1C barcode PATCH/{key_name} failed: {resp}")
+        # ── 1. PATCH Catalog_Номенклатура with direct Штрихкод field (реальное поле на сущности)
+        ok, resp = await self._request(
+            "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
+            json={"Штрихкод": barcode}
+        )
+        if ok:
+            logger.info(f"1C barcode set (PATCH Catalog/Штрихкод): {barcode} → {onec_id}")
+            return True
+        logger.warning(f"1C barcode PATCH Catalog/Штрихкод failed: {resp}")
 
-        # ── 2. InformationRegister POST fallback ────────────────────────────────
-        for entity in ("InformationRegister_ШтрихкодыНоменклатуры", "InformationRegister_Штрихкоды"):
-            for pl in [
-                {"Номенклатура_Key": onec_id, "Штрихкод": barcode, "ТипШтрихкода": bc_type},
-                {"Номенклатура_Key": onec_id, "Штрихкод": barcode},
-            ]:
-                ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                if ok:
-                    logger.info(f"1C barcode created (register): {barcode} → {onec_id} via {entity}")
-                    return True
-                logger.warning(f"1C barcode register attempt ({entity}): {resp}")
+        # ── 2. PUT InformationRegister with correct 3-part key ─────────────────────
+        # Key: Номенклатура_Key + Штрихкод + Характеристика_Key (discovered via PUT error messages)
+        put_key = (f"Номенклатура_Key=guid'{onec_id}',"
+                   f"Штрихкод='{barcode}',"
+                   f"Характеристика_Key=guid'{_zero}'")
+        ok, resp = await self._request(
+            "PUT",
+            f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key})",
+            json={"Номенклатура_Key": onec_id, "Штрихкод": barcode,
+                 "ТипШтрихкода": bc_type, "Характеристика_Key": _zero}
+        )
+        if ok:
+            logger.info(f"1C barcode set (PUT InformationRegister): {barcode} → {onec_id}")
+            return True
+        logger.warning(f"1C barcode PUT InformationRegister failed: {resp}")
 
         logger.warning(f"1C barcode create FAILED for barcode={barcode} onec_id={onec_id}")
         return False
@@ -561,28 +578,25 @@ class OneCClient:
                 s in e for s in ("Штрих", "Barcode", "Цен", "Price", "Установка"))]
 
         bc_results = []
-        # ── InformationRegister POST
+        # ── PATCH Catalog_Номенклатура with direct Штрихкод field (real field on entity)
         ok, resp = await self._request(
-            "POST", "odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры",
-            json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}
+            "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
+            json={"Штрихкод": test_barcode}
         )
-        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [POST]",
+        bc_results.append({"entity": "PATCH Catalog_Ном/Штрихкод (real field)",
                            "ok": ok, "resp": str(resp)[:600]})
-        # ── PUT with barcode as key (barcode is likely the dimension)
-        for put_key in [
-            f"Штрихкод='{test_barcode}'",
-            f"Номенклатура_Key=guid'{onec_id}',Штрихкод='{test_barcode}'",
-        ]:
-            ok, resp = await self._request(
-                "PUT",
-                f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key})",
-                json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode,
-                     "ТипШтрихкода": bc_type}
-            )
-            bc_results.append({"entity": f"InformationRegister_ШтрихкодыНоменклатуры [PUT key={put_key[:30]}]",
-                               "ok": ok, "resp": str(resp)[:600]})
-            if ok:
-                break
+        # ── PUT InformationRegister with full 3-part key (Ном+Штрихкод+Характеристика_Key)
+        put_key3 = (f"Номенклатура_Key=guid'{onec_id}',"
+                    f"Штрихкод='{test_barcode}',"
+                    f"Характеристика_Key=guid'{_zero}'")
+        ok, resp = await self._request(
+            "PUT",
+            f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key3})",
+            json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode,
+                 "ТипШтрихкода": bc_type, "Характеристика_Key": _zero}
+        )
+        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [PUT Ном+Штрихкод+Характеристика]",
+                           "ok": ok, "resp": str(resp)[:600]})
 
         price_results = []
         vid = price_type_key or _zero
@@ -620,23 +634,18 @@ class OneCClient:
                                    for k, v in data["value"][0].items()
                                    if not k.startswith("odata")}
 
-        # ── Document POST with full fields
+        # ── Document POST with Запасы tabular section (correct name!)
         row_base = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": test_price,
                     "Характеристика_Key": _zero}
         if unit_key:
             row_base["Единица_Key"] = unit_key
-        doc_base = {"Дата": period, "ВидЦены_Key": vid, "Товары": [row_base]}
+        doc_base = {"Дата": period, "ВидЦены_Key": vid,
+                    "Запасы": [row_base],
+                    "ЗаписыватьНовыеЦеныПоверхУстановленных": True}
         if org_key:
             doc_base["Организация_Key"] = org_key
-        if currency_key:
-            doc_base["Валюта_Key"] = currency_key
-        # Add any scalar fields found in existing docs
-        for f, t in existing_doc_fields.items():
-            if f not in doc_base and f not in ("Товары", "Ref_Key", "Дата") and not f.endswith("_Key"):
-                if t in ("str", "int", "float", "bool"):
-                    doc_base[f] = None
         ok, resp = await self._request("POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc_base)
-        price_results.append({"register": "Document_УстановкаЦенНоменклатуры [POST+existing_fields]",
+        price_results.append({"register": "Document_УстановкаЦенНоменклатуры [Запасы+org]",
                                "ok": ok, "resp": str(resp)[:600]})
 
         return {
