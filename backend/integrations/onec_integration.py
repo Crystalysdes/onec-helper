@@ -107,31 +107,44 @@ class OneCClient:
 
     async def get_barcodes(self) -> dict:
         """Fetch all barcodes. Returns dict: onec_id -> barcode string."""
-        candidates = [
-            ("Catalog_НоменклатураШтрихкоды", "Owner_Key", "Штрихкод"),
-            ("Catalog_НоменклатураШтрихкоды", "Владелец_Key", "Штрихкод"),
-            ("InformationRegister_Штрихкоды", "Номенклатура_Key", "Штрихкод"),
+        # All known entity names across different 1C configurations
+        # owner_field candidates tried automatically from item keys
+        entities_to_try = [
+            "Catalog_ШтрихкодыНоменклатуры",    # Штрихкоды номенклатуры (УНФ / 1СФреш)
+            "Catalog_НоменклатураШтрихкоды",    # Торговля
+            "InformationRegister_ШтрихкодыНоменклатуры",
+            "InformationRegister_Штрихкоды",
         ]
-        for entity, owner_field, bc_field in candidates:
-            # try without $select first (most compatible)
-            for path in [
-                f"odata/standard.odata/{entity}?$format=json&$top=10000",
-                f"odata/standard.odata/{entity}?$format=json&$top=10000&$select={owner_field},{bc_field}",
-            ]:
-                success, data = await self._request("GET", path)
-                if not success:
-                    break
-                items = data.get("value", []) if isinstance(data, dict) else []
-                if not items:
-                    break
-                result = {}
-                for item in items:
-                    oid = str(item.get(owner_field, "") or item.get("Владелец_Key", ""))
-                    bc = str(item.get(bc_field, "") or item.get("Штрихкод", "")).strip()
-                    if oid and bc and bc.isdigit() and oid not in result:
-                        result[oid] = bc
-                logger.info(f"1C barcodes loaded from {entity}: {len(result)} entries")
-                return result
+        # Possible field names for owner ref and barcode value
+        owner_fields = ["Владелец_Key", "Owner_Key", "Номенклатура_Key"]
+        bc_fields = ["Штрихкод", "НомерШтрихкода", "Code"]
+
+        for entity in entities_to_try:
+            path = f"odata/standard.odata/{entity}?$format=json&$top=10000"
+            success, data = await self._request("GET", path)
+            if not success:
+                continue
+            items = data.get("value", []) if isinstance(data, dict) else []
+            if not items:
+                continue
+            result = {}
+            for item in items:
+                # auto-detect owner field
+                oid = ""
+                for of in owner_fields:
+                    if of in item and item[of]:
+                        oid = str(item[of])
+                        break
+                # auto-detect barcode field
+                bc = ""
+                for bf in bc_fields:
+                    if bf in item and str(item[bf]).strip().isdigit():
+                        bc = str(item[bf]).strip()
+                        break
+                if oid and bc and oid not in result:
+                    result[oid] = bc
+            logger.info(f"1C barcodes loaded from {entity}: {len(result)} entries")
+            return result
         logger.warning("1C barcodes: no barcode catalog found in OData")
         return {}
 

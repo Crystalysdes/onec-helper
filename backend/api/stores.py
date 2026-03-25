@@ -514,7 +514,10 @@ async def diagnose_onec(
 
     # Find which entities match nomenclature/catalog
     nom_entities = [e for e in entities if "Номенклатур" in e and "Catalog" in e][:10]
-    barcode_catalog_published = any("НоменклатураШтрихкод" in e for e in entities)
+    barcode_catalog_published = any(
+        "ШтрихкодыНоменклатур" in e or "НоменклатураШтрихкод" in e
+        for e in entities
+    )
 
     return {
         "entities_published": len(entities),
