@@ -741,7 +741,18 @@ async def sync_product_to_onec(
         return {"product_name": product.name, "onec_id": None,
                 "steps": steps, "probe": None}
 
-    # Steps 2+3: use probe which tries every variant and returns exact 1C errors
+    # Step 2: sync actual barcode + prices
+    if product.barcode and product.barcode.strip():
+        ok_bc = await client.create_barcode(clean_id, product.barcode.strip())
+        steps["barcode"] = {"ok": ok_bc, "barcode": product.barcode}
+    if product.price and product.price > 0:
+        ok_rp = await client.set_price(clean_id, float(product.price), price_type_name="розн")
+        steps["retail_price"] = {"ok": ok_rp, "price": product.price}
+    if product.purchase_price and product.purchase_price > 0:
+        ok_pp = await client.set_price(clean_id, float(product.purchase_price), price_type_name="учет")
+        steps["purchase_price"] = {"ok": ok_pp, "price": product.purchase_price}
+
+    # Step 3: diagnostic probe
     test_bc = (product.barcode or "").strip() or "4607141232117"
     test_price = float(product.price or 100.0)
     probe = await client.probe_barcode_price(clean_id, test_bc, test_price)
