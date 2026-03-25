@@ -523,6 +523,23 @@ class OneCClient:
         if ok and isinstance(data, dict) and data.get("value"):
             org_key = str(data["value"][0].get("Ref_Key", "")).strip("{}")
 
+        # ── GET Catalog_Валюты — currency needed for Document
+        currency_key = None
+        ok, data = await self._request("GET", "odata/standard.odata/Catalog_Валюты?$format=json&$top=1")
+        if ok and isinstance(data, dict) and data.get("value"):
+            currency_key = str(data["value"][0].get("Ref_Key", "")).strip("{}")
+
+        # ── GET product's unit of measure + nom_fields from Catalog_Номенклатура
+        unit_key = None
+        nom_fields = []
+        ok_nom, nom_data = await self._request(
+            "GET", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')?$format=json"
+        )
+        if ok_nom and isinstance(nom_data, dict):
+            unit_key = str(nom_data.get("ЕдиницаХранения_Key") or nom_data.get("ЕдИзм_Key") or "").strip("{}")
+            nom_fields = [k for k in nom_data.keys() if not k.startswith("odata") and
+                          any(s in k.lower() for s in ("цен", "price", "штрих", "barcode"))]
+
         # ── GET existing barcodes for this specific product
         existing_bc_for_product = []
         ok, data = await self._request(
@@ -534,15 +551,6 @@ class OneCClient:
                 {k: v for k, v in r.items() if not k.startswith("odata")}
                 for r in data.get("value", [])
             ]
-
-        # ── GET the actual product to see what fields Catalog_Номенклатура has
-        nom_fields = []
-        ok, data = await self._request(
-            "GET", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')?$format=json"
-        )
-        if ok and isinstance(data, dict):
-            nom_fields = [k for k in data.keys() if not k.startswith("odata") and
-                          any(s in k.lower() for s in ("цен", "price", "штрих", "barcode"))]
 
         bc_results = []
         # ── 1. PATCH Catalog_Номенклатура tabular section (most reliable for 1C Fresh)
@@ -609,18 +617,21 @@ class OneCClient:
         # Document_УстановкаЦенНоменклатуры — the standard 1C way to set prices
         doc_date = period
         vid = price_type_key or _zero
-        line = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": test_price}
+        row_base = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": test_price,
+                    "Характеристика_Key": _zero}
+        if unit_key:
+            row_base["Единица_Key"] = unit_key
         for doc_entity in ("Document_УстановкаЦенНоменклатуры", "Document_УстановкаЦен"):
             for tab_key in ("Товары", "ТоварыУслуги", "Строки"):
-                base = {"Дата": doc_date, "ВидЦены_Key": vid, tab_key: [line]}
+                base = {"Дата": doc_date, "ВидЦены_Key": vid, tab_key: [row_base]}
                 if org_key:
                     base["Организация_Key"] = org_key
+                if currency_key:
+                    base["Валюта_Key"] = currency_key
                 ok, resp = await self._request("POST", f"odata/standard.odata/{doc_entity}", json=base)
-                price_results.append({
-                    "register": doc_entity,
-                    "payload": f"org={'yes' if org_key else 'no'}+{tab_key}",
-                    "ok": ok, "resp": str(resp)[:600],
-                })
+                label = f"org={'yes' if org_key else 'no'},cur={'yes' if currency_key else 'no'},unit={'yes' if unit_key else 'no'}+{tab_key}"
+                price_results.append({"register": doc_entity, "payload": label,
+                                      "ok": ok, "resp": str(resp)[:600]})
                 if ok:
                     break
             else:
