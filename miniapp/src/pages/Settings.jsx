@@ -36,6 +36,7 @@ export default function Settings() {
   const [payLoading, setPayLoading] = useState(false)
 
   const [editingIntegration, setEditingIntegration] = useState(null)
+  const [connType, setConnType] = useState('web')
 
   const storeForm = useForm()
   const intForm = useForm({ defaultValues: { name: '1C Integration' } })
@@ -810,16 +811,64 @@ export default function Settings() {
                     placeholder="Название интеграции"
                     {...intForm.register('name')}
                   />
-                  <div className="text-xs p-3 rounded-xl flex flex-col gap-2" style={{ background: 'rgba(36,129,204,0.08)', color: 'var(--tg-theme-text-color)' }}>
-                    <p className="font-semibold text-[13px]">📋 Как подключить 1С:Fresh</p>
-                    <div className="flex flex-col gap-1.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      <p><b className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>1. URL</b> — адрес вашей базы без <code className="bg-black/10 px-1 rounded">/ru/</code> на конце:</p>
-                      <p className="font-mono text-[11px] pl-2">https://msk1.1cfresh.com/a/sbm/12345</p>
-                      <p className="text-[11px] pl-2">Откройте 1С Fresh в браузере → скопируйте адрес до <code className="bg-black/10 px-1 rounded">/ru/</code></p>
-                      <p className="mt-1"><b className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>2. Логин и пароль</b> — от вашей учётной записи 1С Fresh (той, что входите на сайт)</p>
-                      <p className="mt-1"><b className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>3. После сохранения</b> нажмите <b>«Проверить»</b> — если OData не настроен, приложение покажет прямую ссылку для настройки (1 мин)</p>
-                    </div>
+                  {/* Connection type selector */}
+                  <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                    {[['web', '☁️ Облако / 1СФреш'], ['local', '🖥️ Локальная сеть']].map(([v, l]) => (
+                      <button key={v} type="button"
+                        className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+                        style={{
+                          background: connType === v ? 'var(--tg-theme-bg-color)' : 'transparent',
+                          color: connType === v ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
+                        }}
+                        onClick={() => setConnType(v)}>{l}</button>
+                    ))}
                   </div>
+
+                  {connType === 'web' ? (
+                    <div className="text-xs p-3 rounded-xl flex flex-col gap-2" style={{ background: 'rgba(36,129,204,0.08)' }}>
+                      <p className="font-semibold text-[13px]" style={{ color: 'var(--tg-theme-text-color)' }}>☁️ 1СФреш / Облако</p>
+                      <div className="flex flex-col gap-2" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        <div>
+                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>🔗 URL сервера</p>
+                          <p>1. Откройте вашу 1С в браузере</p>
+                          <p>2. Скопируйте URL из адресной строки до части <code className="font-mono px-1 rounded" style={{ background: 'rgba(0,0,0,0.1)' }}>/ru/</code> (не включая её)</p>
+                          <p className="font-mono text-[11px] mt-1 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>https://msk1.1cfresh.com/a/sbm/3941876</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>👤 Логин и пароль</p>
+                          <p>Логин: ваш email или логин от 1СФреш</p>
+                          <p>Пароль: от того же аккаунта (не ИНН/ОГРН)</p>
+                        </div>
+                        <div className="px-2 py-1.5 rounded-lg" style={{ background: 'rgba(36,129,204,0.1)' }}>
+                          <p style={{ color: 'var(--tg-theme-text-color)' }}>💡 После сохранения нажмите <b>«Тест»</b> — если OData не настроен, появится прямая ссылка для настройки</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs p-3 rounded-xl flex flex-col gap-2" style={{ background: 'rgba(34,197,94,0.08)' }}>
+                      <p className="font-semibold text-[13px]" style={{ color: 'var(--tg-theme-text-color)' }}>🖥️ Локальный сервер</p>
+                      <div className="flex flex-col gap-2" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        <div>
+                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>🔗 URL сервера</p>
+                          <p>Формат: <code className="font-mono px-1 rounded" style={{ background: 'rgba(0,0,0,0.1)' }}>http://&lt;адрес&gt;/&lt;база&gt;</code></p>
+                          <p className="font-mono text-[11px] mt-1 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>http://192.168.1.10/УправлениеМагазином</p>
+                          <p className="mt-1">Чтобы найти: откройте <b>1СПредприятие</b> → Панель администратора → <b>Публикация на веб-сервере</b> → скопируйте Адрес имени базы</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>👤 Логин и пароль</p>
+                          <p>Логин: имя пользователя в самой 1С (не Windows-логин)</p>
+                          <p>Пароль: пароль пользователя в 1С</p>
+                          <p className="mt-1">Найти: 1С → <b>Администрирование</b> → <b>Пользователи</b> → имя пользователя</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>⚙️ Требования к серверу</p>
+                          <p>• Сервер должен быть доступен из интернета</p>
+                          <p>• Открыт порт 80 (или 443 для HTTPS)</p>
+                          <p>• В 1С должен быть запущен модуль <b>REST-сервиса</b></p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex gap-2">
                     <button type="button" className="btn-secondary flex-1" onClick={() => setShowIntegrationForm(false)}>
                       Отмена
