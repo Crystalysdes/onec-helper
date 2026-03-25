@@ -46,6 +46,23 @@ class ProductUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+def _compress_image(image_bytes: bytes, max_px: int = 800) -> bytes:
+    """Resize image so the longest side is at most max_px, then re-encode as JPEG quality=85."""
+    try:
+        import io as _io
+        from PIL import Image as _Img
+        img = _Img.open(_io.BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_px:
+            ratio = max_px / max(w, h)
+            img = img.resize((int(w * ratio), int(h * ratio)), _Img.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return image_bytes  # fallback: return original if PIL not available
+
+
 async def _upsert_global_product(db: AsyncSession, p: ProductCache):
     """Insert or update the shared GlobalProduct catalog entry for this barcode.
     Applies the same quality filters as catalog import.
@@ -437,20 +454,22 @@ async def recognize_photo(
     db: AsyncSession = Depends(get_db),
 ):
     from backend.services.ai_service import AIService
-    from backend.services.ocr_service import OCRService
 
     store_id_uuid = UUID(store_id)
     await _check_store_access(store_id_uuid, current_user, db)
 
     contents = await file.read()
 
-    ocr_service = OCRService()
-    extracted_text = ocr_service.extract_text(contents)
+    # Compress image to max 800px before sending to AI (reduces payload ~10x)
+    import asyncio
+    compressed = await asyncio.get_event_loop().run_in_executor(
+        None, _compress_image, contents, 800
+    )
 
     ai_service = AIService()
-    product_data = await ai_service.recognize_product_from_image(extracted_text, contents)
+    product_data = await ai_service.recognize_product_from_image("", compressed)
 
-    return {"recognized": product_data, "ocr_text": extracted_text}
+    return {"recognized": product_data, "ocr_text": ""}
 
 
 @router.post("/upload-invoice")

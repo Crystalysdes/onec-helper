@@ -145,50 +145,35 @@ class AIService:
     async def recognize_product_from_image(
         self, ocr_text: str, image_bytes: Optional[bytes] = None
     ) -> dict:
-        """Recognize product details from image and/or OCR text."""
-        messages = []
+        """Recognize product details from image using fast AI vision."""
+        if not image_bytes:
+            return {"name": ocr_text[:100] if ocr_text else "Неизвестный товар"}
 
-        if image_bytes:
-            base64_image = base64.standard_b64encode(image_bytes).decode("utf-8")
-            messages.append({
-                "role": "user",
-                "content": [
-                    self._img_block(base64_image),
-                    {
-                        "type": "text",
-                        "text": f"""Ты — система распознавания товаров для розничного магазина.
+        base64_image = base64.standard_b64encode(image_bytes).decode("utf-8")
+        messages = [{
+            "role": "user",
+            "content": [
+                self._img_block(base64_image),
+                {
+                    "type": "text",
+                    "text": """Определи товар на фото. Верни ТОЛЬКО JSON без пояснений:
+{"name":"[Вид] [Бренд] [объём/вес]","barcode":null,"article":null,"category":null,"price":null,"description":null}
 
-Проанализируй изображение товара и извлечённый OCR текст:
-{ocr_text if ocr_text else 'OCR текст недоступен'}
-
-Верни ТОЛЬКО валидный JSON объект с полями товара:
-- name: string (название товара, обязательно)
-- barcode: string (штрих-код, если виден)
-- article: string (артикул, если виден)
-- category: string (категория товара)
-- price: number (цена, если видна)
-- description: string (краткое описание)
-
-Верни только JSON без пояснений.""",
-                    },
-                ],
-            })
-        else:
-            messages.append({
-                "role": "user",
-                "content": f"""Распознай товар из следующего OCR текста:
-{ocr_text}
-
-Верни ТОЛЬКО валидный JSON объект с полями:
-- name, barcode, article, category, price, description""",
-            })
+Правила:
+- name: нормализованное название (первое слово заглавное, бренды заглавные), например "Молоко Простоквашино 1л"
+- barcode: цифры штрихкода если виден (8-13 цифр), иначе null
+- category: Напитки/Молочные/Выпечка/Хозтовары/Бакалея/Снеки/Косметика/Алкоголь/Табак или null
+- price: число если видна цена, иначе null""",
+                },
+            ],
+        }]
 
         try:
-            content = await self._call(messages, max_tokens=1024)
+            content = await self._call(messages, max_tokens=150, fast=True)
             return json.loads(_strip_json(content))
         except Exception as e:
             logger.error(f"AI product recognition error: {e}")
-            return {"name": "Неизвестный товар", "description": ocr_text[:200]}
+            return {"name": "Неизвестный товар"}
 
     async def chat_assistant(self, message: str, context: dict = None) -> str:
         """General AI assistant for product management queries."""
