@@ -171,18 +171,7 @@ class AIService:
         }]
 
         try:
-            # Use dedicated vision model (faster than general fast model)
-            model = self._vision_model if self._mode == "openai" else None
-            if model and model != self._fast_model:
-                # Override model for this call
-                r = await self._client.chat.completions.create(
-                    model=model, max_tokens=150,
-                    messages=[{"role": "system", "content": "You are a product recognition assistant. Always respond with valid JSON only."}] + messages,
-                    timeout=15.0,
-                )
-                content = r.choices[0].message.content.strip()
-            else:
-                content = await self._call(messages, max_tokens=150, fast=True)
+            content = await self._call(messages, max_tokens=200, fast=True)
             return json.loads(_strip_json(content))
         except Exception as e:
             logger.error(f"AI product recognition error: {e}")
