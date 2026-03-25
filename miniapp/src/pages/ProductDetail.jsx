@@ -267,6 +267,16 @@ export default function ProductDetail() {
                       🔑 Поля Номенклатуры (цена/штрихкод): {syncResult.probe.nom_price_barcode_fields.join(', ')}
                     </p>
                   )}
+                  {syncResult.probe.published_bc_price_entities?.length > 0 && (
+                    <p className="break-all" style={{ color: '#60a5fa' }}>
+                      📋 Опубликованные сущности (цена/штрихкод): {syncResult.probe.published_bc_price_entities.join(', ')}
+                    </p>
+                  )}
+                  {syncResult.probe.existing_doc_fields && Object.keys(syncResult.probe.existing_doc_fields).length > 0 && (
+                    <p className="break-all" style={{ color: '#a78bfa' }}>
+                      📄 Поля документа УстановкаЦен: {Object.keys(syncResult.probe.existing_doc_fields).join(', ')}
+                    </p>
+                  )}
                   {syncResult.probe.existing_bc_for_product?.length > 0 && (
                     <p className="break-all" style={{ color: '#f59e0b' }}>
                       📦 Существующие штрихкоды в регистре: {JSON.stringify(syncResult.probe.existing_bc_for_product)}

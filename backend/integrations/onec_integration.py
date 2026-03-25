@@ -552,101 +552,104 @@ class OneCClient:
                 for r in data.get("value", [])
             ]
 
+        # ── GET published entities list (filter barcode/price related)
+        published_entities = []
+        ok, data = await self._request("GET", "odata/standard.odata/?$format=json")
+        if ok and isinstance(data, dict):
+            all_ent = [e.get("name", "") for e in data.get("value", [])]
+            published_entities = [e for e in all_ent if any(
+                s in e for s in ("Штрих", "Barcode", "Цен", "Price", "Установка"))]
+
         bc_results = []
-        # ── 1. PATCH Catalog_Номенклатура tabular section (most reliable for 1C Fresh)
-        for bc_pl in [
-            {"ШтрихкодыНоменклатуры": [{"LineNumber": 1, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}]},
-            {"ШтрихкодыНоменклатуры": [{"LineNumber": 1, "Штрихкод": test_barcode}]},
-            {"Штрихкоды": [{"LineNumber": 1, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}]},
+        # ── InformationRegister POST
+        ok, resp = await self._request(
+            "POST", "odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры",
+            json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}
+        )
+        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [POST]",
+                           "ok": ok, "resp": str(resp)[:600]})
+        # ── PUT with barcode as key (barcode is likely the dimension)
+        for put_key in [
+            f"Штрихкод='{test_barcode}'",
+            f"Номенклатура_Key=guid'{onec_id}',Штрихкод='{test_barcode}'",
         ]:
-            key_name = list(bc_pl.keys())[0]
             ok, resp = await self._request(
-                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')", json=bc_pl
+                "PUT",
+                f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key})",
+                json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode,
+                     "ТипШтрихкода": bc_type}
             )
-            bc_results.append({"entity": f"PATCH Catalog_Номенклатура/{key_name}",
-                               "payload": str(list(bc_pl[key_name][0].keys())), "ok": ok, "resp": str(resp)[:600]})
+            bc_results.append({"entity": f"InformationRegister_ШтрихкодыНоменклатуры [PUT key={put_key[:30]}]",
+                               "ok": ok, "resp": str(resp)[:600]})
             if ok:
                 break
-        # ── 2. Catalog variants
-        for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
-            for owner_field in ("Владелец_Key", "Owner_Key"):
-                pl = {owner_field: onec_id, f"{owner_field[:-4]}_Type": "StandardODATA.Catalog_Номенклатура",
-                      "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}
-                ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                bc_results.append({"entity": entity, "payload": "catalog+type", "ok": ok, "resp": str(resp)[:600]})
-        # ── 3. InformationRegister POST variants
-        for entity in ("InformationRegister_ШтрихкодыНоменклатуры", "InformationRegister_Штрихкоды"):
-            for pl in [
-                {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
-                {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type},
-                {"Период": period, "Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
-            ]:
-                ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                bc_results.append({"entity": entity, "payload": str(list(pl.keys())), "ok": ok, "resp": str(resp)[:600]})
-                if ok:
-                    break
 
         price_results = []
-        period0 = "0001-01-01T00:00:00"
-        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
-            vid = price_type_key or _zero
-            for pl in [
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                 "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price, "ВидЦены_Key": vid},
-                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": test_price,
-                 "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": test_price, "ВидЦены_Key": vid},
-            ]:
-                ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
-                price_results.append({"register": register, "payload": str(list(pl.keys())),
-                                      "ok": ok, "resp": str(resp)[:600]})
-                if ok:
-                    break
-        # PATCH Catalog_Номенклатура with direct price field (may be silently ignored)
-        for price_field in ("Цена", "ЦенаРозничная", "ЦенаЗакупка"):
-            ok, resp = await self._request(
-                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
-                json={price_field: test_price}
-            )
-            price_results.append({"register": f"PATCH Catalog_Ном/{price_field}",
-                                   "payload": price_field, "ok": ok, "resp": str(resp)[:600]})
-            if ok:
-                break
-
-        # Document_УстановкаЦенНоменклатуры — the standard 1C way to set prices
-        doc_date = period
         vid = price_type_key or _zero
+        period0 = "0001-01-01T00:00:00"
+
+        # ── InformationRegister POST
+        ok, resp = await self._request(
+            "POST", "odata/standard.odata/InformationRegister_ЦеныНоменклатуры",
+            json={"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                  "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero}
+        )
+        price_results.append({"register": "InformationRegister_ЦеныНоменклатуры [POST]",
+                               "ok": ok, "resp": str(resp)[:600]})
+
+        # ── PUT with composite key in URL
+        put_url = (f"odata/standard.odata/InformationRegister_ЦеныНоменклатуры("
+                   f"Период=datetime'{period0}',"
+                   f"Номенклатура_Key=guid'{onec_id}',"
+                   f"ВидЦены_Key=guid'{vid}',"
+                   f"Характеристика_Key=guid'{_zero}',Упаковка_Key=guid'{_zero}')")
+        ok, resp = await self._request("PUT", put_url,
+                                       json={"Цена": test_price, "Номенклатура_Key": onec_id,
+                                             "ВидЦены_Key": vid, "Период": period0,
+                                             "Характеристика_Key": _zero, "Упаковка_Key": _zero})
+        price_results.append({"register": "InformationRegister_ЦеныНоменклатуры [PUT composite]",
+                               "ok": ok, "resp": str(resp)[:600]})
+
+        # ── GET existing Document to see its required fields
+        existing_doc_fields = {}
+        ok, data = await self._request(
+            "GET", "odata/standard.odata/Document_УстановкаЦенНоменклатуры?$format=json&$top=1"
+        )
+        if ok and isinstance(data, dict) and data.get("value"):
+            existing_doc_fields = {k: type(v).__name__
+                                   for k, v in data["value"][0].items()
+                                   if not k.startswith("odata")}
+
+        # ── Document POST with full fields
         row_base = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": test_price,
                     "Характеристика_Key": _zero}
         if unit_key:
             row_base["Единица_Key"] = unit_key
-        for doc_entity in ("Document_УстановкаЦенНоменклатуры", "Document_УстановкаЦен"):
-            for tab_key in ("Товары", "ТоварыУслуги", "Строки"):
-                base = {"Дата": doc_date, "ВидЦены_Key": vid, tab_key: [row_base]}
-                if org_key:
-                    base["Организация_Key"] = org_key
-                if currency_key:
-                    base["Валюта_Key"] = currency_key
-                ok, resp = await self._request("POST", f"odata/standard.odata/{doc_entity}", json=base)
-                label = f"org={'yes' if org_key else 'no'},cur={'yes' if currency_key else 'no'},unit={'yes' if unit_key else 'no'}+{tab_key}"
-                price_results.append({"register": doc_entity, "payload": label,
-                                      "ok": ok, "resp": str(resp)[:600]})
-                if ok:
-                    break
-            else:
-                continue
-            break
+        doc_base = {"Дата": period, "ВидЦены_Key": vid, "Товары": [row_base]}
+        if org_key:
+            doc_base["Организация_Key"] = org_key
+        if currency_key:
+            doc_base["Валюта_Key"] = currency_key
+        # Add any scalar fields found in existing docs
+        for f, t in existing_doc_fields.items():
+            if f not in doc_base and f not in ("Товары", "Ref_Key", "Дата") and not f.endswith("_Key"):
+                if t in ("str", "int", "float", "bool"):
+                    doc_base[f] = None
+        ok, resp = await self._request("POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc_base)
+        price_results.append({"register": "Document_УстановкаЦенНоменклатуры [POST+existing_fields]",
+                               "ok": ok, "resp": str(resp)[:600]})
 
         return {
             "onec_id": onec_id,
             "org_key": org_key,
+            "published_bc_price_entities": published_entities,
             "price_types_found": [t.get("Description") for t in price_types],
             "price_type_key": price_type_key,
             "nom_price_barcode_fields": nom_fields,
             "existing_barcode_fields": existing_bc,
             "existing_price_fields": existing_price,
             "existing_bc_for_product": existing_bc_for_product,
+            "existing_doc_fields": existing_doc_fields,
             "barcode_attempts": bc_results,
             "price_attempts": price_results,
         }
