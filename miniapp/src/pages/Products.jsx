@@ -35,7 +35,14 @@ export default function Products() {
     }
   }, [currentStore, search, page])
 
-  useEffect(() => { load(true) }, [currentStore, search])
+  useEffect(() => {
+    load(true)
+    // Silent refresh after 4s to pick up products synced from 1C in background
+    if (!search) {
+      const t = setTimeout(() => load(true), 4000)
+      return () => clearTimeout(t)
+    }
+  }, [currentStore, search])
 
   const handleSearch = (val) => { setSearch(val); setPage(1) }
 
