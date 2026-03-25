@@ -202,7 +202,7 @@ class OneCClient:
         org_key = await self._get_org_key()
         row = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": price,
                "Характеристика_Key": _zero}
-        doc = {"Date": period, "ВидЦены_Key": vid_key,
+        doc = {"Date": period, "Posted": True, "ВидЦены_Key": vid_key,
                 "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
                 "Запасы": [row]}
         if org_key:
@@ -491,18 +491,24 @@ class OneCClient:
             return True
         logger.warning(f"1C barcode PATCH Catalog/Штрихкод failed: {resp}")
 
-        # ── 2. PUT InformationRegister with correct 3-part key ─────────────────────
-        # Key: Номенклатура_Key + Штрихкод + Характеристика_Key (discovered via PUT error messages)
+        # ── 2. PUT InformationRegister with full key (discover unit from product)
+        unit_key = _zero
+        ok_u, prod = await self._request(
+            "GET", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')?$format=json"
+        )
+        if ok_u and isinstance(prod, dict):
+            unit_key = str(prod.get("ЕдиницаХранения_Key") or _zero).strip("{}")
         put_key = (f"Номенклатура_Key=guid'{onec_id}',"
                    f"Штрихкод='{barcode}',"
                    f"Характеристика_Key=guid'{_zero}',"
-                   f"Партия_Key=guid'{_zero}'")
+                   f"Партия_Key=guid'{_zero}',"
+                   f"ЕдиницаИзмерения_Key=guid'{unit_key}'")
         ok, resp = await self._request(
             "PUT",
             f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key})",
             json={"Номенклатура_Key": onec_id, "Штрихкод": barcode,
                  "ТипШтрихкода": bc_type, "Характеристика_Key": _zero,
-                 "Партия_Key": _zero}
+                 "Партия_Key": _zero, "ЕдиницаИзмерения_Key": unit_key}
         )
         if ok:
             logger.info(f"1C barcode set (PUT InformationRegister): {barcode} → {onec_id}")
@@ -588,18 +594,21 @@ class OneCClient:
         bc_results.append({"entity": "PATCH Catalog_Ном/Штрихкод (real field)",
                            "ok": ok, "resp": str(resp)[:600]})
         # ── PUT InformationRegister with full 3-part key (Ном+Штрихкод+Характеристика_Key)
+        # unit_key already fetched in nom_fields GET above
+        probe_unit = unit_key or _zero
         put_key3 = (f"Номенклатура_Key=guid'{onec_id}',"
                     f"Штрихкод='{test_barcode}',"
                     f"Характеристика_Key=guid'{_zero}',"
-                    f"Партия_Key=guid'{_zero}'")
+                    f"Партия_Key=guid'{_zero}',"
+                    f"ЕдиницаИзмерения_Key=guid'{probe_unit}'")
         ok, resp = await self._request(
             "PUT",
             f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key3})",
             json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode,
                  "ТипШтрихкода": bc_type, "Характеристика_Key": _zero,
-                 "Партия_Key": _zero}
+                 "Партия_Key": _zero, "ЕдиницаИзмерения_Key": probe_unit}
         )
-        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [PUT Ном+Штрихкод+Характеристика+Партия]",
+        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [PUT full 5-key]",
                            "ok": ok, "resp": str(resp)[:600]})
 
         price_results = []
@@ -643,7 +652,7 @@ class OneCClient:
                     "Характеристика_Key": _zero}
         if unit_key:
             row_base["Единица_Key"] = unit_key
-        doc_base = {"Date": period, "ВидЦены_Key": vid,
+        doc_base = {"Date": period, "Posted": True, "ВидЦены_Key": vid,
                     "Запасы": [row_base],
                     "ЗаписыватьНовыеЦеныПоверхУстановленных": True}
         if org_key:
