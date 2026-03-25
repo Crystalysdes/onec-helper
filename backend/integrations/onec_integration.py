@@ -202,7 +202,7 @@ class OneCClient:
         org_key = await self._get_org_key()
         row = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": price,
                "Характеристика_Key": _zero}
-        doc = {"Date": period, "Posted": True, "ВидЦены_Key": vid_key,
+        doc = {"Date": period, "ВидЦены_Key": vid_key,
                 "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
                 "Запасы": [row]}
         if org_key:
@@ -210,9 +210,27 @@ class OneCClient:
         ok, resp = await self._request(
             "POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc
         )
-        if ok:
-            logger.info(f"1C price set via Document_УстановкаЦен/Запасы: {onec_id} → {price}")
-            return True
+        if ok and isinstance(resp, dict):
+            ref_key = str(resp.get("Ref_Key", "")).strip("{}")
+            if ref_key:
+                # Conduct/post the document via _Post action
+                ok2, _ = await self._request(
+                    "POST",
+                    f"odata/standard.odata/Document_УстановкаЦенНоменклатуры_Post",
+                    params={"Ref_Key": f"guid'{ref_key}'"}
+                )
+                if ok2:
+                    logger.info(f"1C price Document posted: {onec_id} → {price}")
+                    return True
+                # Fallback: try URL-key Post
+                ok3, _ = await self._request(
+                    "POST",
+                    f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{ref_key}')/Post"
+                )
+                if ok3:
+                    logger.info(f"1C price Document posted (URL): {onec_id} → {price}")
+                    return True
+                logger.warning(f"1C price Document created but Post failed for {ref_key}")
         logger.warning(f"1C price Document_УстановкаЦен/Запасы failed: {resp}")
 
         # ── 2. InformationRegister fallback
@@ -659,7 +677,20 @@ class OneCClient:
             doc_base["Организация_Key"] = org_key
         ok, resp = await self._request("POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc_base)
         price_results.append({"register": "Document_УстановкаЦенНоменклатуры [Запасы+org]",
-                               "ok": ok, "resp": str(resp)[:600]})
+                               "ok": ok, "resp": str(resp)[:400]})
+        # ── Conduct/Post the document (two-step: create then post)
+        if ok and isinstance(resp, dict):
+            ref_key = str(resp.get("Ref_Key", "")).strip("{}")
+            if ref_key:
+                for post_url in [
+                    f"odata/standard.odata/Document_УстановкаЦенНоменклатуры_Post?Ref_Key=guid'{ref_key}'",
+                    f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{ref_key}')/Post",
+                ]:
+                    ok_p, resp_p = await self._request("POST", post_url)
+                    price_results.append({"register": f"Document Post [{post_url[-40:]}]",
+                                          "ok": ok_p, "resp": str(resp_p)[:400]})
+                    if ok_p:
+                        break
 
         return {
             "onec_id": onec_id,
