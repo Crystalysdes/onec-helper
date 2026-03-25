@@ -183,18 +183,20 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
             else:
                 success, data = await client.create_product(product)
                 if success and data and data.get("Ref_Key"):
-                    product.onec_id = data["Ref_Key"]
-                    # Create barcode in 1C if product has one
-                    if product.barcode and product.barcode.strip():
-                        await client.create_barcode(product.onec_id, product.barcode.strip())
+                    # Strip curly braces that some 1C versions include in GUIDs
+                    product.onec_id = str(data["Ref_Key"]).strip("{}")
 
             if success and product.onec_id:
+                clean_id = product.onec_id.strip("{}")
+                # Push barcode on BOTH create and update
+                if product.barcode and product.barcode.strip():
+                    await client.create_barcode(clean_id, product.barcode.strip())
                 # Push prices to 1C
                 if product.price is not None and product.price > 0:
-                    await client.set_price(product.onec_id, float(product.price))
+                    await client.set_price(clean_id, float(product.price))
                 product.synced_at = datetime.now(timezone.utc)
                 await db.commit()
-                logger.info(f"Product '{product.name}' synced to 1C (onec_id={product.onec_id})")
+                logger.info(f"Product '{product.name}' synced to 1C (onec_id={clean_id})")
             elif not success:
                 logger.warning(f"1C push failed for '{product.name}': {data}")
         except Exception as e:

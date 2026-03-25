@@ -190,6 +190,7 @@ class OneCClient:
           3. If none found → POST a new record.
           4. Fallback: repeat for alternate register names.
         """
+        onec_id = str(onec_id).strip("{}")  # normalize GUID format
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -451,6 +452,7 @@ class OneCClient:
         1. Catalog_ШтрихкодыНоменклатуры  — uses Владелец_Key + Владелец_Type
         2. InformationRegister_ШтрихкодыНоменклатуры — uses Номенклатура_Key (dimension key)
         """
+        onec_id = str(onec_id).strip("{}")  # normalize GUID format
         bc_type = self._detect_barcode_type(barcode)
         _zero = "00000000-0000-0000-0000-000000000000"
         owner_type = "StandardODATA.Catalog_Номенклатура"
