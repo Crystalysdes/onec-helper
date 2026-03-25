@@ -515,6 +515,20 @@ export default function AddProduct() {
       }
 
       if (r?.name) {
+        // Search global catalog by AI-recognized name
+        try {
+          const globalRes = await productsAPI.searchGlobal(r.name)
+          const matches = Array.isArray(globalRes.data) ? globalRes.data : []
+          if (matches.length > 0) {
+            // Merge catalog data with AI data (catalog has better structured fields)
+            const best = matches[0]
+            setAiPreview({ ...r, ...best, name: best.name || r.name })
+            setPhotoState(null)
+            setPhotoProduct(null)
+            return
+          }
+        } catch { /* no match — fall through to barcode scan */ }
+
         setPhotoProduct(r)
         setPhotoState('scan')
       } else {
