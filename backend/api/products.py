@@ -322,13 +322,13 @@ async def search_global_catalog(
 @router.get("/{store_id}")
 async def list_products(
     store_id: UUID,
+    background_tasks: BackgroundTasks,
     search: Optional[str] = None,
     category: Optional[str] = None,
     page: int = 1,
     limit: int = 50,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    background_tasks: BackgroundTasks,
 ):
     await _check_store_access(store_id, current_user, db)
 
