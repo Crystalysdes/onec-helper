@@ -196,73 +196,7 @@ class OneCClient:
 
         price_type_key = await self._get_or_fetch_price_type_key()
 
-        registers = (
-            "InformationRegister_ЦеныНоменклатуры",
-            "InformationRegister_Цены",
-        )
-        for register in registers:
-            # 1. Check if a record already exists for this product + price type
-            filter_parts = [f"Номенклатура_Key eq guid'{onec_id}'"]
-            if price_type_key:
-                filter_parts.append(f"ВидЦены_Key eq guid'{price_type_key}'")
-            path = (
-                f"odata/standard.odata/{register}"
-                f"?$format=json&$filter={' and '.join(filter_parts)}&$top=1"
-            )
-            success, data = await self._request("GET", path)
-            if not success:
-                continue  # register not published, try next
-
-            items = data.get("value", []) if isinstance(data, dict) else []
-            if items:
-                # PATCH existing record
-                item = items[0]
-                pt_key = item.get("ВидЦены_Key") or price_type_key
-                old_period = item.get("Период", period)
-                key_parts = [f"Период=datetime'{old_period}'",
-                             f"Номенклатура_Key=guid'{onec_id}'"]
-                if pt_key:
-                    key_parts.append(f"ВидЦены_Key=guid'{pt_key}'")
-                key = ",".join(key_parts)
-                patch_payload: dict = {"Цена": price, "Период": period}
-                if item.get("Валюта_Key"):
-                    patch_payload["Валюта_Key"] = item["Валюта_Key"]
-                ok, _ = await self._request(
-                    "PATCH",
-                    f"odata/standard.odata/{register}({key})",
-                    json=patch_payload,
-                )
-                if ok:
-                    logger.info(f"1C price updated ({register}): {onec_id} → {price}")
-                    return True
-
-            # POST new record — include zero-GUID optional dimensions required
-            # by 1C Retail (Розница) and some УНФ configurations
-            _zero = "00000000-0000-0000-0000-000000000000"
-            vid_key = price_type_key or _zero
-            period0 = "0001-01-01T00:00:00"
-            for post_payload in [
-                # current period + all dims
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
-                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                # current period, minimal
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
-                 "ВидЦены_Key": vid_key},
-                # epoch period (0001-01-01) + all dims
-                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
-                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                # epoch period, minimal
-                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
-                 "ВидЦены_Key": vid_key},
-            ]:
-                ok, resp = await self._request(
-                    "POST", f"odata/standard.odata/{register}", json=post_payload
-                )
-                if ok:
-                    logger.info(f"1C price created ({register}): {onec_id} → {price}")
-                    return True
-                logger.warning(f"1C price POST attempt ({register}, keys={list(post_payload)}): {resp}")
-        # ── Fallback: PATCH Catalog_Номенклатура with Цена field directly
+        # ── 1. PATCH Catalog_Номенклатура directly (confirmed working in 1C Fresh)
         for price_field in ("Цена", "ЦенаРозничная", "ЦенаЗакупка"):
             ok, resp = await self._request(
                 "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
@@ -272,6 +206,58 @@ class OneCClient:
                 logger.info(f"1C price set via PATCH Catalog_Ном/{price_field}: {onec_id} → {price}")
                 return True
             logger.warning(f"1C price PATCH Catalog_Ном/{price_field}: {resp}")
+
+        # ── 2. InformationRegister fallback
+        _zero = "00000000-0000-0000-0000-000000000000"
+        vid_key = price_type_key or _zero
+        period0 = "0001-01-01T00:00:00"
+        registers = ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены")
+        for register in registers:
+            filter_parts = [f"Номенклатура_Key eq guid'{onec_id}'"]
+            if price_type_key:
+                filter_parts.append(f"ВидЦены_Key eq guid'{price_type_key}'")
+            path = (
+                f"odata/standard.odata/{register}"
+                f"?$format=json&$filter={' and '.join(filter_parts)}&$top=1"
+            )
+            success, data = await self._request("GET", path)
+            if success:
+                items = data.get("value", []) if isinstance(data, dict) else []
+                if items:
+                    item = items[0]
+                    pt_key = item.get("ВидЦены_Key") or price_type_key
+                    old_period = item.get("Период", period)
+                    key_parts = [f"Период=datetime'{old_period}'",
+                                 f"Номенклатура_Key=guid'{onec_id}'"]
+                    if pt_key:
+                        key_parts.append(f"ВидЦены_Key=guid'{pt_key}'")
+                    patch_payload: dict = {"Цена": price, "Период": period}
+                    if item.get("Валюта_Key"):
+                        patch_payload["Валюта_Key"] = item["Валюта_Key"]
+                    ok, _ = await self._request(
+                        "PATCH",
+                        f"odata/standard.odata/{register}({','.join(key_parts)})",
+                        json=patch_payload,
+                    )
+                    if ok:
+                        logger.info(f"1C price updated ({register}): {onec_id} → {price}")
+                        return True
+
+            for post_payload in [
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price, "ВидЦены_Key": vid_key},
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price, "ВидЦены_Key": vid_key},
+            ]:
+                ok, resp = await self._request(
+                    "POST", f"odata/standard.odata/{register}", json=post_payload
+                )
+                if ok:
+                    logger.info(f"1C price created ({register}): {onec_id} → {price}")
+                    return True
+                logger.warning(f"1C price POST ({register}, keys={list(post_payload)}): {resp}")
 
         logger.warning(f"1C price set failed for onec_id={onec_id}, price={price}")
         return False
