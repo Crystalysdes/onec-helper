@@ -263,8 +263,9 @@ async def test_integration(
 
 
 async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
-    """Pull all products from 1C into products_cache. Runs in background."""
+    """Pull all products + stock balances from 1C into products_cache. Runs in background."""
     from backend.integrations.onec_integration import OneCClient
+    from backend.api.products import _upsert_global_product
     from loguru import logger
 
     async with AsyncSessionLocal() as db:
@@ -282,10 +283,12 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                 password=decrypt_password(integration.onec_password_encrypted),
             )
 
+            # ── Step 1: sync products (name, article, onec_id) ──
             offset = 0
             batch = 200
             total_added = 0
             total_updated = 0
+            onec_id_to_product: dict[str, ProductCache] = {}
 
             while True:
                 success, products_1c = await client.get_products(limit=batch, offset=offset)
@@ -295,7 +298,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                 for p1c in products_1c:
                     onec_id = p1c.get("onec_id")
                     name = p1c.get("name", "").strip()
-                    if not name:
+                    if not name or not onec_id:
                         continue
 
                     existing = await db.execute(
@@ -322,10 +325,30 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         db.add(product)
                         total_added += 1
 
+                    onec_id_to_product[str(onec_id)] = product
+
                 await db.flush()
                 if len(products_1c) < batch:
                     break
                 offset += batch
+
+            # ── Step 2: sync stock balances (quantities) ──
+            qty_success, balances = await client.get_stock_balances()
+            if qty_success and balances:
+                for bal in balances:
+                    oid = str(bal.get("onec_id", ""))
+                    qty = float(bal.get("quantity", 0) or 0)
+                    prod = onec_id_to_product.get(oid)
+                    if prod:
+                        prod.quantity = qty
+                logger.info(f"1C sync: updated quantities for {len(balances)} items")
+
+            await db.flush()
+
+            # ── Step 3: push products to global catalog ──
+            for product in onec_id_to_product.values():
+                if product.barcode:
+                    await _upsert_global_product(db, product)
 
             integration.last_sync_at = datetime.now(timezone.utc)
             integration.status = IntegrationStatus.active

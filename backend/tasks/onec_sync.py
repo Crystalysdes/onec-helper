@@ -1,8 +1,10 @@
 """
-Periodic task: check 1C stock levels and send Telegram bot alerts for low-stock items.
-Runs every STOCK_CHECK_INTERVAL_HOURS hours.
+Periodic tasks:
+  1. auto_sync_loop  — every 30 min: pull new products + stock balances from 1C into bot
+  2. stock_alert_loop — every 6 h: notify users about low-stock items via Telegram
 """
 import asyncio
+from uuid import UUID
 
 import httpx
 from loguru import logger
@@ -10,9 +12,10 @@ from sqlalchemy import select
 
 from backend.config import settings
 from backend.database.connection import AsyncSessionLocal
-from backend.database.models import Integration, IntegrationStatus, Store, User
+from backend.database.models import Integration, IntegrationStatus, ProductCache, Store, User
 from backend.core.security import decrypt_password
 
+SYNC_INTERVAL_MINUTES = 30
 STOCK_CHECK_INTERVAL_HOURS = 6
 LOW_STOCK_THRESHOLD = 5.0
 _TG_API = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
@@ -26,10 +29,28 @@ async def _tg_send(chat_id: int, text: str):
         logger.warning(f"Telegram send failed: {e}")
 
 
+async def _auto_sync_all():
+    """Pull products + stock from all active 1C integrations into the bot."""
+    from backend.api.stores import _run_sync_in_background
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Integration).where(Integration.status == IntegrationStatus.active)
+        )
+        integrations = result.scalars().all()
+
+    for integration in integrations:
+        try:
+            await _run_sync_in_background(
+                store_id=integration.store_id,
+                integration_id=integration.id,
+            )
+        except Exception as e:
+            logger.error(f"auto_sync error for integration {integration.id}: {e}")
+
+
 async def _check_and_notify():
     """Check all active integrations for low stock, notify owners via Telegram."""
-    from backend.integrations.onec_integration import OneCClient
-
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(Integration).where(Integration.status == IntegrationStatus.active)
@@ -52,35 +73,48 @@ async def _check_and_notify():
                 if not user:
                     continue
 
-                client = OneCClient(
-                    url=integration.onec_url,
-                    username=integration.onec_username,
-                    password=decrypt_password(integration.onec_password_encrypted),
-                )
-                success, balances = await client.get_stock_balances()
-                if not success:
-                    logger.warning(f"Stock check failed for integration {integration.id}")
-                    continue
+                # Fetch low-stock items using products_cache (has names + quantities)
+                low_rows = (await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.store_id == integration.store_id,
+                        ProductCache.quantity <= LOW_STOCK_THRESHOLD,
+                        ProductCache.quantity != None,
+                        ProductCache.is_active == True,
+                    )
+                )).scalars().all()
 
-                low = [b for b in balances if b.get("quantity", 0) <= LOW_STOCK_THRESHOLD]
-                if not low:
+                if not low_rows:
                     continue
 
                 lines = "\n".join(
-                    f"• {b.get('onec_id', '—')}: {b.get('quantity', 0)} шт."
-                    for b in low[:20]
+                    f"• <b>{p.name}</b>: {p.quantity or 0} {p.unit or 'шт'}"
+                    for p in low_rows[:20]
                 )
                 text = (
-                    f"⚠️ <b>Низкий остаток товаров в 1С</b>\n"
+                    f"⚠️ <b>Заканчиваются товары</b>\n"
                     f"Магазин: <b>{store.name}</b>\n\n"
                     f"{lines}\n\n"
                     f"Откройте приложение для подробностей."
                 )
                 await _tg_send(user.telegram_id, text)
-                logger.info(f"Low-stock alert sent to user {user.telegram_id}: {len(low)} items")
+                logger.info(f"Low-stock alert → user {user.telegram_id}: {len(low_rows)} items")
 
             except Exception as e:
-                logger.error(f"onec_sync error for integration {integration.id}: {e}")
+                logger.error(f"onec_sync notify error for integration {integration.id}: {e}")
+
+
+async def auto_sync_loop():
+    """Background loop — sync products+stock from 1C every SYNC_INTERVAL_MINUTES."""
+    logger.info(f"Auto-sync loop started (interval={SYNC_INTERVAL_MINUTES} min)")
+    # First run after 1 min to let server fully start
+    await asyncio.sleep(60)
+    while True:
+        logger.info("Running auto 1C sync...")
+        try:
+            await _auto_sync_all()
+        except Exception as e:
+            logger.error(f"auto_sync_loop error: {e}")
+        await asyncio.sleep(SYNC_INTERVAL_MINUTES * 60)
 
 
 async def stock_alert_loop():
