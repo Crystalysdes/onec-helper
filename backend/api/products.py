@@ -63,56 +63,55 @@ def _compress_image(image_bytes: bytes, max_px: int = 800) -> bytes:
         return image_bytes  # fallback: return original if PIL not available
 
 
-async def _upsert_global_product(db: AsyncSession, p: ProductCache):
+async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache):
     """Insert or update the shared GlobalProduct catalog entry for this barcode.
-    Applies the same quality filters as catalog import.
-    Uses a savepoint so any failure never corrupts the outer transaction."""
+
+    Uses its OWN isolated DB session so that any failure never affects the
+    caller's transaction (avoids the 'aborted transaction' / savepoint bug).
+    Uses INSERT … ON CONFLICT DO UPDATE — no savepoints needed.
+    """
     if not p.barcode or not p.barcode.strip():
         return
     from backend.services.catalog_cleaner import (
         normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
     )
     bc = p.barcode.strip()
-    # Validate standard barcode format
     if not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
         return
-    # Normalize name — reject garbage
     clean_name = normalize_name(p.name or "")
     if not clean_name:
         return
     clean_cat = translate_category(p.category) if p.category else None
     clean_unit = p.unit or detect_unit(clean_name) or "шт"
-    try:
-        from sqlalchemy import text as _text
-        import uuid as _uuid
-        async with db.begin_nested():  # savepoint — rolls back only this block on error
-            row = (await db.execute(
-                _text("SELECT id FROM global_products WHERE barcode = :bc LIMIT 1"), {"bc": bc}
-            )).fetchone()
-            if row:
-                await db.execute(_text(
-                    "UPDATE global_products SET "
-                    "name=:name, price=COALESCE(:price, price), "
-                    "purchase_price=COALESCE(:pp, purchase_price), "
-                    "article=COALESCE(:article, article), "
-                    "category=COALESCE(:category, category), "
-                    "unit=COALESCE(:unit, unit) "
-                    "WHERE barcode=:bc"
-                ), {"name": clean_name, "price": p.price, "pp": p.purchase_price,
-                    "article": p.article, "category": clean_cat,
-                    "unit": clean_unit, "bc": bc})
-            else:
-                await db.execute(_text(
-                    "INSERT INTO global_products "
-                    "(id, barcode, name, price, purchase_price, article, category, unit, description) "
-                    "VALUES (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)"
-                ), {"id": _uuid.uuid4(), "bc": bc, "name": clean_name,
-                    "price": p.price, "pp": p.purchase_price,
-                    "article": p.article, "category": clean_cat,
-                    "unit": clean_unit, "desc": p.description})
-    except Exception as exc:
-        from loguru import logger
-        logger.warning(f"_upsert_global_product failed for barcode={bc}: {exc}")
+
+    from backend.database.connection import AsyncSessionLocal
+    from sqlalchemy import text as _text
+    import uuid as _uuid
+    from loguru import logger
+
+    async with AsyncSessionLocal() as sess:
+        try:
+            await sess.execute(_text("""
+                INSERT INTO global_products
+                    (id, barcode, name, price, purchase_price, article, category, unit, description)
+                VALUES
+                    (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)
+                ON CONFLICT (barcode) DO UPDATE SET
+                    name             = EXCLUDED.name,
+                    price            = COALESCE(EXCLUDED.price,          global_products.price),
+                    purchase_price   = COALESCE(EXCLUDED.purchase_price, global_products.purchase_price),
+                    article          = COALESCE(EXCLUDED.article,        global_products.article),
+                    category         = COALESCE(EXCLUDED.category,       global_products.category),
+                    unit             = COALESCE(EXCLUDED.unit,           global_products.unit)
+            """), {
+                "id": _uuid.uuid4(), "bc": bc, "name": clean_name,
+                "price": p.price, "pp": p.purchase_price,
+                "article": p.article, "category": clean_cat,
+                "unit": clean_unit, "desc": p.description,
+            })
+            await sess.commit()
+        except Exception as exc:
+            logger.warning(f"_upsert_global_product failed for barcode={bc}: {exc}")
 
 
 def _serialize_product(p: ProductCache) -> dict:
@@ -419,11 +418,7 @@ async def create_product(
     db.add(product)
     await db.flush()
 
-    try:
-        await _upsert_global_product(db, product)
-    except Exception as _ug_err:
-        from loguru import logger as _log
-        _log.warning(f"_upsert_global_product failed (non-fatal): {_ug_err}")
+    await _upsert_global_product(db, product)
 
     log = Log(
         user_id=current_user.id,
@@ -626,9 +621,9 @@ async def quick_add_product(
     )
     db.add(product)
     await db.flush()
-    await _upsert_global_product(db, product)
     result = _serialize_product(product)
     await db.commit()
+    await _upsert_global_product(db, product)
     # 1C push runs in background — does not block response
     import asyncio
     asyncio.ensure_future(_push_to_onec_bg(UUID(store_id), product.id, product.name, product.onec_id, product.article))
