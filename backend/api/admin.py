@@ -440,89 +440,92 @@ CATALOG_DIR = "/app/catalog"
 
 async def _run_catalog_import(limit: int):
     import csv
-    import io
     import os
+    import asyncio
     import zipfile
+    import tempfile
     import uuid as _uuid
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from backend.database.connection import AsyncSessionLocal as async_session_maker
     from backend.services.catalog_cleaner import clean_record
 
-    _catalog_import_status["running"] = True
-    _catalog_import_status["stage"] = "reading"
+    _catalog_import_status.update({"running": True, "stage": "reading", "imported": 0, "skipped": 0, "done": False, "error": None})
 
+    def _detect_encoding(path):
+        with open(path, "rb") as f:
+            sample = f.read(8192)
+        try:
+            sample.decode("utf-8")
+            return "utf-8"
+        except UnicodeDecodeError:
+            return "cp1251"
+
+    def _extract_zip_to_tmp(zip_path):
+        """Extract first CSV from ZIP to a temp file, return its path."""
+        with zipfile.ZipFile(zip_path) as zf:
+            csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
+            if not csv_name:
+                raise ValueError("CSV не найден в архиве")
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
+            with zf.open(csv_name) as src:
+                while True:
+                    chunk = src.read(1024 * 1024)  # 1MB chunks
+                    if not chunk:
+                        break
+                    tmp.write(chunk)
+            tmp.close()
+            return tmp.name
+
+    tmp_file = None
     try:
-        # Look for CSV or ZIP in /app/catalog/
         catalog_dir = CATALOG_DIR
-        # Find any CSV in catalog dir (priority: known names, then any *.csv)
+        if not os.path.exists(catalog_dir):
+            raise FileNotFoundError(f"Папка {catalog_dir} не существует")
+
+        # Find CSV (priority: known names, then any .csv, then extract from .zip)
         known = ("products.csv", "barcodes.csv")
         csv_path = next(
-            (os.path.join(catalog_dir, f) for f in known
-             if os.path.exists(os.path.join(catalog_dir, f))),
+            (os.path.join(catalog_dir, f) for f in known if os.path.exists(os.path.join(catalog_dir, f))),
             None
         )
         if not csv_path:
-            # pick first *.csv found
             csv_files = [f for f in os.listdir(catalog_dir) if f.endswith(".csv")]
             csv_path = os.path.join(catalog_dir, csv_files[0]) if csv_files else None
-        zip_path = next(
-            (os.path.join(catalog_dir, f) for f in os.listdir(catalog_dir) if f.endswith(".zip")),
-            None
-        ) if os.path.exists(catalog_dir) else None
 
-        text = None
-
-        if csv_path and os.path.exists(csv_path):
-            logger.info(f"Reading CSV from {csv_path}")
-            with open(csv_path, "rb") as f:
-                raw = f.read()
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                text = raw.decode("cp1251", errors="replace")
-
-        elif zip_path and os.path.exists(zip_path):
-            logger.info(f"Reading ZIP from {zip_path}")
+        if not csv_path:
+            zip_files = [f for f in os.listdir(catalog_dir) if f.endswith(".zip")]
+            if not zip_files:
+                raise FileNotFoundError(f"CSV/ZIP файл не найден в {catalog_dir}")
+            zip_path = os.path.join(catalog_dir, zip_files[0])
+            logger.info(f"Extracting ZIP {zip_path} to temp file...")
             _catalog_import_status["stage"] = "parsing"
+            loop = asyncio.get_running_loop()
+            tmp_file = await loop.run_in_executor(None, _extract_zip_to_tmp, zip_path)
+            csv_path = tmp_file
+            logger.info(f"Extracted to {csv_path}")
 
-            def _read_zip():
-                with zipfile.ZipFile(zip_path) as zf:
-                    csv_name = next((n for n in zf.namelist() if n.endswith(".csv")), None)
-                    if not csv_name:
-                        raise ValueError("CSV не найден в архиве")
-                    raw = zf.read(csv_name)
-                try:
-                    return raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    return raw.decode("cp1251", errors="replace")
-
-            import asyncio as _asyncio
-            loop = _asyncio.get_event_loop()
-            text = await loop.run_in_executor(None, _read_zip)
-
-        else:
-            raise FileNotFoundError(
-                f"Файл не найден. Положите barcodes.csv или barcodes_csv.zip в папку {catalog_dir} на сервере"
-            )
+        # Detect encoding without loading the whole file
+        loop = asyncio.get_running_loop()
+        encoding = await loop.run_in_executor(None, _detect_encoding, csv_path)
+        logger.info(f"Streaming {csv_path} with encoding={encoding}, limit={limit}")
 
         _catalog_import_status["stage"] = "importing"
-        reader = csv.DictReader(io.StringIO(text))
         imported = 0
         skipped = 0
         batch = []
         BATCH_SIZE = 500
         row_count = 0
 
-        async with async_session_maker() as db:
+        # Stream CSV line by line — no full-file RAM load
+        with open(csv_path, "r", encoding=encoding, errors="replace", newline="") as fh:
+            reader = csv.DictReader(fh)
             for row in reader:
-                if imported + skipped >= limit:
+                if (imported + skipped) >= limit:
                     break
 
                 row_count += 1
-                # yield to event loop every 200 rows so HTTP polling works
-                if row_count % 200 == 0:
-                    import asyncio as _aio
-                    await _aio.sleep(0)
+                if row_count % 500 == 0:
+                    await asyncio.sleep(0)  # yield to event loop
 
                 cleaned = clean_record(row)
                 if not cleaned:
@@ -532,45 +535,51 @@ async def _run_catalog_import(limit: int):
                 batch.append({"id": _uuid.uuid4(), **cleaned})
 
                 if len(batch) >= BATCH_SIZE:
-                    stmt = pg_insert(GlobalProduct).values(batch)
-                    stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
-                    await db.execute(stmt)
-                    await db.commit()
+                    async with async_session_maker() as db:
+                        stmt = pg_insert(GlobalProduct).values(batch)
+                        stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
+                        await db.execute(stmt)
+                        await db.commit()
                     imported += len(batch)
                     batch = []
                     _catalog_import_status["imported"] = imported
                     _catalog_import_status["skipped"] = skipped
+                    logger.info(f"Catalog import progress: {imported} imported, {skipped} skipped")
 
-            if batch:
+        if batch:
+            async with async_session_maker() as db:
                 stmt = pg_insert(GlobalProduct).values(batch)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["barcode"])
                 await db.execute(stmt)
                 await db.commit()
-                imported += len(batch)
+            imported += len(batch)
 
         _catalog_import_status.update({"running": False, "imported": imported, "skipped": skipped, "done": True, "error": None, "stage": "done"})
         logger.info(f"Catalog import done: {imported} imported, {skipped} skipped")
-
-        # Auto-create trigram index for fast name search
         await _ensure_trgm_index()
 
     except Exception as e:
-        logger.error(f"Catalog import error: {e}")
+        logger.error(f"Catalog import error: {e}", exc_info=True)
         _catalog_import_status.update({"running": False, "done": True, "error": str(e)})
+    finally:
+        if tmp_file and os.path.exists(tmp_file):
+            os.unlink(tmp_file)
 
 
 async def _ensure_trgm_index():
     """Create pg_trgm GIN index on global_products.name for fast LIKE search."""
     from sqlalchemy import text as _text
-    from backend.database.connection import AsyncSessionLocal
+    from backend.database.connection import engine
     try:
-        async with AsyncSessionLocal() as db:
-            await db.execute(_text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-            await db.execute(_text(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_global_products_name_trgm "
+        # AUTOCOMMIT needed: CREATE INDEX CONCURRENTLY cannot run inside a transaction
+        async with engine.connect() as conn:
+            await conn.execute(_text("COMMIT"))  # end any implicit transaction
+            await conn.execute(_text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+            await conn.execute(_text(
+                "CREATE INDEX IF NOT EXISTS idx_global_products_name_trgm "
                 "ON global_products USING GIN (name gin_trgm_ops)"
             ))
-            await db.commit()
+            await conn.commit()
         logger.info("pg_trgm index on global_products.name ensured")
     except Exception as e:
         logger.warning(f"Could not create trgm index (non-fatal): {e}")
