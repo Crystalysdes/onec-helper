@@ -503,13 +503,40 @@ export default function AddProduct() {
     if (!aiPreview || !currentStore) return
     setLoading(true)
     try {
-      // Use already-enriched aiPreview data directly — no need to re-call AI
-      await productsAPI.create({ ...aiPreview, store_id: currentStore.id, id: undefined })
-      toast.success(`"${aiPreview.name}" добавлен!`)
+      // Strip internal UI fields before sending to API
+      const { _source, _notInCatalog, _score, ...clean } = aiPreview
+      const payload = { ...clean, store_id: currentStore.id, id: undefined }
+
+      // Dedup: if barcode matches own store product, update it instead
+      let existingId = null
+      if (payload.barcode?.trim()) {
+        try {
+          const bc = await productsAPI.checkBarcode(payload.barcode.trim())
+          if (bc.data.found && bc.data.source === 'own' && bc.data.product?.id)
+            existingId = bc.data.product.id
+        } catch { /* ignore */ }
+      }
+      // Dedup by name in own store if no barcode match
+      if (!existingId && payload.name) {
+        try {
+          const list = await productsAPI.list(currentStore.id, { search: payload.name, limit: 1 })
+          const exact = (Array.isArray(list.data) ? list.data : list.data?.items || [])
+            .find(p => p.name?.toLowerCase() === payload.name.toLowerCase())
+          if (exact) existingId = exact.id
+        } catch { /* ignore */ }
+      }
+
+      if (existingId) {
+        await productsAPI.update(existingId, payload)
+        toast.success(`"Товар обновлён!`)
+      } else {
+        await productsAPI.create(payload)
+        toast.success(`"${aiPreview.name}" добавлен!`)
+      }
       setAiText(''); setAiScan(null); setAiPreview(null); setPhotoState(null); setPhotoProduct(null)
       navigate('/products')
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка добавления')
+      toast.error(e.response?.data?.detail || e.message || 'Ошибка добавления')
     } finally { setLoading(false) }
   }, [aiPreview, currentStore, navigate])
 
@@ -641,19 +668,26 @@ export default function AddProduct() {
         await productsAPI.update(editingProductId, data)
         toast.success('Товар обновлён!')
       } else {
-        // Check if barcode already exists in own store — update instead of creating duplicate
+        // Check if product already exists in own store (by barcode or exact name) — update instead of creating duplicate
         let targetId = null
         if (data.barcode?.trim()) {
           try {
             const res = await productsAPI.checkBarcode(data.barcode.trim())
-            if (res.data.found && res.data.source === 'own' && res.data.product?.id) {
+            if (res.data.found && res.data.source === 'own' && res.data.product?.id)
               targetId = res.data.product.id
-            }
-          } catch { /* ignore, proceed to create */ }
+          } catch { /* ignore */ }
+        }
+        if (!targetId && data.name?.trim()) {
+          try {
+            const list = await productsAPI.list(currentStore.id, { search: data.name.trim(), limit: 5 })
+            const rows = Array.isArray(list.data) ? list.data : (list.data?.items || [])
+            const exact = rows.find(p => p.name?.toLowerCase() === data.name.trim().toLowerCase())
+            if (exact) targetId = exact.id
+          } catch { /* ignore */ }
         }
         if (targetId) {
           await productsAPI.update(targetId, data)
-          toast.success('Товар обновлён (штрих-код уже был в магазине)')
+          toast.success('Товар обновлён!')
         } else {
           await productsAPI.create({ ...data, store_id: currentStore.id })
           toast.success('Товар добавлен!')
@@ -824,39 +858,24 @@ export default function AddProduct() {
           <div className="w-full max-w-sm rounded-3xl px-5 py-5 flex flex-col gap-3 overflow-y-auto"
             style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '88vh' }}
             onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
-                style={{ background: 'rgba(99,102,241,0.12)' }}>
-                <Sparkles size={18} style={{ color: 'var(--tg-theme-button-color)' }} />
-              </div>
-              <div>
-                <p className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>ИИ заполнил карточку товара</p>
-                <p className="text-base font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{aiPreview.name}</p>
-              </div>
-            </div>
-            <div className="rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-              {[
-                ['Штрих-код', aiPreview.barcode],
-                ['Цена', aiPreview.price != null ? `${aiPreview.price} ₽` : null],
-                ['Закупочная', aiPreview.purchase_price != null ? `${aiPreview.purchase_price} ₽` : null],
-                ['Категория', aiPreview.category],
-                ['Артикул', aiPreview.article],
-                ['Кол-во', aiPreview.quantity != null ? `${aiPreview.quantity} ${aiPreview.unit || 'шт'}` : null],
-              ].filter(([, v]) => v != null).map(([label, val]) => (
-                <div key={label} className="flex justify-between items-center">
-                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{label}</span>
-                  <span className="text-xs font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>{val}</span>
+
+            {/* ── Not found: scan barcode first ── */}
+            {aiPreview._notInCatalog ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'rgba(234,179,8,0.12)' }}>
+                    <ScanLine size={18} style={{ color: '#ca8a04' }} />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium" style={{ color: '#ca8a04' }}>Товар не найден в каталоге</p>
+                    <p className="text-base font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{aiPreview.name}</p>
+                  </div>
                 </div>
-              ))}
-            </div>
-            {aiPreview._notInCatalog && (
-              <div className="rounded-xl px-3 py-2.5 flex flex-col gap-2 text-xs"
-                style={{ background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.25)' }}>
-                <p className="font-semibold" style={{ color: '#ca8a04' }}>⚠️ Товар не найден в каталоге</p>
-                <p style={{ color: 'var(--tg-theme-hint-color)' }}>Отсканируйте штрихкод для точного совпадения, или перейдите к редактированию</p>
-                <button
-                  className="flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium active:opacity-70"
-                  style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                <p className="text-xs text-center" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                  Отсканируйте штрихкод — это поможет точно опознать товар и добавить его в каталог
+                </p>
+                <button className="btn-primary flex items-center justify-center gap-2"
                   onClick={() => {
                     const preview = { ...aiPreview }
                     setAiPreview(null)
@@ -864,30 +883,66 @@ export default function AddProduct() {
                       if (!code) return
                       checkBarcodeGlobal(code, (scan) => {
                         if (scan?.status === 'found' && scan?.product) {
-                          setAiPreview({ ...preview, ...scan.product, barcode: code })
+                          setAiPreview({ ...preview, ...scan.product, barcode: code, _notInCatalog: false })
                         } else {
                           setAiPreview({ ...preview, barcode: code, _notInCatalog: false })
                         }
                       })
                     })
-                  }}
-                >
-                  <ScanLine size={15} />
+                  }}>
+                  <ScanLine size={16} />
                   Сканировать штрихкод
                 </button>
-              </div>
+                <button className="btn-secondary flex items-center justify-center gap-2"
+                  onClick={() => { editAiPreview() }}>
+                  <Edit2 size={15} />
+                  Пропустить и редактировать
+                </button>
+                <button className="text-xs text-center py-1 active:opacity-60"
+                  style={{ color: 'var(--tg-theme-hint-color)' }}
+                  onClick={() => setAiPreview(null)}>Отмена</button>
+              </>
+            ) : (
+              /* ── Found / confirmed product preview ── */
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'rgba(99,102,241,0.12)' }}>
+                    <Sparkles size={18} style={{ color: 'var(--tg-theme-button-color)' }} />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>ИИ заполнил карточку товара</p>
+                    <p className="text-base font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{aiPreview.name}</p>
+                  </div>
+                </div>
+                <div className="rounded-2xl p-3 flex flex-col gap-1.5" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                  {[
+                    ['Штрих-код', aiPreview.barcode],
+                    ['Цена', aiPreview.price != null ? `${aiPreview.price} ₽` : null],
+                    ['Закупочная', aiPreview.purchase_price != null ? `${aiPreview.purchase_price} ₽` : null],
+                    ['Категория', aiPreview.category],
+                    ['Артикул', aiPreview.article],
+                    ['Кол-во', aiPreview.quantity != null ? `${aiPreview.quantity} ${aiPreview.unit || 'шт'}` : null],
+                  ].filter(([, v]) => v != null).map(([label, val]) => (
+                    <div key={label} className="flex justify-between items-center">
+                      <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{label}</span>
+                      <span className="text-xs font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>{val}</span>
+                    </div>
+                  ))}
+                </div>
+                <button className="btn-primary flex items-center justify-center gap-2"
+                  onClick={confirmAiPreview} disabled={loading}>
+                  {loading
+                    ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    : <Check size={15} />}
+                  {loading ? 'Сохраняю...' : 'Подтвердить и сохранить'}
+                </button>
+                <button className="btn-secondary flex items-center justify-center gap-2" onClick={editAiPreview}>
+                  <Edit2 size={15} />
+                  Редактировать поля
+                </button>
+              </>
             )}
-            <button className="btn-primary flex items-center justify-center gap-2"
-              onClick={confirmAiPreview} disabled={loading}>
-              {loading
-                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                : <Check size={15} />}
-              {loading ? 'Сохраняю...' : 'Подтвердить и сохранить'}
-            </button>
-            <button className="btn-secondary flex items-center justify-center gap-2" onClick={editAiPreview}>
-              <Edit2 size={15} />
-              Редактировать поля
-            </button>
           </div>
         </div>
       )}

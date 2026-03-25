@@ -267,6 +267,24 @@ class OneCClient:
         )
         return success, data
 
+    async def create_barcode(self, onec_id: str, barcode: str) -> bool:
+        """Try to create a barcode record in 1C for the given product (Ref_Key=onec_id)."""
+        entity_variants = [
+            ("Catalog_ШтрихкодыНоменклатуры", "Владелец_Key", "Штрихкод"),
+            ("Catalog_ШтрихкодыНоменклатуры", "Owner_Key", "Штрихкод"),
+            ("Catalog_НоменклатураШтрихкоды", "Владелец_Key", "Штрихкод"),
+        ]
+        for entity, owner_field, bc_field in entity_variants:
+            payload = {owner_field: onec_id, bc_field: barcode, "Description": barcode}
+            success, data = await self._request(
+                "POST", f"odata/standard.odata/{entity}", json=payload
+            )
+            if success:
+                logger.info(f"1C barcode created: {barcode} → {onec_id} via {entity}")
+                return True
+        logger.warning(f"1C barcode create failed for {barcode}: no matching entity")
+        return False
+
     async def create_receipt(
         self, products: List[dict], supplier: str = "Поставщик"
     ) -> Tuple[bool, Optional[dict]]:

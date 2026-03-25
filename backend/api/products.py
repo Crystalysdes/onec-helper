@@ -185,6 +185,9 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
                 success, data = await client.create_product(product)
                 if success and data and data.get("Ref_Key"):
                     product.onec_id = data["Ref_Key"]
+                    # Create barcode in 1C if product has one
+                    if product.barcode and product.barcode.strip():
+                        await client.create_barcode(product.onec_id, product.barcode.strip())
 
             if success:
                 product.synced_at = datetime.now(timezone.utc)
@@ -413,7 +416,11 @@ async def create_product(
     db.add(product)
     await db.flush()
 
-    await _upsert_global_product(db, product)
+    try:
+        await _upsert_global_product(db, product)
+    except Exception as _ug_err:
+        from loguru import logger as _log
+        _log.warning(f"_upsert_global_product failed (non-fatal): {_ug_err}")
 
     log = Log(
         user_id=current_user.id,
