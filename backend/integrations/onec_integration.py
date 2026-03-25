@@ -70,7 +70,7 @@ class OneCClient:
         path = (
             f"odata/standard.odata/Catalog_Номенклатура"
             f"?$format=json&$top={limit}&$skip={offset}"
-            f"&$select=Ref_Key,Code,Description,Артикул,ЕдиницаИзмерения_Key"
+            f"&$select=Ref_Key,Code,Description,Артикул,ЕдиницаИзмерения_Key,ВидНоменклатуры_Key"
         )
         success, data = await self._request("GET", path)
         if not success:
@@ -79,7 +79,7 @@ class OneCClient:
         items = data.get("value", []) if isinstance(data, dict) else []
         products = []
         for item in items:
-            if item.get("IsFolder"):
+            if item.get("IsFolder") or item.get("DeletionMark"):
                 continue
             article = item.get("Артикул", "").strip() or item.get("Code", "").strip()
             products.append({
@@ -90,6 +90,44 @@ class OneCClient:
                 "full_name": item.get("НаименованиеПолное", ""),
             })
         return True, products
+
+    async def get_barcodes(self) -> dict:
+        """Fetch all barcodes from Catalog_НоменклатураШтрихкоды.
+        Returns dict: onec_id -> barcode string."""
+        candidates = [
+            ("Catalog_НоменклатураШтрихкоды", "Owner_Key", "Штрихкод"),
+            ("Catalog_НоменклатураШтрихкоды", "Владелец_Key", "Штрихкод"),
+            ("InformationRegister_Штрихкоды", "Номенклатура_Key", "Штрихкод"),
+        ]
+        for entity, owner_field, bc_field in candidates:
+            path = (
+                f"odata/standard.odata/{entity}"
+                f"?$format=json&$top=10000"
+                f"&$select={owner_field},{bc_field}"
+            )
+            success, data = await self._request("GET", path)
+            if not success:
+                continue
+            items = data.get("value", []) if isinstance(data, dict) else []
+            if not items:
+                continue
+            result = {}
+            for item in items:
+                oid = str(item.get(owner_field, ""))
+                bc = str(item.get(bc_field, "")).strip()
+                if oid and bc and bc.isdigit() and oid not in result:
+                    result[oid] = bc
+            logger.info(f"1C barcodes loaded from {entity}: {len(result)} entries")
+            return result
+        logger.warning("1C barcodes: no barcode catalog found in OData")
+        return {}
+
+    async def get_entities(self) -> List[str]:
+        """Return list of all published OData entity names."""
+        success, data = await self._request("GET", "odata/standard.odata/?$format=json")
+        if not success or not isinstance(data, dict):
+            return []
+        return [e.get("name", "") for e in data.get("value", []) if e.get("name")]
 
     async def get_product_prices(self, product_ids: List[str]) -> dict:
         """Get current prices for products from 1C. Returns empty dict if register not published."""

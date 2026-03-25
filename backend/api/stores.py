@@ -332,7 +332,17 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                     break
                 offset += batch
 
-            # ── Step 2: sync stock balances (quantities) ──
+            # ── Step 2: fetch barcodes and attach to products ──
+            barcodes = await client.get_barcodes()
+            if barcodes:
+                for oid, bc in barcodes.items():
+                    prod = onec_id_to_product.get(str(oid))
+                    if prod and bc:
+                        prod.barcode = bc
+                await db.flush()
+                logger.info(f"1C sync: matched {sum(1 for p in onec_id_to_product.values() if p.barcode)} barcodes")
+
+            # ── Step 3: sync stock balances (quantities) ──
             qty_success, balances = await client.get_stock_balances()
             if qty_success and balances:
                 for bal in balances:
@@ -450,6 +460,58 @@ async def get_onec_stock(
         "low_stock_count": len(low_stock),
         "low_stock": low_stock,
         "all": result_items,
+    }
+
+
+@router.get("/{store_id}/integrations/{integration_id}/diagnose")
+async def diagnose_onec(
+    store_id: UUID,
+    integration_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return raw 1C data for debugging: entities, sample products, sample barcodes."""
+    from backend.integrations.onec_integration import OneCClient
+
+    result = await db.execute(
+        select(Store).where(Store.id == store_id, Store.owner_id == current_user.id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Магазин не найден")
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.id == integration_id, Integration.store_id == store_id
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Интеграция не найдена")
+
+    client = OneCClient(
+        url=integration.onec_url,
+        username=integration.onec_username,
+        password=decrypt_password(integration.onec_password_encrypted),
+    )
+
+    entities = await client.get_entities()
+    ok_products, products = await client.get_products(limit=5, offset=0)
+    barcodes = await client.get_barcodes()
+
+    # Count synced products in DB
+    synced_count = (await db.execute(
+        select(ProductCache).where(ProductCache.store_id == store_id)
+    )).scalars().all()
+
+    return {
+        "entities_published": len(entities),
+        "entities": entities[:30],
+        "products_ok": ok_products,
+        "products_sample": products[:5],
+        "barcodes_fetched": len(barcodes),
+        "barcodes_sample": dict(list(barcodes.items())[:5]),
+        "synced_in_db": len(synced_count),
+        "synced_with_barcode": sum(1 for p in synced_count if p.barcode),
     }
 
 
