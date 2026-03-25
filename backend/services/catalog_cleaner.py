@@ -100,10 +100,6 @@ def _is_mojibake(text: str) -> bool:
     # Specific mojibake two-char sequences
     if _MOJIBAKE_RE.search(text):
         return True
-    # Lone Cyrillic uppercase alternating with non-letters > 40% of chars
-    caps = sum(1 for c in text if '\u0410' <= c <= '\u042f')
-    if caps > len(text) * 0.40 and len(text) > 8:
-        return True
     return False
 
 
