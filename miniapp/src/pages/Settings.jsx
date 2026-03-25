@@ -206,8 +206,8 @@ export default function Settings() {
 
   const getSetupUrl = (onecUrl) => {
     if (!onecUrl) return null
-    const base = onecUrl.replace(/\/ru\/?$/, '').replace(/\/odata.*$/, '').replace(/\/$/, '')
-    return `${base}/ru/e1cib/command/DataProcessor.НастройкаАвтоматическогоRESTСервиса.Form`
+    const base = onecUrl.replace(/\/odata.*$/, '').replace(/\/ru\/?$/, '').replace(/\/$/, '')
+    return `${base}/#e1cib/command/Обработка.НастройкаСтандартногоИнтерфейсаOData.Команда.НастройкиСтандартногоИнтерфейсаOData`
   }
 
   const currentStoreDetail = stores.find((s) => s.id === currentStore?.id)
@@ -739,20 +739,39 @@ export default function Settings() {
                       }`}>
                         <span>{testResult.message}</span>
                         {needsSetup && setupUrl && (
-                          <div className="flex flex-col gap-1.5">
-                            <p className="font-semibold">Быстрая настройка (1 раз):</p>
-                            <p>1. Откройте ссылку → нажмите <b>«Загрузить метаданные»</b></p>
-                            <p>2. Отметьте: <b>Номенклатура</b>, <b>Цены номенклатуры</b>, <b>Склады</b></p>
-                            <p>3. Нажмите <b>«Сохранить и закрыть»</b> → вернитесь сюда</p>
+                          <div className="flex flex-col gap-2">
+                            <p className="font-semibold text-amber-900">Настройка OData (1 раз):</p>
+                            <div className="flex flex-col gap-1">
+                              <p><b>1.</b> Откройте ссылку ниже</p>
+                              <p><b>2.</b> Нажмите <b>«Загрузить метаданные»</b> — появится список объектов</p>
+                              <p><b>3.</b> Найдите и поставьте галочки (ищите по названию):</p>
+                            </div>
+                            <div className="flex flex-col gap-1 pl-2">
+                              {[
+                                ['Номенклатура', 'Товары — обязательно'],
+                                ['Штрихкоды номенклатуры', 'Штрихкоды — обязательно'],
+                                ['Цены номенклатуры', 'Цены — рекомендуется'],
+                                ['Остатки товаров на складах', 'Остатки — рекомендуется'],
+                              ].map(([name, hint]) => (
+                                <div key={name} className="flex items-center gap-2">
+                                  <span className="text-amber-600 font-bold flex-shrink-0">✓</span>
+                                  <div>
+                                    <span className="font-semibold">{name}</span>
+                                    <span className="text-amber-700"> — {hint}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-amber-700"><b>4.</b> Нажмите <b>«Сохранить и закрыть»</b> → вернитесь и нажмите <b>«Импорт»</b></p>
                             <a
                               href={setupUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="mt-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl font-semibold text-white"
+                              className="mt-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-white"
                               style={{ background: 'var(--tg-theme-button-color)' }}
                             >
                               <ExternalLink size={13} />
-                              Открыть настройку 1С
+                              Открыть настройку OData в 1С
                             </a>
                           </div>
                         )}
