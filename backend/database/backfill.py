@@ -4,6 +4,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from backend.database.connection import AsyncSessionLocal
+from backend.services.catalog_cleaner import normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
 
 
 async def backfill_global_products() -> None:
@@ -43,9 +44,20 @@ async def backfill_global_products() -> None:
             )).fetchall()}
 
             new_entries = 0
+            skipped = 0
             for bc, row in seen.items():
                 if bc in existing:
                     continue
+                # Apply same quality filters as catalog import
+                if not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
+                    skipped += 1
+                    continue
+                clean_name = normalize_name(row[1] or "")
+                if not clean_name:
+                    skipped += 1
+                    continue
+                clean_cat = translate_category(row[5]) if row[5] else None
+                clean_unit = row[6] or detect_unit(clean_name) or "шт"
                 await db.execute(text(
                     "INSERT INTO global_products "
                     "(id, barcode, name, price, purchase_price, article, category, unit, description) "
@@ -53,19 +65,19 @@ async def backfill_global_products() -> None:
                 ), {
                     "id": str(_uuid.uuid4()),
                     "barcode": bc,
-                    "name": row[1],
+                    "name": clean_name,
                     "price": row[2],
                     "purchase_price": row[3],
                     "article": row[4],
-                    "category": row[5],
-                    "unit": row[6] or "шт",
+                    "category": clean_cat,
+                    "unit": clean_unit,
                     "description": row[7],
                 })
                 new_entries += 1
 
             await db.commit()
             logger.info(
-                f"backfill_global_products: added {new_entries} new entries "
+                f"backfill_global_products: added {new_entries}, skipped {skipped} "
                 f"({len(rows)} products_cache rows scanned, "
                 f"{len(existing)} already existed)"
             )

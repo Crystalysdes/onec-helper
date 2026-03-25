@@ -48,13 +48,26 @@ class ProductUpdate(BaseModel):
 
 async def _upsert_global_product(db: AsyncSession, p: ProductCache):
     """Insert or update the shared GlobalProduct catalog entry for this barcode.
+    Applies the same quality filters as catalog import.
     Uses a savepoint so any failure never corrupts the outer transaction."""
     if not p.barcode or not p.barcode.strip():
         return
+    from backend.services.catalog_cleaner import (
+        normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
+    )
+    bc = p.barcode.strip()
+    # Validate standard barcode format
+    if not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
+        return
+    # Normalize name — reject garbage
+    clean_name = normalize_name(p.name or "")
+    if not clean_name:
+        return
+    clean_cat = translate_category(p.category) if p.category else None
+    clean_unit = p.unit or detect_unit(clean_name) or "шт"
     try:
         from sqlalchemy import text as _text
         import uuid as _uuid
-        bc = p.barcode.strip()
         async with db.begin_nested():  # savepoint — rolls back only this block on error
             row = (await db.execute(
                 _text("SELECT id FROM global_products WHERE barcode = :bc LIMIT 1"), {"bc": bc}
@@ -68,21 +81,21 @@ async def _upsert_global_product(db: AsyncSession, p: ProductCache):
                     "category=COALESCE(:category, category), "
                     "unit=COALESCE(:unit, unit) "
                     "WHERE barcode=:bc"
-                ), {"name": p.name, "price": p.price, "pp": p.purchase_price,
-                    "article": p.article, "category": p.category,
-                    "unit": p.unit or None, "bc": bc})
+                ), {"name": clean_name, "price": p.price, "pp": p.purchase_price,
+                    "article": p.article, "category": clean_cat,
+                    "unit": clean_unit, "bc": bc})
             else:
                 await db.execute(_text(
                     "INSERT INTO global_products "
                     "(id, barcode, name, price, purchase_price, article, category, unit, description) "
                     "VALUES (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)"
-                ), {"id": _uuid.uuid4(), "bc": bc, "name": p.name,
+                ), {"id": _uuid.uuid4(), "bc": bc, "name": clean_name,
                     "price": p.price, "pp": p.purchase_price,
-                    "article": p.article, "category": p.category,
-                    "unit": p.unit or "шт", "desc": p.description})
+                    "article": p.article, "category": clean_cat,
+                    "unit": clean_unit, "desc": p.description})
     except Exception as exc:
         from loguru import logger
-        logger.warning(f"_upsert_global_product failed for barcode={p.barcode}: {exc}")
+        logger.warning(f"_upsert_global_product failed for barcode={bc}: {exc}")
 
 
 def _serialize_product(p: ProductCache) -> dict:
