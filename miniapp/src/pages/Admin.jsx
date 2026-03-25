@@ -74,6 +74,7 @@ export default function Admin() {
   const [productLoading, setProductLoading] = useState(false)
   const [userModal, setUserModal] = useState(null)
   const [userLoading, setUserLoading] = useState(false)
+  const [catItemModal, setCatItemModal] = useState(null)
 
   // helpers to start polling loops
   const startCatPoll = (onDone) => {
@@ -188,17 +189,16 @@ export default function Admin() {
     }
   }
 
+  const PAGE_SIZE = 50
+
   const loadDbProducts = async (search = dbSearch, page = 1) => {
     setLoading(true)
     try {
-      const res = await adminAPI.globalCatalog({ search, page, limit: 50 })
-      if (page === 1) {
-        setDbProducts(res.data.items || [])
-      } else {
-        setDbProducts(prev => [...prev, ...(res.data.items || [])])
-      }
+      const res = await adminAPI.globalCatalog({ search, page, limit: PAGE_SIZE })
+      setDbProducts(res.data.items || [])
       setDbTotal(res.data.total || 0)
       setDbPage(page)
+      setDbSelected(new Set())
     } catch { toast.error('Ошибка загрузки') }
     finally { setLoading(false) }
   }
@@ -316,6 +316,41 @@ export default function Admin() {
           ))}
         </div>
       </div>
+
+      {/* Catalog product detail modal */}
+      {catItemModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center"
+          style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setCatItemModal(null)}>
+          <div className="w-full max-w-lg rounded-t-3xl p-5 flex flex-col gap-4"
+            style={{ background: 'var(--tg-theme-bg-color)' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-base font-bold leading-tight" style={{ color: 'var(--tg-theme-text-color)' }}>
+                {catItemModal.name}
+              </p>
+              <button className="flex-shrink-0 active:opacity-60" onClick={() => setCatItemModal(null)}>
+                <X size={20} style={{ color: 'var(--tg-theme-hint-color)' }} />
+              </button>
+            </div>
+            <div className="flex flex-col gap-2">
+              {[
+                { label: 'Штрих-код', value: catItemModal.barcode },
+                { label: 'Артикул', value: catItemModal.article },
+                { label: 'Категория', value: catItemModal.category },
+                { label: 'Единица', value: catItemModal.unit },
+              ].map(({ label, value }) => value ? (
+                <div key={label} className="flex items-center justify-between py-2 border-b"
+                  style={{ borderColor: 'var(--tg-theme-secondary-bg-color)' }}>
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{label}</span>
+                  <span className="text-sm font-medium font-mono" style={{ color: 'var(--tg-theme-text-color)' }}>{value}</span>
+                </div>
+              ) : null)}
+            </div>
+            <button className="btn-secondary text-sm" onClick={() => setCatItemModal(null)}>Закрыть</button>
+          </div>
+        </div>
+      )}
 
       {/* Tab: Stats */}
       {tab === 'stats' && (
@@ -606,7 +641,7 @@ export default function Admin() {
 
           {/* Product list */}
           {loading ? (
-            [1,2,3,4].map(i => <div key={i} className="skeleton h-14" />)
+            [1,2,3,4,5].map(i => <div key={i} className="skeleton h-14" />)
           ) : dbProducts.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-10">
               <span className="text-4xl">📦</span>
@@ -614,27 +649,55 @@ export default function Admin() {
             </div>
           ) : (
             dbProducts.map(p => (
-              <div key={p.id} className="card py-2.5 flex items-center gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
-                  <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {[p.barcode, p.category, p.unit].filter(Boolean).join(' · ')}
-                  </p>
-                </div>
-                {p.article && (
-                  <span className="text-[11px] px-2 py-0.5 rounded-lg flex-shrink-0" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
-                    {p.article}
-                  </span>
+              <div key={p.id} className="flex items-center gap-2">
+                {dbSelectMode && (
+                  <button className="flex-shrink-0 active:opacity-60" onClick={() => toggleDbSelect(p.id)}>
+                    {dbSelected.has(p.id)
+                      ? <CheckSquare size={20} style={{ color: 'var(--tg-theme-button-color)' }} />
+                      : <Square size={20} style={{ color: 'var(--tg-theme-hint-color)' }} />}
+                  </button>
                 )}
+                <div
+                  className="flex-1 card py-2.5 flex items-center gap-2 active:opacity-70 cursor-pointer"
+                  onClick={() => dbSelectMode ? toggleDbSelect(p.id) : setCatItemModal(p)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
+                    <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      {[p.barcode, p.category, p.unit].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                  {p.article && (
+                    <span className="text-[11px] px-2 py-0.5 rounded-lg flex-shrink-0" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                      {p.article}
+                    </span>
+                  )}
+                </div>
               </div>
             ))
           )}
 
-          {/* Pagination */}
-          {dbTotal > dbProducts.length && (
-            <button className="btn-secondary text-sm" onClick={() => loadDbProducts(dbSearch, dbPage + 1)} disabled={loading}>
-              Загрузить ещё
-            </button>
+          {/* Pagination prev/next */}
+          {dbTotal > PAGE_SIZE && (
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                className="btn-secondary text-sm flex-1 py-2"
+                onClick={() => loadDbProducts(dbSearch, dbPage - 1)}
+                disabled={dbPage <= 1 || loading}
+              >
+                ← Назад
+              </button>
+              <span className="text-xs px-3 py-2 rounded-xl flex-shrink-0" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                {dbPage} / {Math.ceil(dbTotal / PAGE_SIZE)}
+              </span>
+              <button
+                className="btn-secondary text-sm flex-1 py-2"
+                onClick={() => loadDbProducts(dbSearch, dbPage + 1)}
+                disabled={dbPage >= Math.ceil(dbTotal / PAGE_SIZE) || loading}
+              >
+                Вперёд →
+              </button>
+            </div>
           )}
         </div>
       )}
