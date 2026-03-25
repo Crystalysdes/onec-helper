@@ -108,15 +108,12 @@ class OneCClient:
 
     async def get_barcodes(self) -> dict:
         """Fetch all barcodes. Returns dict: onec_id -> barcode string."""
-        # All known entity names across different 1C configurations
-        # owner_field candidates tried automatically from item keys
         entities_to_try = [
-            "Catalog_ШтрихкодыНоменклатуры",    # Штрихкоды номенклатуры (УНФ / 1СФреш)
-            "Catalog_НоменклатураШтрихкоды",    # Торговля
+            "Catalog_ШтрихкодыНоменклатуры",
+            "Catalog_НоменклатураШтрихкоды",
             "InformationRegister_ШтрихкодыНоменклатуры",
             "InformationRegister_Штрихкоды",
         ]
-        # Possible field names for owner ref and barcode value
         owner_fields = ["Владелец_Key", "Owner_Key", "Номенклатура_Key"]
         bc_fields = ["Штрихкод", "НомерШтрихкода", "Code"]
 
@@ -130,13 +127,11 @@ class OneCClient:
                 continue
             result = {}
             for item in items:
-                # auto-detect owner field
                 oid = ""
                 for of in owner_fields:
                     if of in item and item[of]:
-                        oid = str(item[of])
+                        oid = str(item[of]).strip("{}")
                         break
-                # auto-detect barcode field
                 bc = ""
                 for bf in bc_fields:
                     if bf in item and str(item[bf]).strip().isdigit():
@@ -146,7 +141,22 @@ class OneCClient:
                     result[oid] = bc
             logger.info(f"1C barcodes loaded from {entity}: {len(result)} entries")
             return result
-        logger.warning("1C barcodes: no barcode catalog found in OData")
+
+        # Fallback: read Штрихкод field directly from Catalog_Номенклатура
+        path = ("odata/standard.odata/Catalog_Номенклатура"
+                "?$format=json&$top=50000&$select=Ref_Key,Штрихкод")
+        ok, data = await self._request("GET", path)
+        if ok and isinstance(data, dict):
+            result = {}
+            for item in data.get("value", []):
+                oid = str(item.get("Ref_Key", "")).strip("{}")
+                bc = str(item.get("Штрихкод", "")).strip()
+                if oid and bc and bc.isdigit():
+                    result[oid] = bc
+            if result:
+                logger.info(f"1C barcodes loaded from Catalog_Ном/Штрихкод: {len(result)} entries")
+                return result
+        logger.warning("1C barcodes: no barcode source found in OData")
         return {}
 
     async def get_entities(self) -> List[str]:
@@ -157,28 +167,56 @@ class OneCClient:
         return [e.get("name", "") for e in data.get("value", []) if e.get("name")]
 
     async def get_all_prices(self) -> dict:
-        """Fetch ALL prices from 1C in one request. Returns {onec_id: price}."""
+        """Fetch retail prices from 1C. Returns {onec_id: price}."""
+        return (await self._fetch_prices_by_type_hint("розн")) or await self._fetch_prices_all_max()
+
+    async def get_purchase_prices(self) -> dict:
+        """Fetch purchase/accounting prices from 1C. Returns {onec_id: price}."""
+        return await self._fetch_prices_by_type_hint("учет") or await self._fetch_prices_by_type_hint("закуп")
+
+    async def _fetch_prices_by_type_hint(self, hint: str) -> dict:
+        """Return {onec_id: price} for the price type whose name contains hint."""
+        type_key = await self._get_price_type_key_by_name(hint)
+        if not type_key:
+            return {}
+        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
+            path = (
+                f"odata/standard.odata/{register}"
+                f"?$format=json&$top=50000"
+                f"&$filter=ВидЦены_Key eq guid'{type_key}'"
+                f"&$select=Номенклатура_Key,Цена"
+            )
+            ok, data = await self._request("GET", path)
+            if ok and isinstance(data, dict) and data.get("value"):
+                result = {}
+                for item in data["value"]:
+                    oid = str(item.get("Номенклатура_Key", "")).strip("{}")
+                    price = item.get("Цена") or item.get("Price")
+                    if oid and price is not None:
+                        result[oid] = float(price)
+                if result:
+                    logger.info(f"1C prices [{hint}] from {register}: {len(result)} entries")
+                    return result
+        return {}
+
+    async def _fetch_prices_all_max(self) -> dict:
+        """Fallback: return highest price per product across all types."""
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
             path = (
                 f"odata/standard.odata/{register}"
                 f"?$format=json&$top=50000&$select=Номенклатура_Key,Цена,ВидЦены_Key"
             )
-            success, data = await self._request("GET", path)
-            if not success or not isinstance(data, dict):
-                continue
-            items = data.get("value", [])
-            if not items:
-                continue
-            prices: dict = {}
-            for item in items:
-                oid = str(item.get("Номенклатура_Key", "")).strip("{}")
-                price = item.get("Цена") or item.get("Price")
-                if oid and price is not None:
-                    # keep the highest price (retail > purchase) as the primary price
-                    if oid not in prices or float(price) > float(prices[oid]):
-                        prices[oid] = float(price)
-            logger.info(f"1C prices loaded from {register}: {len(prices)} entries")
-            return prices
+            ok, data = await self._request("GET", path)
+            if ok and isinstance(data, dict) and data.get("value"):
+                prices: dict = {}
+                for item in data["value"]:
+                    oid = str(item.get("Номенклатура_Key", "")).strip("{}")
+                    price = item.get("Цена") or item.get("Price")
+                    if oid and price is not None:
+                        if oid not in prices or float(price) > float(prices[oid]):
+                            prices[oid] = float(price)
+                logger.info(f"1C prices (all-max) from {register}: {len(prices)} entries")
+                return prices
         return {}
 
     async def set_price(self, onec_id: str, price: float,

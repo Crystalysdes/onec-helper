@@ -353,7 +353,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         prod.quantity = qty
                 logger.info(f"1C sync: updated quantities for {len(balances)} items")
 
-            # ── Step 4: sync prices ──
+            # ── Step 4: sync retail + purchase prices ──
             prices = await client.get_all_prices()
             if prices:
                 matched_prices = 0
@@ -362,7 +362,17 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                     if prod and price:
                         prod.price = float(price)
                         matched_prices += 1
-                logger.info(f"1C sync: applied prices for {matched_prices} products")
+                logger.info(f"1C sync: applied retail prices for {matched_prices} products")
+
+            purchase_prices = await client.get_purchase_prices()
+            if purchase_prices:
+                matched_pp = 0
+                for oid, price in purchase_prices.items():
+                    prod = onec_id_to_product.get(str(oid))
+                    if prod and price:
+                        prod.purchase_price = float(price)
+                        matched_pp += 1
+                logger.info(f"1C sync: applied purchase prices for {matched_pp} products")
 
             await db.flush()
 
