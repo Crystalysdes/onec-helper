@@ -353,9 +353,20 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         prod.quantity = qty
                 logger.info(f"1C sync: updated quantities for {len(balances)} items")
 
+            # ── Step 4: sync prices ──
+            prices = await client.get_all_prices()
+            if prices:
+                matched_prices = 0
+                for oid, price in prices.items():
+                    prod = onec_id_to_product.get(str(oid))
+                    if prod and price:
+                        prod.price = float(price)
+                        matched_prices += 1
+                logger.info(f"1C sync: applied prices for {matched_prices} products")
+
             await db.flush()
 
-            # ── Step 3: push products to global catalog ──
+            # ── Step 5: push products to global catalog ──
             for product in onec_id_to_product.values():
                 if product.barcode:
                     await _upsert_global_product(db, product)

@@ -155,6 +155,86 @@ class OneCClient:
             return []
         return [e.get("name", "") for e in data.get("value", []) if e.get("name")]
 
+    async def get_all_prices(self) -> dict:
+        """Fetch ALL prices from 1C in one request. Returns {onec_id: price}."""
+        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
+            path = (
+                f"odata/standard.odata/{register}"
+                f"?$format=json&$top=50000&$select=Номенклатура_Key,Цена,ВидЦены_Key"
+            )
+            success, data = await self._request("GET", path)
+            if not success or not isinstance(data, dict):
+                continue
+            items = data.get("value", [])
+            if not items:
+                continue
+            prices: dict = {}
+            for item in items:
+                oid = str(item.get("Номенклатура_Key", "")).strip("{}")
+                price = item.get("Цена") or item.get("Price")
+                if oid and price is not None:
+                    # keep the highest price (retail > purchase) as the primary price
+                    if oid not in prices or float(price) > float(prices[oid]):
+                        prices[oid] = float(price)
+            logger.info(f"1C prices loaded from {register}: {len(prices)} entries")
+            return prices
+        return {}
+
+    async def set_price(self, onec_id: str, price: float) -> bool:
+        """Write retail price for a product in 1C price register."""
+        from datetime import datetime as _dt
+        period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
+        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
+            # 1. Try to find existing record to get the composite key fields
+            path = (
+                f"odata/standard.odata/{register}"
+                f"?$format=json&$filter=Номенклатура_Key eq guid'{onec_id}'&$top=1"
+            )
+            success, data = await self._request("GET", path)
+            if success and isinstance(data, dict):
+                items = data.get("value", [])
+                if items:
+                    item = items[0]
+                    price_type = item.get("ВидЦены_Key") or item.get("ТипЦен_Key")
+                    currency = item.get("Валюта_Key")
+                    old_period = item.get("Период", period)
+
+                    # Build composite key for PATCH
+                    key_parts = [f"Период=datetime'{old_period}'",
+                                 f"Номенклатура_Key=guid'{onec_id}'"]
+                    if price_type:
+                        key_parts.append(f"ВидЦены_Key=guid'{price_type}'")
+                    key = ",".join(key_parts)
+
+                    payload = {"Цена": price, "Период": period}
+                    if price_type:
+                        payload["ВидЦены_Key"] = price_type
+                    if currency:
+                        payload["Валюта_Key"] = currency
+
+                    ok, _ = await self._request(
+                        "PATCH",
+                        f"odata/standard.odata/{register}({key})",
+                        json=payload,
+                    )
+                    if ok:
+                        logger.info(f"1C price updated: {onec_id} → {price}")
+                        return True
+
+                # No existing record — try POST with minimal payload
+                payload = {
+                    "Номенклатура_Key": onec_id,
+                    "Цена": price,
+                    "Период": period,
+                }
+                ok, _ = await self._request("POST", f"odata/standard.odata/{register}", json=payload)
+                if ok:
+                    logger.info(f"1C price created: {onec_id} → {price}")
+                    return True
+        logger.warning(f"1C price set failed for onec_id={onec_id}")
+        return False
+
     async def get_product_prices(self, product_ids: List[str]) -> dict:
         """Get current prices for products from 1C. Returns empty dict if register not published."""
         prices = {}

@@ -189,11 +189,14 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
                     if product.barcode and product.barcode.strip():
                         await client.create_barcode(product.onec_id, product.barcode.strip())
 
-            if success:
+            if success and product.onec_id:
+                # Push prices to 1C
+                if product.price is not None and product.price > 0:
+                    await client.set_price(product.onec_id, float(product.price))
                 product.synced_at = datetime.now(timezone.utc)
                 await db.commit()
                 logger.info(f"Product '{product.name}' synced to 1C (onec_id={product.onec_id})")
-            else:
+            elif not success:
                 logger.warning(f"1C push failed for '{product.name}': {data}")
         except Exception as e:
             logger.error(f"_push_to_onec_bg error: {e}")
