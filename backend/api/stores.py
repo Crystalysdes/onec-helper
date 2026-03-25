@@ -512,13 +512,15 @@ async def diagnose_onec(
         select(ProductCache).where(ProductCache.store_id == store_id)
     )).scalars().all()
 
-    # Find which entities match nomenclature
-    nom_entities = [e for e in entities if "омен" in e or "Catalog" in e][:10]
+    # Find which entities match nomenclature/catalog
+    nom_entities = [e for e in entities if "Номенклатур" in e and "Catalog" in e][:10]
+    barcode_catalog_published = any("НоменклатураШтрихкод" in e for e in entities)
 
     return {
         "entities_published": len(entities),
         "entities": entities[:30],
         "nom_entities": nom_entities,
+        "barcode_catalog_published": barcode_catalog_published,
         "products_ok": ok_products,
         "products_sample": products[:5],
         "products_error": products_error,

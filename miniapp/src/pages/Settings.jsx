@@ -680,6 +680,7 @@ export default function Settings() {
                           ['Объектов OData', diagnoseResult.entities_published],
                           ['Товаров в 1С (пример)', diagnoseResult.products_ok ? diagnoseResult.products_sample?.length : `❌ ${diagnoseResult.products_error || 'нет доступа'}`],
                           ['Штрихкодов в 1С', diagnoseResult.barcodes_fetched],
+                          ['Каталог штрихкодов', diagnoseResult.barcode_catalog_published ? '✅ опубликован' : '❌ не опубликован'],
                           ['Товаров в боте', diagnoseResult.synced_in_db],
                           ['Товаров с баркодом', diagnoseResult.synced_with_barcode],
                         ].map(([label, val]) => (
@@ -705,9 +706,16 @@ export default function Settings() {
                           ))}
                         </div>
                       )}
+                      {!diagnoseResult.barcode_catalog_published && (
+                        <div className="p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                          <p className="font-semibold mb-1" style={{ color: '#ef4444' }}>⚠️ Штрихкоды не доступны</p>
+                          <p style={{ color: 'var(--tg-theme-hint-color)' }}>Для синхронизации штрихкодов нужно опубликовать <b>НоменклатураШтрихкоды</b> в настройках REST-сервиса 1С.</p>
+                          <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>1С → Администрирование → Настройка REST-сервиса → добавить <b>Catalog.НоменклатураШтрихкоды</b></p>
+                        </div>
+                      )}
                       {diagnoseResult.nom_entities?.length > 0 && (
                         <div>
-                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Каталоги номенклатуры в OData:</p>
+                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Каталоги Номенклатур в OData:</p>
                           {diagnoseResult.nom_entities.map((e, i) => (
                             <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
                           ))}
