@@ -58,6 +58,11 @@ export default function Admin() {
   const [autoAiClean, setAutoAiClean] = useState(false)
   const catPollRef = useRef(null)
   const aiPollRef = useRef(null)
+  const dlPollRef = useRef(null)
+  const [dlUrl, setDlUrl] = useState('')
+  const [dlFilename, setDlFilename] = useState('')
+  const [dlLoading, setDlLoading] = useState(false)
+  const [dlProgress, setDlProgress] = useState(null)
   const [dbProducts, setDbProducts] = useState([])
   const [dbSearch, setDbSearch] = useState('')
   const [dbPage, setDbPage] = useState(1)
@@ -134,8 +139,25 @@ export default function Admin() {
     return () => {
       clearInterval(catPollRef.current)
       clearInterval(aiPollRef.current)
+      clearInterval(dlPollRef.current)
     }
   }, [])
+
+  const startDlPoll = (onDone) => {
+    if (dlPollRef.current) clearInterval(dlPollRef.current)
+    dlPollRef.current = setInterval(async () => {
+      try {
+        const st = await adminAPI.downloadCatalogStatus()
+        setDlProgress(st.data)
+        if (st.data.done || st.data.error) {
+          clearInterval(dlPollRef.current)
+          dlPollRef.current = null
+          setDlLoading(false)
+          if (onDone) onDone(st.data)
+        }
+      } catch { clearInterval(dlPollRef.current); dlPollRef.current = null; setDlLoading(false) }
+    }, 2000)
+  }
 
   const triggerAiClean = async () => {
     setAiCleanLoading(true)
@@ -362,13 +384,57 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {/* Instructions */}
-                <div className="p-3 rounded-xl flex flex-col gap-1.5" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
-                  <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📝 Скачать базу на сервер (SSH):</p>
-                  <div className="rounded-lg px-3 py-2 font-mono text-xs select-all" style={{ background: 'rgba(0,0,0,0.2)', color: '#a5b4fc', wordBreak: 'break-all' }}>
-                    {`wget -O /app/catalog/products.csv "https://world.openfoodfacts.org/cgi/search.pl?action=process&tagtype_0=countries&tag_contains_0=contains&tag_0=russia&download=1&format=csv"`}
-                  </div>
-                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Open Food Facts · только товары России · ~100k записей · русские названия</p>
+                {/* Download by URL form */}
+                <div className="flex flex-col gap-2 p-3 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>� Скачать базу по ссылке</p>
+                  <input
+                    className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                    style={{ background: 'var(--tg-theme-bg-color)', color: 'var(--tg-theme-text-color)', border: '1px solid rgba(99,102,241,0.3)' }}
+                    placeholder="URL файла (https://...)"
+                    value={dlUrl}
+                    onChange={e => setDlUrl(e.target.value)}
+                    disabled={dlLoading}
+                  />
+                  <input
+                    className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                    style={{ background: 'var(--tg-theme-bg-color)', color: 'var(--tg-theme-text-color)', border: '1px solid rgba(99,102,241,0.3)' }}
+                    placeholder="Имя файла (barcodes.csv или archive.zip)"
+                    value={dlFilename}
+                    onChange={e => setDlFilename(e.target.value)}
+                    disabled={dlLoading}
+                  />
+                  {dlProgress && (
+                    <div className="text-xs">
+                      {dlProgress.error
+                        ? <span style={{ color: '#ef4444' }}>❌ {dlProgress.error}</span>
+                        : dlProgress.done
+                          ? <span style={{ color: '#22c55e' }}>✅ Скачан: {dlProgress.filename} ({dlProgress.size_mb} МБ)</span>
+                          : <span style={{ color: 'var(--tg-theme-hint-color)' }}>⬇️ Скачивается... {dlProgress.size_mb} МБ</span>
+                      }
+                    </div>
+                  )}
+                  <button
+                    className="btn-primary text-xs py-2 disabled:opacity-50"
+                    disabled={dlLoading || !dlUrl.trim() || !dlFilename.trim()}
+                    onClick={async () => {
+                      setDlLoading(true)
+                      setDlProgress(null)
+                      try {
+                        await adminAPI.downloadCatalog(dlUrl.trim(), dlFilename.trim())
+                        toast.success('Скачивание запущено...')
+                        startDlPoll((done) => {
+                          if (done.done && !done.error) {
+                            setCatFile({ found: true, file: dlFilename.trim(), size_mb: done.size_mb })
+                          }
+                        })
+                      } catch (e) {
+                        toast.error(e.response?.data?.detail || 'Ошибка')
+                        setDlLoading(false)
+                      }
+                    }}
+                  >
+                    {dlLoading ? '⬇️ Скачивается...' : '⬇️ Скачать на сервер'}
+                  </button>
                 </div>
 
                 {/* File status */}

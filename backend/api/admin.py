@@ -452,8 +452,70 @@ async def ensure_catalog_index(current_user: User = Depends(get_current_admin)):
     return {"status": "ok"}
 
 
+class DownloadCatalogRequest(BaseModel):
+    url: str
+    filename: str  # e.g. "barcodes.csv" or "products.zip"
+
+
+_download_status: dict = {"running": False, "done": False, "error": None, "filename": None, "size_mb": 0}
+
+
+@router.get("/download-catalog-status")
+async def download_catalog_status(current_user: User = Depends(get_current_admin)):
+    return _download_status
+
+
+@router.post("/download-catalog")
+async def download_catalog(
+    body: DownloadCatalogRequest,
+    current_user: User = Depends(get_current_admin),
+):
+    if _download_status["running"]:
+        raise HTTPException(status_code=409, detail="Скачивание уже идёт")
+    filename = os.path.basename(body.filename.strip())
+    if not filename or not filename.endswith((".csv", ".zip")):
+        raise HTTPException(status_code=400, detail="Имя файла должно заканчиваться на .csv или .zip")
+    _download_status.update({"running": True, "done": False, "error": None, "filename": filename, "size_mb": 0})
+    _fire(_run_download(body.url.strip(), filename))
+    return {"status": "started", "filename": filename}
+
+
+async def _run_download(url: str, filename: str):
+    import asyncio as _asyncio
+    import aiohttp
+    dest = os.path.join(_ci.CATALOG_DIR, filename)
+    try:
+        os.makedirs(_ci.CATALOG_DIR, exist_ok=True)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3600)) as resp:
+                if resp.status != 200:
+                    raise ValueError(f"HTTP {resp.status}")
+                written = 0
+                with open(dest, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(1 << 20):  # 1MB
+                        f.write(chunk)
+                        written += len(chunk)
+                        _download_status["size_mb"] = round(written / 1024 / 1024, 1)
+        _download_status.update({"running": False, "done": True, "error": None, "size_mb": round(written / 1024 / 1024, 1)})
+        logger.info(f"Downloaded {filename} → {dest} ({_download_status['size_mb']} MB)")
+    except Exception as e:
+        logger.error(f"Download error: {e}", exc_info=True)
+        _download_status.update({"running": False, "done": True, "error": str(e)})
+        if os.path.exists(dest):
+            os.unlink(dest)
+
+
 # ── AI batch cleanup ──────────────────────────────────────────────────────────
 _ai_cleanup_status: dict = {"running": False, "processed": 0, "fixed": 0, "done": False, "error": None}
+_bg_tasks: set = set()  # keeps task references alive (prevents GC)
+
+
+def _fire(coro):
+    import asyncio as _asyncio
+    t = _asyncio.create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+    return t
 
 
 @router.get("/ai-cleanup-status")
@@ -470,7 +532,7 @@ async def ai_cleanup_catalog(
     if _ai_cleanup_status["running"]:
         raise HTTPException(status_code=409, detail="Очистка уже запущена")
     _ai_cleanup_status.update({"running": True, "processed": 0, "fixed": 0, "total": 0, "done": False, "error": None})
-    asyncio.create_task(_run_ai_cleanup())
+    _fire(_run_ai_cleanup())
     return {"status": "started"}
 
 
@@ -550,7 +612,7 @@ async def _run_ai_cleanup():
         logger.info(f"AI cleanup done: processed={processed}, fixed={fixed}")
 
     except Exception as e:
-        logger.error(f"AI cleanup error: {e}")
+        logger.error(f"AI cleanup error: {e}", exc_info=True)
         _ai_cleanup_status.update({"running": False, "done": True, "error": str(e)})
 
 

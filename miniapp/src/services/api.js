@@ -123,9 +123,12 @@ export const adminAPI = {
     api.post('/admin/import-catalog', null, { params: { limit }, timeout: 60000 }),
   catalogImportStatus: () => api.get('/admin/catalog-import-status'),
   catalogFileCheck: () => api.get('/admin/catalog-file-check'),
-  aiCleanupCatalog: (batchSize) =>
-    api.post('/admin/ai-cleanup-catalog', null, { params: { batch_size: batchSize }, timeout: 60000 }),
+  aiCleanupCatalog: () =>
+    api.post('/admin/ai-cleanup-catalog', null, { timeout: 60000 }),
   aiCleanupStatus: () => api.get('/admin/ai-cleanup-status'),
+  downloadCatalog: (url, filename) =>
+    api.post('/admin/download-catalog', { url, filename }),
+  downloadCatalogStatus: () => api.get('/admin/download-catalog-status'),
   products: (params) => api.get('/admin/products', { params }),
   getProduct: (id) => api.get(`/admin/products/${id}`),
   bulkDeleteProducts: (ids) => api.delete('/admin/products/bulk-delete', { data: { ids } }),
