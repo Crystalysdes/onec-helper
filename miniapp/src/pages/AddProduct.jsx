@@ -477,7 +477,18 @@ export default function AddProduct() {
       const matches = await searchCatalogSmart(data.name, aiText.trim())
       if (matches.length > 0) {
         const best = matches[0]
-        setAiPreview({ ...data, ...best, name: best.name || data.name, _source: 'catalog' })
+        // User-typed values (quantity, unit, category) take priority over catalog defaults
+        setAiPreview({
+          ...best,
+          name: best.name || data.name,
+          barcode: data.barcode || best.barcode,
+          quantity: data.quantity ?? best.quantity ?? 0,
+          unit: data.unit || best.unit || 'шт',
+          category: data.category || best.category,
+          price: data.price ?? best.price,
+          purchase_price: data.purchase_price ?? best.purchase_price,
+          _source: 'catalog',
+        })
         return
       }
 
@@ -664,17 +675,22 @@ export default function AddProduct() {
     setValue('purchase_price', product.purchase_price ?? '')
     setValue('barcode', product.barcode || '')
     setValue('article', product.article || '')
-    setValue('category', product.category || '')
-    setValue('unit', product.unit || 'шт')
-    setValue('quantity', product.quantity ?? 0)
     setValue('description', product.description || '')
     setEditingProductId(product.id)
     setNameSuggestions([])
     setManualDuplicate(null)
     setAiScan(null)
     setBarScan(null)
+    // Parse aiText for quantity/unit/category if user typed them
+    const textLower = (aiText || '').toLowerCase()
+    const qtyMatch = textLower.match(/(\d+(?:\.\d+)?)\s*(шт|кг|гр|л|мл|упак|пара|рулон|м)\b/)
+    setValue('unit', qtyMatch ? qtyMatch[2] : (product.unit || 'шт'))
+    setValue('quantity', qtyMatch ? parseFloat(qtyMatch[1]) : (product.quantity ?? 0))
+    const catMap = { 'напитк': 'Напитки', 'молоч': 'Молочные продукты', 'выпеч': 'Выпечка', 'хоз': 'Хозтовары', 'бака': 'Бакалея', 'снек': 'Снеки', 'мяс': 'Мясо', 'конд': 'Кондитерские', 'алк': 'Алкоголь', 'косм': 'Косметика' }
+    const catFromText = Object.entries(catMap).find(([k]) => textLower.includes(k))
+    setValue('category', catFromText ? catFromText[1] : (product.category || ''))
     setMethod('manual')
-  }, [setValue])
+  }, [setValue, aiText])
 
   const scanForForm = useCallback(() => {
     openScanner(async (code) => {
