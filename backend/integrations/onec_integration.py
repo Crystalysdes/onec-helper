@@ -420,43 +420,56 @@ class OneCClient:
         return self._price_type_key
 
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
-        """Create a barcode record in 1C for the given product.
+        """Create a barcode record in 1C.
 
-        Tries multiple payload combinations to handle different 1C configurations:
-        - With / without ТипШтрихкода
-        - With / without Владелец_Type (required when Владелец is a composite reference)
-        - Different entity / owner field names across configurations
+        Handles two fundamentally different 1C structures:
+        1. Catalog_ШтрихкодыНоменклатуры  — uses Владелец_Key + Владелец_Type
+        2. InformationRegister_ШтрихкодыНоменклатуры — uses Номенклатура_Key (dimension key)
         """
         bc_type = self._detect_barcode_type(barcode)
+        _zero = "00000000-0000-0000-0000-000000000000"
         owner_type = "StandardODATA.Catalog_Номенклатура"
 
-        # (entity, owner_key_field, barcode_field, include_type_field)
-        entity_variants = [
-            "Catalog_ШтрихкодыНоменклатуры",
-            "Catalog_НоменклатураШтрихкоды",
-        ]
-        owner_key_variants = ["Владелец_Key", "Owner_Key", "Номенклатура_Key"]
-
-        for entity in entity_variants:
-            for owner_field in owner_key_variants:
-                base = {
-                    owner_field: onec_id,
-                    "Штрихкод": barcode,
-                    "Description": barcode,
-                }
-                # Build payload variants: with/without type, with/without Владелец_Type
-                payloads = [
-                    {**base, "ТипШтрихкода": bc_type, f"{owner_field[:-4]}_Type": owner_type},  # full
-                    {**base, "ТипШтрихкода": bc_type},                                                    # no composite type
-                    {**base, f"{owner_field[:-4]}_Type": owner_type},                                    # no barcode type
-                    base,                                                                                # minimal
-                ]
-                for pl in payloads:
+        # ── 1. Catalog-style attempts ──────────────────────────────────────────
+        for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
+            for owner_field in ("Владелец_Key", "Owner_Key"):
+                for pl in [
+                    # with composite type + barcode type
+                    {owner_field: onec_id, f"{owner_field[:-4]}_Type": owner_type,
+                     "Штрихкод": barcode, "ТипШтрихкода": bc_type, "Description": barcode},
+                    # without composite type
+                    {owner_field: onec_id, "Штрихкод": barcode,
+                     "ТипШтрихкода": bc_type, "Description": barcode},
+                    # minimal
+                    {owner_field: onec_id, "Штрихкод": barcode, "Description": barcode},
+                ]:
                     ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
                     if ok:
-                        logger.info(f"1C barcode created: {barcode} ({bc_type}) → {onec_id} via {entity}")
+                        logger.info(f"1C barcode created (catalog): {barcode} → {onec_id} via {entity}")
                         return True
-                    logger.debug(f"1C barcode attempt failed ({entity}/{owner_field}): {resp}")
+                    logger.warning(f"1C barcode catalog attempt ({entity}/{owner_field}): {resp}")
+
+        # ── 2. InformationRegister-style attempts ─────────────────────────────
+        # In 1C УНФ / Розница, barcodes live in InformationRegister_ШтрихкодыНоменклатуры
+        # Dimensions: Номенклатура_Key  +  (Характеристика_Key optional)
+        from datetime import datetime as _dt
+        period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        for entity in ("InformationRegister_ШтрихкодыНоменклатуры",
+                       "InformationRegister_Штрихкоды"):
+            for pl in [
+                # with Характеристика + ТипШтрихкода
+                {"Номенклатура_Key": onec_id, "Характеристика_Key": _zero,
+                 "Штрихкод": barcode, "ТипШтрихкода": bc_type},
+                # without Характеристика, with ТипШтрихкода
+                {"Номенклатура_Key": onec_id, "Штрихкод": barcode, "ТипШтрихкода": bc_type},
+                # minimal
+                {"Номенклатура_Key": onec_id, "Штрихкод": barcode},
+            ]:
+                ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
+                if ok:
+                    logger.info(f"1C barcode created (register): {barcode} → {onec_id} via {entity}")
+                    return True
+                logger.warning(f"1C barcode register attempt ({entity}): {resp}")
 
         logger.warning(f"1C barcode create FAILED for barcode={barcode} onec_id={onec_id}")
         return False

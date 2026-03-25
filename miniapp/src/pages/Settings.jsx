@@ -714,13 +714,43 @@ export default function Settings() {
                           <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>1С → Администрирование → Настройка REST-сервиса → добавить <b>Catalog.НоменклатураШтрихкоды</b></p>
                         </div>
                       )}
-                      {diagnoseResult.nom_entities?.length > 0 && (
+                      {diagnoseResult.barcode_entities?.length > 0 && (
                         <div>
-                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Каталоги Номенклатур в OData:</p>
-                          {diagnoseResult.nom_entities.map((e, i) => (
+                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Сущности штрихкодов в OData:</p>
+                          {diagnoseResult.barcode_entities.map((e, i) => (
                             <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
                           ))}
                         </div>
+                      )}
+                      {diagnoseResult.price_entities?.length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Регистры цен в OData:</p>
+                          {diagnoseResult.price_entities.map((e, i) => (
+                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
+                          ))}
+                        </div>
+                      )}
+                      {diagnoseResult.probe_barcode_price && (
+                        <details>
+                          <summary className="cursor-pointer font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>🧪 Тест записи штрихкода/цены</summary>
+                          <div className="mt-1 text-xs break-all" style={{ color: 'var(--tg-theme-text-color)' }}>
+                            <p>Типы цен: {diagnoseResult.probe_barcode_price.price_types_found?.join(', ') || 'не найдены'}</p>
+                            {diagnoseResult.probe_barcode_price.barcode_attempts?.map((a, i) => (
+                              <p key={i}>{a.ok ? '✅' : '❌'} {a.entity}/{a.owner_field}: {a.ok ? 'OK' : a.resp?.slice(0,120)}</p>
+                            ))}
+                            {diagnoseResult.probe_barcode_price.price_attempts?.map((a, i) => (
+                              <p key={i}>{a.ok ? '✅' : '❌'} {a.register}: {a.ok ? 'OK' : a.resp?.slice(0,120)}</p>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {diagnoseResult.nom_entities?.length > 0 && (
+                        <details>
+                          <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>Каталоги Номенклатур в OData</summary>
+                          <div className="mt-1">{diagnoseResult.nom_entities.map((e, i) => (
+                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
+                          ))}</div>
+                        </details>
                       )}
                       {diagnoseResult.entities?.length > 0 && (
                         <details>

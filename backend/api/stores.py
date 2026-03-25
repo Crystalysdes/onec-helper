@@ -525,10 +525,9 @@ async def diagnose_onec(
 
     # Find which entities match nomenclature/catalog
     nom_entities = [e for e in entities if "Номенклатур" in e and "Catalog" in e][:10]
-    barcode_catalog_published = any(
-        "ШтрихкодыНоменклатур" in e or "НоменклатураШтрихкод" in e
-        for e in entities
-    )
+    barcode_entities = [e for e in entities if "Штрихкод" in e]
+    price_entities   = [e for e in entities if "Цен" in e and "Register" in e]
+    barcode_catalog_published = bool(barcode_entities)
 
     # Probe barcode+price write using first product that has an onec_id
     probe_result = None
@@ -555,6 +554,8 @@ async def diagnose_onec(
         "barcodes_sample": dict(list(barcodes.items())[:5]),
         "synced_in_db": len(synced_count),
         "synced_with_barcode": sum(1 for p in synced_count if p.barcode),
+        "barcode_entities": barcode_entities,
+        "price_entities": price_entities,
         "probe_barcode_price": probe_result,
     }
 
