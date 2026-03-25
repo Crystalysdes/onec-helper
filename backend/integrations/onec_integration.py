@@ -168,56 +168,77 @@ class OneCClient:
 
     async def get_all_prices(self) -> dict:
         """Fetch retail prices from 1C. Returns {onec_id: price}."""
-        return (await self._fetch_prices_by_type_hint("розн")) or await self._fetch_prices_all_max()
+        retail, _ = await self._classify_all_prices()
+        return retail
 
     async def get_purchase_prices(self) -> dict:
-        """Fetch purchase/accounting prices from 1C. Returns {onec_id: price}."""
-        return await self._fetch_prices_by_type_hint("учет") or await self._fetch_prices_by_type_hint("закуп")
+        """Fetch purchase prices from 1C. Returns {onec_id: price}."""
+        _, purchase = await self._classify_all_prices()
+        return purchase
 
-    async def _fetch_prices_by_type_hint(self, hint: str) -> dict:
-        """Return {onec_id: price} for the price type whose name contains hint."""
-        type_key = await self._get_price_type_key_by_name(hint)
-        if not type_key:
-            return {}
+    async def _classify_all_prices(self) -> tuple[dict, dict]:
+        """Single-pass fetch of all price records; classify by type name.
+
+        Returns (retail_prices, purchase_prices) each as {onec_id: price}.
+        Retail hints: 'розн'
+        Purchase hints: 'закуп', 'учет', 'purchase', 'cost'
+        Unknown types: highest price → retail, second highest → purchase.
+        """
+        RETAIL_HINTS = ("розн",)
+        PURCHASE_HINTS = ("закуп", "учет", "purchase", "cost", "себест")
+
+        type_names: dict[str, str] = {}
+        types = await self.get_price_types()
+        for t in types:
+            key = str(t.get("Ref_Key", "")).strip("{}")
+            name = t.get("Description", "").lower()
+            if key:
+                type_names[key] = name
+
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
             path = (
                 f"odata/standard.odata/{register}"
                 f"?$format=json&$top=50000"
-                f"&$filter=ВидЦены_Key eq guid'{type_key}'"
-                f"&$select=Номенклатура_Key,Цена"
+                f"&$select=Номенклатура_Key,Цена,Видцены_Key,ВидЦены_Key"
             )
             ok, data = await self._request("GET", path)
-            if ok and isinstance(data, dict) and data.get("value"):
-                result = {}
-                for item in data["value"]:
-                    oid = str(item.get("Номенклатура_Key", "")).strip("{}")
-                    price = item.get("Цена") or item.get("Price")
-                    if oid and price is not None:
-                        result[oid] = float(price)
-                if result:
-                    logger.info(f"1C prices [{hint}] from {register}: {len(result)} entries")
-                    return result
-        return {}
+            if not ok or not isinstance(data, dict) or not data.get("value"):
+                continue
 
-    async def _fetch_prices_all_max(self) -> dict:
-        """Fallback: return highest price per product across all types."""
-        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
-            path = (
-                f"odata/standard.odata/{register}"
-                f"?$format=json&$top=50000&$select=Номенклатура_Key,Цена,ВидЦены_Key"
-            )
-            ok, data = await self._request("GET", path)
-            if ok and isinstance(data, dict) and data.get("value"):
-                prices: dict = {}
-                for item in data["value"]:
-                    oid = str(item.get("Номенклатура_Key", "")).strip("{}")
-                    price = item.get("Цена") or item.get("Price")
-                    if oid and price is not None:
-                        if oid not in prices or float(price) > float(prices[oid]):
-                            prices[oid] = float(price)
-                logger.info(f"1C prices (all-max) from {register}: {len(prices)} entries")
-                return prices
-        return {}
+            # accumulate per-product by price type
+            by_product: dict[str, list[tuple[float, str]]] = {}
+            for item in data["value"]:
+                oid = str(item.get("Номенклатура_Key", "")).strip("{}")
+                price = item.get("Цена") or item.get("Price")
+                type_key = str(
+                    item.get("ВидЦены_Key") or item.get("Видцены_Key") or ""
+                ).strip("{}")
+                if oid and price is not None:
+                    by_product.setdefault(oid, []).append((float(price), type_key))
+
+            retail: dict = {}
+            purchase: dict = {}
+            for oid, entries in by_product.items():
+                for price_val, type_key in entries:
+                    name = type_names.get(type_key, "")
+                    if any(h in name for h in RETAIL_HINTS):
+                        retail[oid] = price_val
+                    elif any(h in name for h in PURCHASE_HINTS):
+                        purchase[oid] = price_val
+                    else:
+                        # unknown type: highest → retail, others → purchase
+                        cur = retail.get(oid)
+                        if cur is None:
+                            retail[oid] = price_val
+                        elif price_val > cur:
+                            purchase[oid] = cur
+                            retail[oid] = price_val
+                        else:
+                            purchase[oid] = price_val
+
+            logger.info(f"1C prices classified from {register}: retail={len(retail)} purchase={len(purchase)}")
+            return retail, purchase
+        return {}, {}
 
     async def set_price(self, onec_id: str, price: float,
                         price_type_name: str | None = None) -> bool:

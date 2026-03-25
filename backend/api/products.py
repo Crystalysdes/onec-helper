@@ -741,7 +741,7 @@ async def sync_product_to_onec(
         return {"product_name": product.name, "onec_id": None,
                 "steps": steps, "probe": None}
 
-    # Step 2: sync actual barcode + prices
+    # Step 2: sync actual barcode + prices → 1C
     if product.barcode and product.barcode.strip():
         ok_bc = await client.create_barcode(clean_id, product.barcode.strip())
         steps["barcode"] = {"ok": ok_bc, "barcode": product.barcode}
@@ -749,8 +749,21 @@ async def sync_product_to_onec(
         ok_rp = await client.set_price(clean_id, float(product.price), price_type_name="розн")
         steps["retail_price"] = {"ok": ok_rp, "price": product.price}
     if product.purchase_price and product.purchase_price > 0:
-        ok_pp = await client.set_price(clean_id, float(product.purchase_price), price_type_name="учет")
+        ok_pp = await client.set_price(clean_id, float(product.purchase_price), price_type_name="закуп")
         steps["purchase_price"] = {"ok": ok_pp, "price": product.purchase_price}
+
+    # Step 2b: pull back latest prices FROM 1C → update DB immediately
+    retail_map, purchase_map = await client._classify_all_prices()
+    updated_from_1c = {}
+    if clean_id in retail_map and retail_map[clean_id]:
+        product.price = retail_map[clean_id]
+        updated_from_1c["price"] = retail_map[clean_id]
+    if clean_id in purchase_map and purchase_map[clean_id]:
+        product.purchase_price = purchase_map[clean_id]
+        updated_from_1c["purchase_price"] = purchase_map[clean_id]
+    if updated_from_1c:
+        await db.commit()
+        steps["pulled_from_1c"] = updated_from_1c
 
     # Step 3: diagnostic probe
     test_bc = (product.barcode or "").strip() or "4607141232117"
