@@ -4,21 +4,19 @@ No in-memory state: all status lives in catalog_import_jobs table.
 """
 import asyncio
 import csv
-import logging
 import os
 import tempfile
 import uuid
 import zipfile
 from datetime import datetime, timezone
 
+from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from backend.database.connection import AsyncSessionLocal, engine
 from backend.database.models import CatalogImportJob, GlobalProduct
 from backend.services.catalog_cleaner import clean_record
-
-logger = logging.getLogger(__name__)
 
 CATALOG_DIR = "/app/catalog"
 BATCH_SIZE = 1000          # rows per DB insert
@@ -85,6 +83,17 @@ def _detect_encoding(path: str) -> str:
         return "cp1251"
 
 
+def _detect_delimiter(path: str, encoding: str) -> str:
+    """Sniff CSV delimiter from first 4KB. Fallback to comma."""
+    with open(path, "r", encoding=encoding, errors="replace") as f:
+        sample = f.read(4096)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        return dialect.delimiter
+    except csv.Error:
+        return ","
+
+
 async def _update_job(job_id: str, **fields):
     """Persist job progress to DB."""
     set_clause = ", ".join(f"{k} = :{k}" for k in fields)
@@ -120,16 +129,21 @@ async def run_import(job_id: str, limit: int = 2_000_000):
             csv_path = raw_path
 
         encoding = await loop.run_in_executor(None, _detect_encoding, csv_path)
+        delimiter = await loop.run_in_executor(None, _detect_delimiter, csv_path, encoding)
         file_name = os.path.basename(csv_path)
         await _update_job(job_id, stage="importing", file_name=file_name)
-        logger.info(f"[import:{job_id[:8]}] streaming {csv_path} enc={encoding} limit={limit}")
+        logger.info(f"[import:{job_id[:8]}] streaming {csv_path} enc={encoding} delim={repr(delimiter)} limit={limit}")
 
         imported = 0
         skipped = 0
         batch: list[dict] = []
 
         with open(csv_path, "r", encoding=encoding, errors="replace", newline="") as fh:
-            reader = csv.DictReader(fh)
+            reader = csv.DictReader(fh, delimiter=delimiter)
+            # Log the header so we can verify column names
+            if reader.fieldnames is None:
+                next(reader, None)
+            logger.info(f"[import:{job_id[:8]}] CSV columns: {reader.fieldnames}")
             for row_count, row in enumerate(reader, 1):
                 if (imported + skipped) >= limit:
                     break
