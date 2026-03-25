@@ -240,13 +240,20 @@ class OneCClient:
             # by 1C Retail (Розница) and some УНФ configurations
             _zero = "00000000-0000-0000-0000-000000000000"
             vid_key = price_type_key or _zero
-            # Try variants: with extra dims → without → without ВидЦены_Key entirely
+            period0 = "0001-01-01T00:00:00"
             for post_payload in [
+                # current period + all dims
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
                  "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                # current period, minimal
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
                  "ВидЦены_Key": vid_key},
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price},
+                # epoch period (0001-01-01) + all dims
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                # epoch period, minimal
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦены_Key": vid_key},
             ]:
                 ok, resp = await self._request(
                     "POST", f"odata/standard.odata/{register}", json=post_payload
@@ -255,6 +262,16 @@ class OneCClient:
                     logger.info(f"1C price created ({register}): {onec_id} → {price}")
                     return True
                 logger.warning(f"1C price POST attempt ({register}, keys={list(post_payload)}): {resp}")
+        # ── Fallback: PATCH Catalog_Номенклатура with Цена field directly
+        for price_field in ("Цена", "ЦенаРозничная", "ЦенаЗакупка"):
+            ok, resp = await self._request(
+                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
+                json={price_field: price}
+            )
+            if ok:
+                logger.info(f"1C price set via PATCH Catalog_Ном/{price_field}: {onec_id} → {price}")
+                return True
+            logger.warning(f"1C price PATCH Catalog_Ном/{price_field}: {resp}")
 
         logger.warning(f"1C price set failed for onec_id={onec_id}, price={price}")
         return False
@@ -460,39 +477,25 @@ class OneCClient:
         _zero = "00000000-0000-0000-0000-000000000000"
         owner_type = "StandardODATA.Catalog_Номенклатура"
 
-        # ── 1. Catalog-style attempts ──────────────────────────────────────────
-        for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
-            for owner_field in ("Владелец_Key", "Owner_Key"):
-                for pl in [
-                    # with composite type + barcode type
-                    {owner_field: onec_id, f"{owner_field[:-4]}_Type": owner_type,
-                     "Штрихкод": barcode, "ТипШтрихкода": bc_type, "Description": barcode},
-                    # without composite type
-                    {owner_field: onec_id, "Штрихкод": barcode,
-                     "ТипШтрихкода": bc_type, "Description": barcode},
-                    # minimal
-                    {owner_field: onec_id, "Штрихкод": barcode, "Description": barcode},
-                ]:
-                    ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                    if ok:
-                        logger.info(f"1C barcode created (catalog): {barcode} → {onec_id} via {entity}")
-                        return True
-                    logger.warning(f"1C barcode catalog attempt ({entity}/{owner_field}): {resp}")
+        # ── 1. PATCH Catalog_Номенклатура tabular section (подтверждено работает в 1C Fresh)
+        for key_name, items in [
+            ("ШтрихкодыНоменклатуры", [{"LineNumber": 1, "Штрихкод": barcode, "ТипШтрихкода": bc_type}]),
+            ("ШтрихкодыНоменклатуры", [{"LineNumber": 1, "Штрихкод": barcode}]),
+            ("Штрихкоды", [{"LineNumber": 1, "Штрихкод": barcode, "ТипШтрихкода": bc_type}]),
+        ]:
+            ok, resp = await self._request(
+                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
+                json={key_name: items}
+            )
+            if ok:
+                logger.info(f"1C barcode created (PATCH/{key_name}): {barcode} → {onec_id}")
+                return True
+            logger.warning(f"1C barcode PATCH/{key_name} failed: {resp}")
 
-        # ── 2. InformationRegister-style attempts ─────────────────────────────
-        # In 1C УНФ / Розница, barcodes live in InformationRegister_ШтрихкодыНоменклатуры
-        # Dimensions: Номенклатура_Key  +  (Характеристика_Key optional)
-        from datetime import datetime as _dt
-        period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        for entity in ("InformationRegister_ШтрихкодыНоменклатуры",
-                       "InformationRegister_Штрихкоды"):
+        # ── 2. InformationRegister POST fallback ────────────────────────────────
+        for entity in ("InformationRegister_ШтрихкодыНоменклатуры", "InformationRegister_Штрихкоды"):
             for pl in [
-                # with Характеристика + ТипШтрихкода
-                {"Номенклатура_Key": onec_id, "Характеристика_Key": _zero,
-                 "Штрихкод": barcode, "ТипШтрихкода": bc_type},
-                # without Характеристика, with ТипШтрихкода
                 {"Номенклатура_Key": onec_id, "Штрихкод": barcode, "ТипШтрихкода": bc_type},
-                # minimal
                 {"Номенклатура_Key": onec_id, "Штрихкод": barcode},
             ]:
                 ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
@@ -563,28 +566,32 @@ class OneCClient:
                     break
 
         price_results = []
+        period0 = "0001-01-01T00:00:00"
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
             vid = price_type_key or _zero
-            for method, pl in [
-                ("POST", {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                          "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero}),
-                ("POST", {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                          "ВидЦены_Key": vid}),
-                # PUT with composite key in URL
-                ("PUT", {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                         "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero}),
+            for pl in [
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                 "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price, "ВидЦены_Key": vid},
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": test_price,
+                 "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": test_price, "ВидЦены_Key": vid},
             ]:
-                url_path = f"odata/standard.odata/{register}"
-                if method == "PUT":
-                    url_path += (f"(Период=datetime'{period}',Номенклатура_Key=guid'{onec_id}',"
-                                 f"ВидЦены_Key=guid'{vid}',Характеристика_Key=guid'{_zero}',"
-                                 f"Упаковка_Key=guid'{_zero}')")
-                ok, resp = await self._request(method, url_path, json=pl)
-                price_results.append({"register": register, "method": method,
-                                      "payload": str(list(pl.keys())),
+                ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
+                price_results.append({"register": register, "payload": str(list(pl.keys())),
                                       "ok": ok, "resp": str(resp)[:600]})
                 if ok:
                     break
+        # PATCH Catalog_Номенклатура with direct price field
+        for price_field in ("Цена", "ЦенаРозничная", "ЦенаЗакупка"):
+            ok, resp = await self._request(
+                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
+                json={price_field: test_price}
+            )
+            price_results.append({"register": f"PATCH Catalog_Ном/{price_field}",
+                                   "payload": price_field, "ok": ok, "resp": str(resp)[:600]})
+            if ok:
+                break
 
         return {
             "onec_id": onec_id,
