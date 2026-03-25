@@ -199,7 +199,7 @@ class OneCClient:
             path = (
                 f"odata/standard.odata/{register}"
                 f"?$format=json&$top=50000"
-                f"&$select=Номенклатура_Key,Цена,Видцены_Key,ВидЦены_Key"
+                f"&$select=Номенклатура_Key,Цена,ВидЦены_Key"
             )
             ok, data = await self._request("GET", path)
             if not ok or not isinstance(data, dict) or not data.get("value"):
@@ -210,9 +210,7 @@ class OneCClient:
             for item in data["value"]:
                 oid = str(item.get("Номенклатура_Key", "")).strip("{}")
                 price = item.get("Цена") or item.get("Price")
-                type_key = str(
-                    item.get("ВидЦены_Key") or item.get("Видцены_Key") or ""
-                ).strip("{}")
+                type_key = str(item.get("ВидЦены_Key") or "").strip("{}")
                 if oid and price is not None:
                     by_product.setdefault(oid, []).append((float(price), type_key))
 
