@@ -404,20 +404,45 @@ class OneCClient:
         return []
 
     async def _get_or_fetch_price_type_key(self) -> str | None:
-        """Return cached price type key, fetching from 1C if needed."""
+        """Return cached price type key, fetching from 1C if needed.
+
+        Strategy:
+          1. Try Catalog_ВидыЦен (may not be published).
+          2. Fallback: read ONE existing record from the price register and
+             extract ВидЦены_Key from it — works even when the catalog is not published.
+        """
         if self._price_type_key:
             return self._price_type_key
+
+        # ── 1. Catalog-based lookup ──────────────────────────────────────────
         types = await self.get_price_types()
-        if not types:
-            return None
-        # Prefer retail (Розничная), fall back to first available
-        retail = next(
-            (t for t in types if "розн" in t.get("Description", "").lower()), None
-        )
-        chosen = retail or types[0]
-        self._price_type_key = chosen.get("Ref_Key")
-        logger.info(f"1C price type selected: {chosen.get('Description')} → {self._price_type_key}")
-        return self._price_type_key
+        if types:
+            retail = next(
+                (t for t in types if "розн" in t.get("Description", "").lower()), None
+            )
+            chosen = retail or types[0]
+            self._price_type_key = chosen.get("Ref_Key")
+            logger.info(f"1C price type (catalog): {chosen.get('Description')} → {self._price_type_key}")
+            return self._price_type_key
+
+        # ── 2. Fallback: read ВидЦены_Key from an existing price record ──────
+        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
+            ok, data = await self._request(
+                "GET",
+                f"odata/standard.odata/{register}?$format=json&$top=1"
+                f"&$select=ВидЦены_Key,ТипЦены_Key",
+            )
+            if ok and isinstance(data, dict):
+                items = data.get("value", [])
+                if items:
+                    key = (items[0].get("ВидЦены_Key") or items[0].get("ТипЦены_Key"))
+                    if key and key != "00000000-0000-0000-0000-000000000000":
+                        self._price_type_key = str(key)
+                        logger.info(f"1C price type (from register {register}): {self._price_type_key}")
+                        return self._price_type_key
+
+        logger.warning("1C price type key not found — prices will be saved without ВидЦены_Key")
+        return None
 
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
         """Create a barcode record in 1C.
