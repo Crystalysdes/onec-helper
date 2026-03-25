@@ -202,7 +202,7 @@ class OneCClient:
         org_key = await self._get_org_key()
         row = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": price,
                "Характеристика_Key": _zero}
-        doc = {"Дата": period, "ВидЦены_Key": vid_key,
+        doc = {"Date": period, "ВидЦены_Key": vid_key,
                 "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
                 "Запасы": [row]}
         if org_key:
@@ -495,12 +495,14 @@ class OneCClient:
         # Key: Номенклатура_Key + Штрихкод + Характеристика_Key (discovered via PUT error messages)
         put_key = (f"Номенклатура_Key=guid'{onec_id}',"
                    f"Штрихкод='{barcode}',"
-                   f"Характеристика_Key=guid'{_zero}'")
+                   f"Характеристика_Key=guid'{_zero}',"
+                   f"Партия_Key=guid'{_zero}'")
         ok, resp = await self._request(
             "PUT",
             f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key})",
             json={"Номенклатура_Key": onec_id, "Штрихкод": barcode,
-                 "ТипШтрихкода": bc_type, "Характеристика_Key": _zero}
+                 "ТипШтрихкода": bc_type, "Характеристика_Key": _zero,
+                 "Партия_Key": _zero}
         )
         if ok:
             logger.info(f"1C barcode set (PUT InformationRegister): {barcode} → {onec_id}")
@@ -588,14 +590,16 @@ class OneCClient:
         # ── PUT InformationRegister with full 3-part key (Ном+Штрихкод+Характеристика_Key)
         put_key3 = (f"Номенклатура_Key=guid'{onec_id}',"
                     f"Штрихкод='{test_barcode}',"
-                    f"Характеристика_Key=guid'{_zero}'")
+                    f"Характеристика_Key=guid'{_zero}',"
+                    f"Партия_Key=guid'{_zero}'")
         ok, resp = await self._request(
             "PUT",
             f"odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры({put_key3})",
             json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode,
-                 "ТипШтрихкода": bc_type, "Характеристика_Key": _zero}
+                 "ТипШтрихкода": bc_type, "Характеристика_Key": _zero,
+                 "Партия_Key": _zero}
         )
-        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [PUT Ном+Штрихкод+Характеристика]",
+        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [PUT Ном+Штрихкод+Характеристика+Партия]",
                            "ok": ok, "resp": str(resp)[:600]})
 
         price_results = []
@@ -639,7 +643,7 @@ class OneCClient:
                     "Характеристика_Key": _zero}
         if unit_key:
             row_base["Единица_Key"] = unit_key
-        doc_base = {"Дата": period, "ВидЦены_Key": vid,
+        doc_base = {"Date": period, "ВидЦены_Key": vid,
                     "Запасы": [row_base],
                     "ЗаписыватьНовыеЦеныПоверхУстановленных": True}
         if org_key:
