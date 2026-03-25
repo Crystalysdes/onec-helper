@@ -426,7 +426,19 @@ class OneCClient:
             logger.info(f"1C price type (catalog): {chosen.get('Description')} → {self._price_type_key}")
             return self._price_type_key
 
-        # ── 2. Fallback: read ВидЦены_Key from an existing price record ──────
+        # ── 2. Try to create "Розничная цена" price type if catalog is writable
+        for entity in ("Catalog_ВидыЦен", "Catalog_ВидЦен"):
+            ok, data = await self._request(
+                "POST",
+                f"odata/standard.odata/{entity}",
+                json={"Description": "Розничная цена"},
+            )
+            if ok and isinstance(data, dict) and data.get("Ref_Key"):
+                self._price_type_key = str(data["Ref_Key"]).strip("{}")
+                logger.info(f"1C price type created: Розничная цена → {self._price_type_key}")
+                return self._price_type_key
+
+        # ── 3. Fallback: read ВидЦены_Key from an existing price record ──────
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
             ok, data = await self._request(
                 "GET",
@@ -442,7 +454,7 @@ class OneCClient:
                         logger.info(f"1C price type (from register {register}): {self._price_type_key}")
                         return self._price_type_key
 
-        logger.warning("1C price type key not found — prices will be saved without ВидЦены_Key")
+        logger.warning("1C price type key not found — will attempt price write without ВидЦены_Key")
         return None
 
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
