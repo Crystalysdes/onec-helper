@@ -478,7 +478,7 @@ async def catalog_import_status(current_user: User = Depends(get_current_admin))
 @router.post("/import-catalog")
 async def import_russian_catalog(
     limit: int = 2_000_000,
-    auto_clear: bool = True,
+    auto_clear: bool = False,
     current_user: User = Depends(get_current_admin),
 ):
     job = await _ci.get_latest_job()

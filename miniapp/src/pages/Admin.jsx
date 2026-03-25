@@ -53,6 +53,7 @@ export default function Admin() {
   const [catLimit, setCatLimit] = useState(100000)
   const [catProgress, setCatProgress] = useState(null)
   const [catFile, setCatFile] = useState(null)
+  const [catClear, setCatClear] = useState(false)
   const [aiCleanLoading, setAiCleanLoading] = useState(false)
   const [aiCleanProgress, setAiCleanProgress] = useState(null)
   const [autoAiClean, setAutoAiClean] = useState(false)
@@ -507,9 +508,31 @@ export default function Admin() {
                   </div>
                 )}
 
-                <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  ⚡ Перед импортом старые данные очищаются автоматически
-                </p>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <div
+                    className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 transition-colors"
+                    style={{
+                      background: catClear ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
+                      border: catClear ? 'none' : '1.5px solid var(--tg-theme-hint-color)',
+                    }}
+                    onClick={() => setCatClear(v => !v)}
+                  >
+                    {catClear && <span className="text-white text-[11px] font-bold leading-none">✓</span>}
+                  </div>
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    Очистить старые данные перед импортом
+                  </span>
+                </label>
+                {!catClear && (
+                  <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    ℹ️ Новые товары добавятся к уже существующим
+                  </p>
+                )}
+                {catClear && (
+                  <p className="text-xs" style={{ color: '#f59e0b' }}>
+                    ⚠️ Весь каталог будет удалён перед загрузкой нового
+                  </p>
+                )}
                 <button
                   className="btn-primary w-full flex items-center justify-center gap-2 text-sm disabled:opacity-50"
                   disabled={catLoading}
@@ -517,8 +540,8 @@ export default function Admin() {
                     setCatLoading(true)
                     setCatProgress(null)
                     try {
-                      await adminAPI.importCatalog(catLimit)
-                      toast.success('Каталог очищен, импорт запущен...')
+                      await adminAPI.importCatalog(catLimit, catClear)
+                      toast.success(catClear ? 'Каталог очищен, импорт запущен...' : 'Импорт запущен...')
                       startCatPoll()
                     } catch (e) {
                       toast.error(e.response?.data?.detail || 'Ошибка')

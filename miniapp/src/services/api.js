@@ -120,8 +120,8 @@ export const adminAPI = {
     api.post(`/admin/subscriptions/${userId}/grant`, { days }),
   revokeSubscription: (userId) => api.delete(`/admin/subscriptions/${userId}`),
   backfillCatalog: () => api.post('/admin/backfill-catalog'),
-  importCatalog: (limit) =>
-    api.post('/admin/import-catalog', null, { params: { limit, auto_clear: true }, timeout: 60000 }),
+  importCatalog: (limit, autoClear = false) =>
+    api.post('/admin/import-catalog', null, { params: { limit, auto_clear: autoClear }, timeout: 60000 }),
   catalogImportStatus: () => api.get('/admin/catalog-import-status'),
   catalogFileCheck: () => api.get('/admin/catalog-file-check'),
   aiCleanupCatalog: () =>
