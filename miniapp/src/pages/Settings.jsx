@@ -21,6 +21,8 @@ export default function Settings() {
   const [testLoading, setTestLoading] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [syncLoading, setSyncLoading] = useState(false)
+  const [diagnoseLoading, setDiagnoseLoading] = useState(false)
+  const [diagnoseResult, setDiagnoseResult] = useState(null)
   const [storeDetail, setStoreDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -186,6 +188,19 @@ export default function Settings() {
       toast.error('Ошибка синхронизации')
     } finally {
       setSyncLoading(false)
+    }
+  }
+
+  const diagnoseIntegration = async (storeId, intId) => {
+    setDiagnoseLoading(true)
+    setDiagnoseResult(null)
+    try {
+      const res = await storesAPI.diagnoseIntegration(storeId, intId)
+      setDiagnoseResult(res.data)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка диагностики')
+    } finally {
+      setDiagnoseLoading(false)
     }
   }
 
@@ -631,7 +646,17 @@ export default function Settings() {
                       {testLoading
                         ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                         : <TestTube2 size={14} />}
-                      Проверить
+                      Тест
+                    </button>
+                    <button
+                      className="btn-secondary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
+                      disabled={diagnoseLoading}
+                      onClick={() => diagnoseIntegration(currentStore.id, int.id)}
+                    >
+                      {diagnoseLoading
+                        ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                        : <span>🔍</span>}
+                      Диагностика
                     </button>
                     <button
                       className="btn-primary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
@@ -644,6 +669,47 @@ export default function Settings() {
                       Импорт
                     </button>
                   </div>
+                  {diagnoseResult && (
+                    <div className="flex flex-col gap-2 p-3 rounded-xl text-xs" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                      <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>🔍 Результат диагностики</p>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {[
+                          ['Объектов OData', diagnoseResult.entities_published],
+                          ['Товаров в 1С (первые 5)', diagnoseResult.products_ok ? diagnoseResult.products_sample?.length : '❌ ошибка'],
+                          ['Штрихкодов в 1С', diagnoseResult.barcodes_fetched],
+                          ['Товаров в боте', diagnoseResult.synced_in_db],
+                          ['Товаров с баркодом', diagnoseResult.synced_with_barcode],
+                        ].map(([label, val]) => (
+                          <div key={label} className="p-2 rounded-lg" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                            <p style={{ color: 'var(--tg-theme-hint-color)' }}>{label}</p>
+                            <p className="font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{val ?? '—'}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {diagnoseResult.products_sample?.length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Примеры товаров из 1С:</p>
+                          {diagnoseResult.products_sample.map((p, i) => (
+                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {p.name} <span style={{ color: 'var(--tg-theme-hint-color)' }}>({p.onec_id?.slice(0,8)}...)</span></p>
+                          ))}
+                        </div>
+                      )}
+                      {Object.keys(diagnoseResult.barcodes_sample || {}).length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Примеры штрихкодов:</p>
+                          {Object.entries(diagnoseResult.barcodes_sample).map(([k, v]) => (
+                            <p key={k} style={{ color: 'var(--tg-theme-text-color)' }}>• {v}</p>
+                          ))}
+                        </div>
+                      )}
+                      {diagnoseResult.entities?.length > 0 && (
+                        <details>
+                          <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>Опубликованные объекты OData</summary>
+                          <p style={{ color: 'var(--tg-theme-text-color)' }} className="mt-1">{diagnoseResult.entities.join(', ')}</p>
+                        </details>
+                      )}
+                    </div>
+                  )}
                   {testResult && (() => {
                     const needsSetup = testResult.success && testResult.message?.includes('не опубликованы')
                     const setupUrl = needsSetup ? getSetupUrl(int.onec_url) : null
