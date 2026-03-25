@@ -454,22 +454,25 @@ async def recognize_photo(
     db: AsyncSession = Depends(get_db),
 ):
     from backend.services.ai_service import AIService
+    from backend.services.barcode_service import BarcodeService
+    import asyncio
 
     store_id_uuid = UUID(store_id)
     await _check_store_access(store_id_uuid, current_user, db)
 
     contents = await file.read()
 
-    # Compress image to max 800px before sending to AI (reduces payload ~10x)
-    import asyncio
-    compressed = await asyncio.get_event_loop().run_in_executor(
-        None, _compress_image, contents, 800
-    )
+    # Step 1: try barcode detection locally (fast, <1s, no AI needed)
+    loop = asyncio.get_event_loop()
+    barcodes = await loop.run_in_executor(None, BarcodeService().decode, contents)
+    if barcodes:
+        return {"recognized": {"barcode": barcodes[0]}, "ocr_text": "", "source": "barcode"}
 
+    # Step 2: no barcode → compress + AI vision
+    compressed = await loop.run_in_executor(None, _compress_image, contents, 512)
     ai_service = AIService()
     product_data = await ai_service.recognize_product_from_image("", compressed)
-
-    return {"recognized": product_data, "ocr_text": ""}
+    return {"recognized": product_data, "ocr_text": "", "source": "ai"}
 
 
 @router.post("/upload-invoice")

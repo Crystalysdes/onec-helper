@@ -28,7 +28,8 @@ class AIService:
             )
             self._model = settings.OPENROUTER_MODEL
             self._fast_model = settings.OPENROUTER_FAST_MODEL
-            logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}")
+            self._vision_model = getattr(settings, 'OPENROUTER_VISION_MODEL', settings.OPENROUTER_FAST_MODEL)
+            logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}, vision={self._vision_model}")
         else:
             import anthropic
             self._mode = "anthropic"
@@ -37,6 +38,7 @@ class AIService:
                 timeout=40.0,
             )
             self._fast_model = settings.CLAUDE_MODEL
+            self._vision_model = settings.CLAUDE_MODEL
             self._model = settings.CLAUDE_MODEL
             logger.info(f"AIService: Anthropic direct mode, model={self._model}")
 
@@ -169,7 +171,18 @@ class AIService:
         }]
 
         try:
-            content = await self._call(messages, max_tokens=150, fast=True)
+            # Use dedicated vision model (faster than general fast model)
+            model = self._vision_model if self._mode == "openai" else None
+            if model and model != self._fast_model:
+                # Override model for this call
+                r = await self._client.chat.completions.create(
+                    model=model, max_tokens=150,
+                    messages=[{"role": "system", "content": "You are a product recognition assistant. Always respond with valid JSON only."}] + messages,
+                    timeout=15.0,
+                )
+                content = r.choices[0].message.content.strip()
+            else:
+                content = await self._call(messages, max_tokens=150, fast=True)
             return json.loads(_strip_json(content))
         except Exception as e:
             logger.error(f"AI product recognition error: {e}")

@@ -503,19 +503,29 @@ export default function AddProduct() {
       fd.append('file', file)
       fd.append('store_id', currentStore?.id || '')
       const res = await productsAPI.recognizePhoto(fd)
-      const r = res.data.recognized || res.data
+      const data = res.data
+      const r = data.recognized || data
+
+      // Barcode found locally (fast path) — go straight to catalog lookup
+      if (data.source === 'barcode' && r?.barcode) {
+        setPhotoState(null)
+        checkBarcodeGlobal(r.barcode, setAiScan)
+        setMethod('ai')
+        return
+      }
+
       if (r?.name) {
         setPhotoProduct(r)
         setPhotoState('scan')
       } else {
         setPhotoState(null)
-        toast.error('Не удалось распознать товар')
+        toast.error('Не удалось распознать товар на фото')
       }
     } catch {
       setPhotoState(null)
       toast.error('Ошибка распознавания')
     }
-  }, [currentStore])
+  }, [currentStore, checkBarcodeGlobal])
 
   const handlePhotoBarcodeScan = useCallback(() => {
     openScanner(async (code) => {
