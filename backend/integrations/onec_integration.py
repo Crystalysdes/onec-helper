@@ -41,7 +41,7 @@ class OneCClient:
                 logger.warning(
                     f"1C API error {response.status_code}: {response.text[:200]}"
                 )
-                return False, {"error": response.text[:200], "status": response.status_code}
+                return False, {"error": response.text[:600], "status": response.status_code}
         except httpx.ConnectError as e:
             logger.error(f"1C connection error: {e}")
             return False, {"error": f"Ошибка подключения: {str(e)}"}
@@ -529,19 +529,32 @@ class OneCClient:
                                   if not k.startswith("odata")}
 
         bc_results = []
-        # ── Catalog variants
+        # ── 1. PATCH Catalog_Номенклатура tabular section (most reliable for 1C Fresh)
+        for bc_pl in [
+            {"ШтрихкодыНоменклатуры": [{"LineNumber": 1, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}]},
+            {"ШтрихкодыНоменклатуры": [{"LineNumber": 1, "Штрихкод": test_barcode}]},
+            {"Штрихкоды": [{"LineNumber": 1, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}]},
+        ]:
+            key_name = list(bc_pl.keys())[0]
+            ok, resp = await self._request(
+                "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')", json=bc_pl
+            )
+            bc_results.append({"entity": f"PATCH Catalog_Номенклатура/{key_name}",
+                               "payload": str(list(bc_pl[key_name][0].keys())), "ok": ok, "resp": str(resp)[:600]})
+            if ok:
+                break
+        # ── 2. Catalog variants
         for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
             for owner_field in ("Владелец_Key", "Owner_Key"):
                 pl = {owner_field: onec_id, f"{owner_field[:-4]}_Type": "StandardODATA.Catalog_Номенклатура",
                       "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}
                 ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
                 bc_results.append({"entity": entity, "payload": "catalog+type", "ok": ok, "resp": str(resp)[:600]})
-        # ── InformationRegister variants
+        # ── 3. InformationRegister POST variants
         for entity in ("InformationRegister_ШтрихкодыНоменклатуры", "InformationRegister_Штрихкоды"):
             for pl in [
                 {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
                 {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type},
-                {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "Характеристика_Key": _zero},
                 {"Период": period, "Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
             ]:
                 ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
@@ -551,15 +564,24 @@ class OneCClient:
 
         price_results = []
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
-            for pl in [
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                 "ВидЦены_Key": price_type_key or _zero, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                 "ВидЦены_Key": price_type_key or _zero},
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price},
+            vid = price_type_key or _zero
+            for method, pl in [
+                ("POST", {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                          "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero}),
+                ("POST", {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                          "ВидЦены_Key": vid}),
+                # PUT with composite key in URL
+                ("PUT", {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                         "ВидЦены_Key": vid, "Характеристика_Key": _zero, "Упаковка_Key": _zero}),
             ]:
-                ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
-                price_results.append({"register": register, "payload": str(list(pl.keys())),
+                url_path = f"odata/standard.odata/{register}"
+                if method == "PUT":
+                    url_path += (f"(Период=datetime'{period}',Номенклатура_Key=guid'{onec_id}',"
+                                 f"ВидЦены_Key=guid'{vid}',Характеристика_Key=guid'{_zero}',"
+                                 f"Упаковка_Key=guid'{_zero}')")
+                ok, resp = await self._request(method, url_path, json=pl)
+                price_results.append({"register": register, "method": method,
+                                      "payload": str(list(pl.keys())),
                                       "ok": ok, "resp": str(resp)[:600]})
                 if ok:
                     break
