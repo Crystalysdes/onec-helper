@@ -126,7 +126,7 @@ export default function ProductDetail() {
   const isLowStock = product.quantity != null && product.quantity < 5
 
   return (
-    <div className="flex flex-col pb-10">
+    <div className="flex flex-col pb-28" style={{ minHeight: '100vh', overflowY: 'auto' }}>
       {scannerCb && (
         <BarcodeScanner
           onResult={(code) => { setScannerCb(prev => { prev?.fn(code); return null }) }}
