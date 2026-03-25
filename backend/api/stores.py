@@ -500,7 +500,7 @@ async def diagnose_onec(
     try:
         ok_products, products = await client.get_products(limit=5, offset=0)
         if not ok_products:
-            products_error = "Catalog_Номенклатура не опубликован в OData"
+            products_error = await client.get_products_raw_error()
     except Exception as e:
         ok_products, products = False, []
         products_error = str(e)

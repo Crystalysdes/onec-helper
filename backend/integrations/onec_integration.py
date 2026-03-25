@@ -67,13 +67,19 @@ class OneCClient:
         self, limit: int = 100, offset: int = 0
     ) -> Tuple[bool, List[dict]]:
         """Fetch products (nomenclature) from 1C."""
-        path = (
-            f"odata/standard.odata/Catalog_Номенклатура"
-            f"?$format=json&$top={limit}&$skip={offset}"
-            f"&$select=Ref_Key,Code,Description,Артикул,ЕдиницаИзмерения_Key,ВидНоменклатуры_Key"
-        )
-        success, data = await self._request("GET", path)
+        base_path = f"odata/standard.odata/Catalog_Номенклатура"
+        attempts = [
+            f"{base_path}?$format=json&$top={limit}&$skip={offset}&$filter=IsFolder eq false",
+            f"{base_path}?$format=json&$top={limit}&$skip={offset}",
+        ]
+        success, data = False, {}
+        for path in attempts:
+            success, data = await self._request("GET", path)
+            if success:
+                break
         if not success:
+            err = data.get("error", str(data)) if isinstance(data, dict) else str(data)
+            logger.warning(f"get_products failed: {err}")
             return False, []
 
         items = data.get("value", []) if isinstance(data, dict) else []
@@ -91,34 +97,41 @@ class OneCClient:
             })
         return True, products
 
+    async def get_products_raw_error(self, limit: int = 5) -> str:
+        """Return raw error text from get_products attempt for diagnostics."""
+        path = f"odata/standard.odata/Catalog_Номенклатура?$format=json&$top={limit}"
+        success, data = await self._request("GET", path)
+        if success:
+            return f"OK: {len(data.get('value', []))} items"
+        return f"HTTP {data.get('status', '?')}: {data.get('error', str(data))[:300]}"
+
     async def get_barcodes(self) -> dict:
-        """Fetch all barcodes from Catalog_НоменклатураШтрихкоды.
-        Returns dict: onec_id -> barcode string."""
+        """Fetch all barcodes. Returns dict: onec_id -> barcode string."""
         candidates = [
             ("Catalog_НоменклатураШтрихкоды", "Owner_Key", "Штрихкод"),
             ("Catalog_НоменклатураШтрихкоды", "Владелец_Key", "Штрихкод"),
             ("InformationRegister_Штрихкоды", "Номенклатура_Key", "Штрихкод"),
         ]
         for entity, owner_field, bc_field in candidates:
-            path = (
-                f"odata/standard.odata/{entity}"
-                f"?$format=json&$top=10000"
-                f"&$select={owner_field},{bc_field}"
-            )
-            success, data = await self._request("GET", path)
-            if not success:
-                continue
-            items = data.get("value", []) if isinstance(data, dict) else []
-            if not items:
-                continue
-            result = {}
-            for item in items:
-                oid = str(item.get(owner_field, ""))
-                bc = str(item.get(bc_field, "")).strip()
-                if oid and bc and bc.isdigit() and oid not in result:
-                    result[oid] = bc
-            logger.info(f"1C barcodes loaded from {entity}: {len(result)} entries")
-            return result
+            # try without $select first (most compatible)
+            for path in [
+                f"odata/standard.odata/{entity}?$format=json&$top=10000",
+                f"odata/standard.odata/{entity}?$format=json&$top=10000&$select={owner_field},{bc_field}",
+            ]:
+                success, data = await self._request("GET", path)
+                if not success:
+                    break
+                items = data.get("value", []) if isinstance(data, dict) else []
+                if not items:
+                    break
+                result = {}
+                for item in items:
+                    oid = str(item.get(owner_field, "") or item.get("Владелец_Key", ""))
+                    bc = str(item.get(bc_field, "") or item.get("Штрихкод", "")).strip()
+                    if oid and bc and bc.isdigit() and oid not in result:
+                        result[oid] = bc
+                logger.info(f"1C barcodes loaded from {entity}: {len(result)} entries")
+                return result
         logger.warning("1C barcodes: no barcode catalog found in OData")
         return {}
 
