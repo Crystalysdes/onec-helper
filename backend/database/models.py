@@ -136,6 +136,21 @@ class ProductCache(Base):
         return f"<Product {self.name}>"
 
 
+class CatalogImportJob(Base):
+    """Tracks catalog import progress — stored in DB so it survives restarts/multi-worker."""
+    __tablename__ = "catalog_import_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(20), nullable=False, default="running")   # running / done / error
+    stage = Column(String(30), nullable=False, default="reading")    # reading / importing / done
+    imported = Column(Integer, nullable=False, default=0)
+    skipped = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    file_name = Column(String(255), nullable=True)
+
+
 class GlobalProduct(Base):
     """Shared product catalog — populated from all users, searchable by barcode."""
     __tablename__ = "global_products"
