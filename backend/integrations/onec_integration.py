@@ -181,21 +181,22 @@ class OneCClient:
             return prices
         return {}
 
-    async def set_price(self, onec_id: str, price: float) -> bool:
-        """Write retail price for a product in 1C price register.
+    async def set_price(self, onec_id: str, price: float,
+                        price_type_name: str | None = None) -> bool:
+        """Write price for a product in 1C.
 
-        Strategy:
-          1. Fetch ВидЦены_Key (price type) — mandatory dimension in 1C.
-          2. Look for an existing record with this product+type → PATCH it.
-          3. If none found → POST a new record.
-          4. Fallback: repeat for alternate register names.
+        price_type_name: hint to select price type, e.g. 'розн' for retail,
+                         'учет' / 'закуп' for purchase/accounting.
         """
-        onec_id = str(onec_id).strip("{}")  # normalize GUID format
+        onec_id = str(onec_id).strip("{}")
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
-        price_type_key = await self._get_or_fetch_price_type_key()
         _zero = "00000000-0000-0000-0000-000000000000"
+        if price_type_name:
+            price_type_key = await self._get_price_type_key_by_name(price_type_name)
+        else:
+            price_type_key = await self._get_or_fetch_price_type_key()
         vid_key = price_type_key or _zero
 
         # ── 1. Document_УстановкаЦенНоменклатуры (tabular section = Запасы)
@@ -466,6 +467,15 @@ class OneCClient:
         logger.warning("1C price type key not found — will attempt price write without ВидЦены_Key")
         return None
 
+    async def _get_price_type_key_by_name(self, name_hint: str) -> str | None:
+        """Return Ref_Key of the price type whose Description contains name_hint (case-insensitive)."""
+        types = await self.get_price_types()
+        hint = name_hint.lower()
+        match = next((t for t in types if hint in t.get("Description", "").lower()), None)
+        if match:
+            return str(match.get("Ref_Key", "")).strip("{}")
+        return None
+
     async def _get_org_key(self) -> str | None:
         """Return GUID of the first organisation from 1C."""
         if hasattr(self, "_org_key_cache") and self._org_key_cache:
@@ -500,13 +510,22 @@ class OneCClient:
             return True
         logger.warning(f"1C barcode PATCH Catalog/Штрихкод failed: {resp}")
 
-        # ── 2. PUT InformationRegister with full key (discover unit from product)
+        # ── 2. POST InformationRegister with all 5 dimension keys in body
         unit_key = _zero
         ok_u, prod = await self._request(
             "GET", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')?$format=json"
         )
         if ok_u and isinstance(prod, dict):
             unit_key = str(prod.get("ЕдиницаХранения_Key") or _zero).strip("{}")
+        ok, resp = await self._request(
+            "POST", "odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры",
+            json={"Номенклатура_Key": onec_id, "Штрихкод": barcode, "ТипШтрихкода": bc_type,
+                  "Характеристика_Key": _zero, "Партия_Key": _zero, "ЕдиницаИзмерения_Key": unit_key}
+        )
+        if ok:
+            logger.info(f"1C barcode set (POST InformationRegister): {barcode} → {onec_id}")
+            return True
+        logger.warning(f"1C barcode POST InformationRegister failed: {resp}")
         put_key = (f"Номенклатура_Key=guid'{onec_id}',"
                    f"Штрихкод='{barcode}',"
                    f"Характеристика_Key=guid'{_zero}',"
@@ -601,10 +620,16 @@ class OneCClient:
             json={"Штрихкод": test_barcode}
         )
         bc_results.append({"entity": "PATCH Catalog_Ном/Штрихкод (real field)",
-                           "ok": ok, "resp": str(resp)[:600]})
-        # ── PUT InformationRegister with full 3-part key (Ном+Штрихкод+Характеристика_Key)
-        # unit_key already fetched in nom_fields GET above
+                           "ok": ok, "resp": str(resp)[:400]})
+        # ── POST InformationRegister with ALL 5 dimension keys in body
         probe_unit = unit_key or _zero
+        ok, resp = await self._request(
+            "POST", "odata/standard.odata/InformationRegister_ШтрихкодыНоменклатуры",
+            json={"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type,
+                  "Характеристика_Key": _zero, "Партия_Key": _zero, "ЕдиницаИзмерения_Key": probe_unit}
+        )
+        bc_results.append({"entity": "InformationRegister_ШтрихкодыНоменклатуры [POST 5-keys]",
+                           "ok": ok, "resp": str(resp)[:400]})
         put_key3 = (f"Номенклатура_Key=guid'{onec_id}',"
                     f"Штрихкод='{test_barcode}',"
                     f"Характеристика_Key=guid'{_zero}',"
