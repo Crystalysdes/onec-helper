@@ -623,6 +623,62 @@ async def update_product(
     return result
 
 
+class EnrichRequest(BaseModel):
+    name: str
+    barcode: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    description: Optional[str] = None
+
+
+@router.post("/ai-enrich")
+async def ai_enrich_product(
+    payload: EnrichRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fast AI normalization of a single product. Persists result to global_products."""
+    from backend.services.ai_service import AIService
+    import json as _json
+    from sqlalchemy import text as _text
+    from loguru import logger as _log
+
+    ai = AIService()
+    prompt = (
+        "Нормализуй товар для российского ритейла. "
+        "Верни ТОЛЬКО JSON без пояснений, без markdown:\n"
+        '{"name":"название на рус","category":"категория","unit":"шт"}\n\n'
+        f'Название: {payload.name!r}\n'
+        f'Категория: {payload.category or ""!r}\n'
+        f'Единица: {payload.unit or ""!r}'
+    )
+    try:
+        raw = await ai._call([{"role": "user", "content": prompt}], max_tokens=200, fast=True)
+        import re as _re
+        m = _re.search(r'\{[^}]+\}', raw, _re.DOTALL)
+        enriched = _json.loads(m.group()) if m else {}
+    except Exception as e:
+        _log.warning(f"ai-enrich failed: {e}")
+        enriched = {}
+
+    name = (enriched.get("name") or payload.name).strip()[:255]
+    category = (enriched.get("category") or payload.category or "").strip()[:100] or None
+    unit = (enriched.get("unit") or payload.unit or "шт").strip()[:20]
+
+    # Persist improved data back to global_products
+    if payload.barcode:
+        try:
+            from sqlalchemy import text as _t
+            await db.execute(_t(
+                "UPDATE global_products SET name=:n, category=:c, unit=:u WHERE barcode=:b"
+            ), {"n": name, "c": category, "u": unit, "b": payload.barcode.strip()})
+            await db.commit()
+        except Exception as exc:
+            _log.warning(f"ai-enrich persist failed: {exc}")
+
+    return {"name": name, "category": category, "unit": unit}
+
+
 @router.get("/ai-status")
 async def ai_status(current_user: User = Depends(get_current_user)):
     """Diagnostic endpoint: check which AI mode is active and test a quick call."""

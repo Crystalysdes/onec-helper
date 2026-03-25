@@ -96,6 +96,7 @@ export const productsAPI = {
     fd.append('file', file)
     return api.post('/products/import-csv', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
   },
+  aiEnrich: (payload) => api.post('/products/ai-enrich', payload, { timeout: 10000 }),
 }
 
 export const reportsAPI = {

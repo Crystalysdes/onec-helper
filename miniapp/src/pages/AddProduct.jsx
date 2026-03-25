@@ -255,7 +255,7 @@ export default function AddProduct() {
   const suppressSearch = useRef(false)
 
   // Fill all form fields from a selected suggestion (except quantity)
-  const handleSuggestionSelect = useCallback((product) => {
+  const handleSuggestionSelect = useCallback(async (product) => {
     suppressSearch.current = true
     setValue('name', product.name || '')
     if (product.price != null) setValue('price', product.price)
@@ -267,6 +267,22 @@ export default function AddProduct() {
     if (product.description) setValue('description', product.description)
     setNameSuggestions([])
     setManualDuplicate(null)
+    // Enrich catalog products silently then update form
+    if (product.source === 'catalog') {
+      try {
+        const r = await productsAPI.aiEnrich({
+          name: product.name,
+          barcode: product.barcode || null,
+          category: product.category || null,
+          unit: product.unit || null,
+        })
+        const e = r.data
+        suppressSearch.current = true
+        if (e.name) setValue('name', e.name)
+        if (e.category) setValue('category', e.category)
+        if (e.unit) setValue('unit', e.unit)
+      } catch { /* keep original */ }
+    }
   }, [setValue])
 
   // Debounced search: populate autocomplete + detect exact duplicate
@@ -331,6 +347,24 @@ export default function AddProduct() {
       .catch(() => {})
   }, [method, currentStore])
 
+  // ── Silent AI enrichment helper ──────────────────────────────────
+  const enrichAndUpdate = useCallback(async (product, setScan, code) => {
+    if (!product?.name) return
+    try {
+      const r = await productsAPI.aiEnrich({
+        name: product.name,
+        barcode: product.barcode || code || null,
+        category: product.category || null,
+        unit: product.unit || null,
+      })
+      const e = r.data
+      setScan(prev => prev ? {
+        ...prev,
+        product: { ...prev.product, ...e },
+      } : prev)
+    } catch { /* non-fatal — keep original data */ }
+  }, [])
+
   // ── Helper: check barcode globally (with local-store fallback) ────────
   const checkBarcodeGlobal = useCallback(async (code, setScan) => {
     setScan({ code, status: 'checking', product: null, storeName: null })
@@ -340,6 +374,10 @@ export default function AddProduct() {
       const res = await productsAPI.checkBarcode(code)
       if (res.data.found) {
         setScan({ code, status: 'found', product: res.data.product, storeName: res.data.store_name })
+        // Silently enrich catalog products in the background
+        if (res.data.source === 'catalog') {
+          enrichAndUpdate(res.data.product, setScan, code)
+        }
         return
       }
     } catch { /* endpoint broken — fall through to local search */ }
@@ -358,7 +396,7 @@ export default function AddProduct() {
     }
 
     setScan({ code, status: 'new', product: null, storeName: null })
-  }, [currentStore])
+  }, [currentStore, enrichAndUpdate])
 
   // ── Helper: copy existing product into current store ─────────────
   const copyExisting = useCallback(async (product, onDone) => {
