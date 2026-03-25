@@ -62,16 +62,18 @@ async def list_all_users(
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(User).offset((page - 1) * limit).limit(limit).order_by(User.created_at.desc())
-    )
-    users = result.scalars().all()
+    rows = (await db.execute(
+        select(User, Subscription)
+        .outerjoin(Subscription, Subscription.user_id == User.id)
+        .order_by(User.created_at.desc())
+        .offset((page - 1) * limit).limit(limit)
+    )).all()
 
     data = []
-    for u in users:
-        stores_count = await db.execute(
+    for u, sub in rows:
+        stores_count = (await db.execute(
             select(func.count(Store.id)).where(Store.owner_id == u.id)
-        )
+        )).scalar()
         data.append({
             "id": str(u.id),
             "telegram_id": u.telegram_id,
@@ -79,8 +81,9 @@ async def list_all_users(
             "first_name": u.telegram_first_name,
             "is_active": u.is_active,
             "is_admin": u.is_admin,
-            "stores_count": stores_count.scalar(),
+            "stores_count": stores_count,
             "created_at": u.created_at,
+            "subscription": _sub_dict(sub),
         })
     return data
 
@@ -304,6 +307,44 @@ async def get_user_subscription(
                 "created_at": p.created_at,
             }
             for p in payments
+        ],
+    }
+
+
+@router.get("/global-catalog")
+async def admin_list_global_catalog(
+    search: str = "",
+    page: int = 1,
+    limit: int = 50,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import or_
+    offset = (page - 1) * limit
+    q = select(GlobalProduct)
+    if search:
+        q = q.where(
+            or_(
+                GlobalProduct.name.ilike(f"%{search}%"),
+                GlobalProduct.barcode.ilike(f"%{search}%"),
+                GlobalProduct.article.ilike(f"%{search}%"),
+            )
+        )
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    items = (await db.execute(q.order_by(GlobalProduct.name).offset(offset).limit(limit))).scalars().all()
+    return {
+        "total": total,
+        "page": page,
+        "items": [
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "barcode": p.barcode,
+                "article": p.article,
+                "category": p.category,
+                "unit": p.unit,
+            }
+            for p in items
         ],
     }
 

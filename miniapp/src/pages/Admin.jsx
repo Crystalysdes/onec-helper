@@ -164,9 +164,10 @@ export default function Admin() {
         const res = await adminAPI.logs()
         setLogs(res.data)
       } else if (t === 'db') {
-        const res = await adminAPI.products({ search: dbSearch, page: dbPage, limit: 50 })
+        const res = await adminAPI.globalCatalog({ search: dbSearch, page: 1, limit: 50 })
         setDbProducts(res.data.items || [])
         setDbTotal(res.data.total || 0)
+        setDbPage(1)
       }
     } catch {
       toast.error('Ошибка загрузки данных')
@@ -190,8 +191,12 @@ export default function Admin() {
   const loadDbProducts = async (search = dbSearch, page = 1) => {
     setLoading(true)
     try {
-      const res = await adminAPI.products({ search, page, limit: 50 })
-      setDbProducts(res.data.items || [])
+      const res = await adminAPI.globalCatalog({ search, page, limit: 50 })
+      if (page === 1) {
+        setDbProducts(res.data.items || [])
+      } else {
+        setDbProducts(prev => [...prev, ...(res.data.items || [])])
+      }
       setDbTotal(res.data.total || 0)
       setDbPage(page)
     } catch { toast.error('Ошибка загрузки') }
@@ -592,37 +597,18 @@ export default function Admin() {
             </div>
           ) : (
             dbProducts.map(p => (
-              <div key={p.id} className="flex items-center gap-2">
-                {dbSelectMode && (
-                  <button className="flex-shrink-0 active:opacity-60" onClick={() => toggleDbSelect(p.id)}>
-                    {dbSelected.has(p.id)
-                      ? <CheckSquare size={20} style={{ color: 'var(--tg-theme-button-color)' }} />
-                      : <Square size={20} style={{ color: 'var(--tg-theme-hint-color)' }} />}
-                  </button>
-                )}
-                <div
-                  className="flex-1 card py-2.5 flex items-center gap-2 cursor-pointer active:opacity-70"
-                  onClick={() => dbSelectMode ? toggleDbSelect(p.id) : openProduct(p.id)}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
-                    <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      {p.store_name} · {p.owner}{p.category ? ` · ${p.category}` : ''}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
-                    {p.price != null && (
-                      <span className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
-                        {p.price.toLocaleString('ru-RU')} ₽
-                      </span>
-                    )}
-                    {p.quantity != null && (
-                      <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        {p.quantity} {p.unit || 'шт'}
-                      </span>
-                    )}
-                  </div>
+              <div key={p.id} className="card py-2.5 flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
+                  <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    {[p.barcode, p.category, p.unit].filter(Boolean).join(' · ')}
+                  </p>
                 </div>
+                {p.article && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-lg flex-shrink-0" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                    {p.article}
+                  </span>
+                )}
               </div>
             ))
           )}
@@ -657,14 +643,18 @@ export default function Admin() {
                   {u.first_name?.[0] || u.username?.[0]?.toUpperCase() || '?'}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
                       {u.first_name || u.username || `ID ${u.telegram_id}`}
                     </p>
                     {u.is_admin && <span className="badge badge-yellow">Админ</span>}
+                    <SubStatusBadge sub={u.subscription} />
                   </div>
                   <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
                     {u.username ? `@${u.username}` : ''} • {u.stores_count} магаз.
+                    {u.subscription?.days_left != null && u.subscription.is_active
+                      ? ` • ${u.subscription.days_left} дн.`
+                      : ''}
                   </p>
                 </div>
                 <button
