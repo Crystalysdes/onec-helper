@@ -17,6 +17,7 @@ class OneCClient:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+        self._price_type_key: str | None = None  # cached price type guid
 
     def _get_auth_header(self) -> dict:
         credentials = f"{self.auth[0]}:{self.auth[1]}"
@@ -181,58 +182,76 @@ class OneCClient:
         return {}
 
     async def set_price(self, onec_id: str, price: float) -> bool:
-        """Write retail price for a product in 1C price register."""
+        """Write retail price for a product in 1C price register.
+
+        Strategy:
+          1. Fetch ВидЦены_Key (price type) — mandatory dimension in 1C.
+          2. Look for an existing record with this product+type → PATCH it.
+          3. If none found → POST a new record.
+          4. Fallback: repeat for alternate register names.
+        """
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
-        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
-            # 1. Try to find existing record to get the composite key fields
+        price_type_key = await self._get_or_fetch_price_type_key()
+
+        registers = (
+            "InformationRegister_ЦеныНоменклатуры",
+            "InformationRegister_Цены",
+        )
+        for register in registers:
+            # 1. Check if a record already exists for this product + price type
+            filter_parts = [f"Номенклатура_Key eq guid'{onec_id}'"]
+            if price_type_key:
+                filter_parts.append(f"ВидЦены_Key eq guid'{price_type_key}'")
             path = (
                 f"odata/standard.odata/{register}"
-                f"?$format=json&$filter=Номенклатура_Key eq guid'{onec_id}'&$top=1"
+                f"?$format=json&$filter={' and '.join(filter_parts)}&$top=1"
             )
             success, data = await self._request("GET", path)
-            if success and isinstance(data, dict):
-                items = data.get("value", [])
-                if items:
-                    item = items[0]
-                    price_type = item.get("ВидЦены_Key") or item.get("ТипЦен_Key")
-                    currency = item.get("Валюта_Key")
-                    old_period = item.get("Период", period)
+            if not success:
+                continue  # register not published, try next
 
-                    # Build composite key for PATCH
-                    key_parts = [f"Период=datetime'{old_period}'",
-                                 f"Номенклатура_Key=guid'{onec_id}'"]
-                    if price_type:
-                        key_parts.append(f"ВидЦены_Key=guid'{price_type}'")
-                    key = ",".join(key_parts)
-
-                    payload = {"Цена": price, "Период": period}
-                    if price_type:
-                        payload["ВидЦены_Key"] = price_type
-                    if currency:
-                        payload["Валюта_Key"] = currency
-
-                    ok, _ = await self._request(
-                        "PATCH",
-                        f"odata/standard.odata/{register}({key})",
-                        json=payload,
-                    )
-                    if ok:
-                        logger.info(f"1C price updated: {onec_id} → {price}")
-                        return True
-
-                # No existing record — try POST with minimal payload
-                payload = {
-                    "Номенклатура_Key": onec_id,
-                    "Цена": price,
-                    "Период": period,
-                }
-                ok, _ = await self._request("POST", f"odata/standard.odata/{register}", json=payload)
+            items = data.get("value", []) if isinstance(data, dict) else []
+            if items:
+                # PATCH existing record
+                item = items[0]
+                pt_key = item.get("ВидЦены_Key") or price_type_key
+                old_period = item.get("Период", period)
+                key_parts = [f"Период=datetime'{old_period}'",
+                             f"Номенклатура_Key=guid'{onec_id}'"]
+                if pt_key:
+                    key_parts.append(f"ВидЦены_Key=guid'{pt_key}'")
+                key = ",".join(key_parts)
+                patch_payload: dict = {"Цена": price, "Период": period}
+                if item.get("Валюта_Key"):
+                    patch_payload["Валюта_Key"] = item["Валюта_Key"]
+                ok, _ = await self._request(
+                    "PATCH",
+                    f"odata/standard.odata/{register}({key})",
+                    json=patch_payload,
+                )
                 if ok:
-                    logger.info(f"1C price created: {onec_id} → {price}")
+                    logger.info(f"1C price updated ({register}): {onec_id} → {price}")
                     return True
-        logger.warning(f"1C price set failed for onec_id={onec_id}")
+
+            # POST new record
+            post_payload: dict = {
+                "Период": period,
+                "Номенклатура_Key": onec_id,
+                "Цена": price,
+            }
+            if price_type_key:
+                post_payload["ВидЦены_Key"] = price_type_key
+            ok, resp = await self._request(
+                "POST", f"odata/standard.odata/{register}", json=post_payload
+            )
+            if ok:
+                logger.info(f"1C price created ({register}): {onec_id} → {price}")
+                return True
+            logger.debug(f"1C price POST failed ({register}): {resp}")
+
+        logger.warning(f"1C price set failed for onec_id={onec_id}, price={price}")
         return False
 
     async def get_product_prices(self, product_ids: List[str]) -> dict:
@@ -347,22 +366,77 @@ class OneCClient:
         )
         return success, data
 
+    @staticmethod
+    def _detect_barcode_type(barcode: str) -> str:
+        digits_only = barcode.strip().isdigit()
+        length = len(barcode.strip())
+        if digits_only and length == 13:
+            return "EAN13"
+        if digits_only and length == 8:
+            return "EAN8"
+        if digits_only and length == 12:
+            return "EAN13"  # UPC-A treated as EAN13
+        return "Code128"
+
+    async def get_price_types(self) -> list:
+        """Return list of price type records from 1C (Catalog_ВидыЦен or equivalent)."""
+        for entity in ("Catalog_ВидыЦен", "Catalog_ТипыЦен", "Catalog_ВидЦен"):
+            success, data = await self._request(
+                "GET",
+                f"odata/standard.odata/{entity}?$format=json&$top=50"
+                f"&$filter=DeletionMark eq false&$select=Ref_Key,Description",
+            )
+            if success and isinstance(data, dict) and data.get("value"):
+                return data["value"]
+        return []
+
+    async def _get_or_fetch_price_type_key(self) -> str | None:
+        """Return cached price type key, fetching from 1C if needed."""
+        if self._price_type_key:
+            return self._price_type_key
+        types = await self.get_price_types()
+        if not types:
+            return None
+        # Prefer retail (Розничная), fall back to first available
+        retail = next(
+            (t for t in types if "розн" in t.get("Description", "").lower()), None
+        )
+        chosen = retail or types[0]
+        self._price_type_key = chosen.get("Ref_Key")
+        logger.info(f"1C price type selected: {chosen.get('Description')} → {self._price_type_key}")
+        return self._price_type_key
+
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
-        """Try to create a barcode record in 1C for the given product (Ref_Key=onec_id)."""
+        """Create a barcode record in 1C for the given product."""
+        bc_type = self._detect_barcode_type(barcode)
+        # Entity / field name variants across different 1C configurations
         entity_variants = [
-            ("Catalog_ШтрихкодыНоменклатуры", "Владелец_Key", "Штрихкод"),
-            ("Catalog_ШтрихкодыНоменклатуры", "Owner_Key", "Штрихкод"),
-            ("Catalog_НоменклатураШтрихкоды", "Владелец_Key", "Штрихкод"),
+            ("Catalog_ШтрихкодыНоменклатуры", "Владелец_Key", "Штрихкод", "ТипШтрихкода"),
+            ("Catalog_ШтрихкодыНоменклатуры", "Owner_Key",    "Штрихкод", "ТипШтрихкода"),
+            ("Catalog_НоменклатураШтрихкоды",  "Владелец_Key", "Штрихкод", "ТипШтрихкода"),
         ]
-        for entity, owner_field, bc_field in entity_variants:
-            payload = {owner_field: onec_id, bc_field: barcode, "Description": barcode}
+        for entity, owner_field, bc_field, type_field in entity_variants:
+            payload = {
+                owner_field: onec_id,
+                bc_field: barcode,
+                type_field: bc_type,
+                "Description": barcode,
+            }
             success, data = await self._request(
                 "POST", f"odata/standard.odata/{entity}", json=payload
             )
             if success:
-                logger.info(f"1C barcode created: {barcode} → {onec_id} via {entity}")
+                logger.info(f"1C barcode created: {barcode} ({bc_type}) → {onec_id}")
                 return True
-        logger.warning(f"1C barcode create failed for {barcode}: no matching entity")
+            # If rejected because of type field, retry without it
+            payload_no_type = {owner_field: onec_id, bc_field: barcode, "Description": barcode}
+            success, data = await self._request(
+                "POST", f"odata/standard.odata/{entity}", json=payload_no_type
+            )
+            if success:
+                logger.info(f"1C barcode created (no type): {barcode} → {onec_id}")
+                return True
+        logger.warning(f"1C barcode create failed for {barcode} / onec_id={onec_id}")
         return False
 
     async def create_receipt(
