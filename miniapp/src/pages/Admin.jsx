@@ -559,7 +559,21 @@ export default function Admin() {
                 </button>
               </div>
 
-
+              {/* CSV import for user stores */}
+              <div className="card flex flex-col gap-3 mt-1">
+                <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                  📂 Импорт CSV в магазин
+                </p>
+                <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                  Загрузить товары из CSV-файла в конкретный магазин пользователя
+                </p>
+                <button
+                  className="btn-secondary text-sm flex items-center justify-center gap-2"
+                  onClick={() => navigate('/import-csv')}
+                >
+                  <span>📥</span> Открыть импорт CSV
+                </button>
+              </div>
 
             </>
           ) : (

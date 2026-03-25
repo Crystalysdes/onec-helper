@@ -70,35 +70,26 @@ export default function ImportCSV() {
 
       <div className="px-4 flex flex-col gap-4">
         {/* Info block */}
-        <div className="card flex flex-col gap-3">
+        <div className="card flex flex-col gap-2">
           <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
-            📦 Где взять готовую базу товаров
+            � Формат файла
           </p>
-          <div className="flex flex-col gap-2">
-            <div className="p-3 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-              <p className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>Open Food Facts</p>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                3+ млн продуктов с баркодами и категориями. Бесплатно.
-              </p>
-              <div className="mt-2 flex flex-col gap-1">
-                <p className="text-xs font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Как скачать:</p>
-                <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  1. Перейди на <span style={{ color: 'var(--tg-theme-button-color)' }}>world.openfoodfacts.org/data</span>
-                </p>
-                <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  2. Скачай <b style={{ color: 'var(--tg-theme-text-color)' }}>en.openfoodfacts.org/data/en.openfoodfacts.org.products.csv.gz</b>
-                </p>
-                <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  3. Распакуй → получишь CSV с колонками: code, product_name, brands, categories_ru
-                </p>
+          <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+            CSV или TSV файл с колонками:
+          </p>
+          <div className="flex flex-col gap-1">
+            {[
+              ['name / название', 'обязательно'],
+              ['barcode / штрихкод', 'рекомендуется'],
+              ['category / категория', 'необязательно'],
+              ['price / цена', 'необязательно'],
+              ['unit / единица', 'необязательно'],
+            ].map(([col, note]) => (
+              <div key={col} className="flex items-center justify-between px-3 py-1.5 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                <span className="text-xs font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>{col}</span>
+                <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>{note}</span>
               </div>
-            </div>
-            <div className="p-3 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-              <p className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>Свой CSV</p>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                Любой CSV с колонками: <b style={{ color: 'var(--tg-theme-text-color)' }}>name / название</b> (обязательно), а также barcode / code, category / категория, price / цена
-              </p>
-            </div>
+            ))}
           </div>
         </div>
 
