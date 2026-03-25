@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
-import { adminAPI } from '../services/api'
+import { adminAPI, productsAPI } from '../services/api'
 import StatCard from '../components/StatCard'
 
 const TABS = [
@@ -73,6 +73,8 @@ export default function Admin() {
   const [dbDeleting, setDbDeleting] = useState(false)
   const [productModal, setProductModal] = useState(null)
   const [productLoading, setProductLoading] = useState(false)
+  const [adminSyncResult, setAdminSyncResult] = useState(null)
+  const [adminSyncing, setAdminSyncing] = useState(false)
   const [userModal, setUserModal] = useState(null)
   const [userLoading, setUserLoading] = useState(false)
   const [catItemModal, setCatItemModal] = useState(null)
@@ -688,11 +690,12 @@ export default function Admin() {
 
       {/* Product Detail Modal */}
       {(productModal || productLoading) && (
-        <div className="fixed inset-0 z-50 flex items-end" onClick={() => setProductModal(null)}>
+        <div className="fixed inset-0 z-[100] flex items-end" onClick={() => setProductModal(null)}>
           <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.4)' }} />
           <div
             className="relative w-full rounded-t-3xl p-5 flex flex-col gap-4"
-            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '85vh', overflowY: 'auto' }}
+            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '90vh', overflowY: 'auto',
+                     paddingBottom: 'calc(env(safe-area-inset-bottom) + 24px)' }}
             onClick={e => e.stopPropagation()}
           >
             {/* drag handle */}
@@ -738,6 +741,73 @@ export default function Admin() {
                   {productModal.synced_at && <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Синхр.: {new Date(productModal.synced_at).toLocaleString('ru-RU')}</p>}
                 </div>
 
+                {/* Sync to 1C */}
+                <button
+                  className="btn-secondary flex items-center justify-center gap-2 text-sm"
+                  disabled={adminSyncing}
+                  onClick={async () => {
+                    setAdminSyncing(true)
+                    setAdminSyncResult(null)
+                    try {
+                      const r = await productsAPI.syncToOnec(productModal.id)
+                      setAdminSyncResult(r.data)
+                      const allOk = Object.values(r.data.steps || {}).every(s => s.ok !== false)
+                      if (allOk) toast.success('Синхронизация выполнена')
+                      else toast.error('Есть ошибки — см. детали')
+                    } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка синхронизации') }
+                    finally { setAdminSyncing(false) }
+                  }}
+                >
+                  {adminSyncing
+                    ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                    : '🔄'}
+                  {adminSyncing ? 'Отправка в 1С...' : 'Отправить в 1С (штрихкод + цена)'}
+                </button>
+
+                {adminSyncResult && (
+                  <div className="rounded-xl p-3 flex flex-col gap-1.5 text-xs"
+                    style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                    <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📋 Результат</p>
+                    {adminSyncResult.steps?.product && (
+                      <p style={{ color: adminSyncResult.steps.product.ok ? '#22c55e' : '#ef4444' }}>
+                        {adminSyncResult.steps.product.ok ? '✅' : '❌'} Товар ({adminSyncResult.steps.product.action})
+                        {!adminSyncResult.steps.product.ok && ': ' + (adminSyncResult.steps.product.resp || '').slice(0,100)}
+                      </p>
+                    )}
+                    {adminSyncResult.probe && (
+                      <p style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        Типы цен: {adminSyncResult.probe.price_types_found?.length
+                          ? adminSyncResult.probe.price_types_found.join(', ')
+                          : '❌ не найдены'}
+                      </p>
+                    )}
+                    {adminSyncResult.probe?.barcode_attempts && (
+                      <details>
+                        <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          🔖 Штрихкод ({adminSyncResult.probe.barcode_attempts.some(a=>a.ok) ? '✅' : '❌'})
+                        </summary>
+                        {adminSyncResult.probe.barcode_attempts.map((a,i)=>(
+                          <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
+                            {a.ok?'✅':'❌'} {a.entity}: {a.ok?'OK':a.resp?.slice(0,120)}
+                          </p>
+                        ))}
+                      </details>
+                    )}
+                    {adminSyncResult.probe?.price_attempts && (
+                      <details>
+                        <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          💰 Цена ({adminSyncResult.probe.price_attempts.some(a=>a.ok) ? '✅' : '❌'})
+                        </summary>
+                        {adminSyncResult.probe.price_attempts.map((a,i)=>(
+                          <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
+                            {a.ok?'✅':'❌'} {a.register}: {a.ok?'OK':a.resp?.slice(0,120)}
+                          </p>
+                        ))}
+                      </details>
+                    )}
+                  </div>
+                )}
+
                 <button
                   className="btn-secondary flex items-center justify-center gap-2 text-sm"
                   style={{ color: '#ef4444' }}
@@ -747,6 +817,7 @@ export default function Admin() {
                       await adminAPI.bulkDeleteProducts([productModal.id])
                       toast.success('Товар удалён')
                       setProductModal(null)
+                      setAdminSyncResult(null)
                       loadDbProducts(dbSearch, 1)
                     } catch { toast.error('Ошибка') }
                   }}
