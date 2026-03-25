@@ -239,31 +239,22 @@ class OneCClient:
             # POST new record — include zero-GUID optional dimensions required
             # by 1C Retail (Розница) and some УНФ configurations
             _zero = "00000000-0000-0000-0000-000000000000"
-            post_payload: dict = {
-                "Период": period,
-                "Номенклатура_Key": onec_id,
-                "Цена": price,
-                "Характеристика_Key": _zero,
-                "Упаковка_Key": _zero,
-            }
-            if price_type_key:
-                post_payload["ВидЦены_Key"] = price_type_key
-            ok, resp = await self._request(
-                "POST", f"odata/standard.odata/{register}", json=post_payload
-            )
-            if ok:
-                logger.info(f"1C price created ({register}): {onec_id} → {price}")
-                return True
-            # Retry without optional dimensions in case they're not in this config
-            post_payload_min = {k: v for k, v in post_payload.items()
-                                if k not in ("Характеристика_Key", "Упаковка_Key")}
-            ok, resp = await self._request(
-                "POST", f"odata/standard.odata/{register}", json=post_payload_min
-            )
-            if ok:
-                logger.info(f"1C price created minimal ({register}): {onec_id} → {price}")
-                return True
-            logger.debug(f"1C price POST failed ({register}): {resp}")
+            vid_key = price_type_key or _zero
+            # Try variants: with extra dims → without → without ВидЦены_Key entirely
+            for post_payload in [
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦены_Key": vid_key},
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price},
+            ]:
+                ok, resp = await self._request(
+                    "POST", f"odata/standard.odata/{register}", json=post_payload
+                )
+                if ok:
+                    logger.info(f"1C price created ({register}): {onec_id} → {price}")
+                    return True
+                logger.warning(f"1C price POST attempt ({register}, keys={list(post_payload)}): {resp}")
 
         logger.warning(f"1C price set failed for onec_id={onec_id}, price={price}")
         return False
