@@ -478,11 +478,18 @@ async def catalog_import_status(current_user: User = Depends(get_current_admin))
 @router.post("/import-catalog")
 async def import_russian_catalog(
     limit: int = 2_000_000,
+    auto_clear: bool = True,
     current_user: User = Depends(get_current_admin),
 ):
     job = await _ci.get_latest_job()
     if job and job["status"] == "running":
         raise HTTPException(status_code=409, detail="Импорт уже запущен")
+    if auto_clear:
+        from sqlalchemy import text as _text
+        from backend.database.connection import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await db.execute(_text("TRUNCATE TABLE global_products RESTART IDENTITY CASCADE"))
+            await db.commit()
     job_id = await _ci.start_import(limit)
     return {"status": "started", "job_id": job_id}
 

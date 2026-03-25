@@ -507,62 +507,29 @@ export default function Admin() {
                   </div>
                 )}
 
-                <div className="flex gap-2">
-                  <button
-                    className="btn-primary flex-1 flex items-center justify-center gap-2 text-sm disabled:opacity-50"
-                    disabled={catLoading}
-                    onClick={async () => {
-                      setCatLoading(true)
-                      setCatProgress(null)
-                      try {
-                        await adminAPI.importCatalog(catLimit)
-                        toast.success('Импорт запущен...')
-                        startCatPoll()
-                      } catch (e) {
-                        toast.error(e.response?.data?.detail || 'Ошибка')
-                        setCatLoading(false)
-                      }
-                    }}
-                  >
-                    {catLoading
-                      ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Идёт...</>
-                      : '📥 Запустить импорт'}
-                  </button>
-                  <button
-                    className="px-3 py-2 rounded-xl text-xs font-medium active:opacity-70 flex-shrink-0"
-                    style={{ background: 'rgba(245,158,11,0.12)', color: '#f59e0b' }}
-                    disabled={catLoading}
-                    onClick={async () => {
-                      if (!window.confirm('Удалить записи с кракозябрами (кривая кодировка)? Займёт ~1-2 мин.')) return
-                      const tid = toast.loading('Чищу мусорные записи...')
-                      try {
-                        const r = await adminAPI.cleanGarbled()
-                        toast.success(`Удалено ${(r.data.deleted||0).toLocaleString('ru-RU')} мусорных записей`, { id: tid })
-                      } catch (e) {
-                        toast.error(e.response?.data?.detail || 'Ошибка', { id: tid })
-                      }
-                    }}
-                  >
-                    🧹 Мусор
-                  </button>
-                  <button
-                    className="px-3 py-2 rounded-xl text-xs font-medium active:opacity-70 flex-shrink-0"
-                    style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
-                    disabled={catLoading}
-                    onClick={async () => {
-                      if (!window.confirm('Удалить все товары из базы? Это освободит место для нового импорта.')) return
-                      try {
-                        const r = await adminAPI.clearCatalog()
-                        toast.success(`Каталог очищен (${(r.data.deleted||0).toLocaleString('ru-RU')} записей)`)
-                        setCatFile(null)
-                      } catch (e) {
-                        toast.error(e.response?.data?.detail || 'Ошибка очистки')
-                      }
-                    }}
-                  >
-                    🗑 Очистить
-                  </button>
-                </div>
+                <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                  ⚡ Перед импортом старые данные очищаются автоматически
+                </p>
+                <button
+                  className="btn-primary w-full flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                  disabled={catLoading}
+                  onClick={async () => {
+                    setCatLoading(true)
+                    setCatProgress(null)
+                    try {
+                      await adminAPI.importCatalog(catLimit)
+                      toast.success('Каталог очищен, импорт запущен...')
+                      startCatPoll()
+                    } catch (e) {
+                      toast.error(e.response?.data?.detail || 'Ошибка')
+                      setCatLoading(false)
+                    }
+                  }}
+                >
+                  {catLoading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Импорт идёт...</>
+                    : '📥 Импортировать базу'}
+                </button>
               </div>
 
 
