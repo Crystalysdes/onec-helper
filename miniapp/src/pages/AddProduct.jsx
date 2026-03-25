@@ -423,16 +423,31 @@ export default function AddProduct() {
   }, [openScanner, checkBarcodeGlobal])
 
   const handleQuickAdd = useCallback(async () => {
-    if (!aiScan?.code) return toast.error('Сначала отсканируйте QR / штрих-код')
+    if (!aiText.trim()) return toast.error('Напишите описание товара')
     if (!currentStore) return toast.error('Выберите магазин')
     setAiPreviewLoading(true)
     try {
-      const fullText = [aiText.trim(), `Штрих-код: ${aiScan.code}`].filter(Boolean).join('\n')
-      const res = await productsAPI.parseText(fullText)
+      // 1. AI parses free text
+      const parts = [aiText.trim()]
+      if (aiScan?.code) parts.push(`Штрих-код: ${aiScan.code}`)
+      const res = await productsAPI.parseText(parts.join('\n'))
       const data = res.data || {}
-      if (!data.name) data.name = aiText.trim() || aiScan.code
-      if (!data.barcode) data.barcode = aiScan.code
-      setAiPreview(data)
+      if (!data.name) data.name = aiText.trim()
+      if (aiScan?.code && !data.barcode) data.barcode = aiScan.code
+
+      // 2. Search global catalog by parsed name
+      try {
+        const globalRes = await productsAPI.searchGlobal(data.name)
+        const matches = Array.isArray(globalRes.data) ? globalRes.data : []
+        if (matches.length > 0) {
+          const best = matches[0]
+          setAiPreview({ ...data, ...best, name: best.name || data.name, _source: 'catalog' })
+          return
+        }
+      } catch { /* catalog not reachable */ }
+
+      // 3. Not found in catalog — show AI preview with option to scan barcode
+      setAiPreview({ ...data, _source: 'ai', _notInCatalog: true })
     } catch {
       toast.error('Ошибка обработки ИИ')
     } finally { setAiPreviewLoading(false) }
@@ -787,6 +802,34 @@ export default function AddProduct() {
                 </div>
               ))}
             </div>
+            {aiPreview._notInCatalog && (
+              <div className="rounded-xl px-3 py-2.5 flex flex-col gap-2 text-xs"
+                style={{ background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.25)' }}>
+                <p className="font-semibold" style={{ color: '#ca8a04' }}>⚠️ Товар не найден в каталоге</p>
+                <p style={{ color: 'var(--tg-theme-hint-color)' }}>Отсканируйте штрихкод для точного совпадения, или перейдите к редактированию</p>
+                <button
+                  className="flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium active:opacity-70"
+                  style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                  onClick={() => {
+                    const preview = { ...aiPreview }
+                    setAiPreview(null)
+                    openScanner((code) => {
+                      if (!code) return
+                      checkBarcodeGlobal(code, (scan) => {
+                        if (scan?.status === 'found' && scan?.product) {
+                          setAiPreview({ ...preview, ...scan.product, barcode: code })
+                        } else {
+                          setAiPreview({ ...preview, barcode: code, _notInCatalog: false })
+                        }
+                      })
+                    })
+                  }}
+                >
+                  <ScanLine size={15} />
+                  Сканировать штрихкод
+                </button>
+              </div>
+            )}
             <button className="btn-primary flex items-center justify-center gap-2"
               onClick={confirmAiPreview} disabled={loading}>
               {loading
@@ -915,20 +958,18 @@ export default function AddProduct() {
               )}
             </div>
 
-            {/* Add button — only active after barcode scan */}
+            {/* Add button — active when text is entered */}
             <button className="btn-primary flex items-center justify-center gap-2"
               onClick={handleQuickAdd}
-              disabled={loading || aiPreviewLoading || !aiScan || aiScan.status !== 'new'}>
+              disabled={loading || aiPreviewLoading || !aiText.trim()}>
               {(loading || aiPreviewLoading)
                 ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                : <Plus size={16} />}
-              {aiPreviewLoading ? 'ИИ обрабатывает...' : loading ? 'Сохраняю...' : 'Добавить товар'}
+                : <Sparkles size={16} />}
+              {aiPreviewLoading ? 'ИИ распознаёт...' : loading ? 'Сохраняю...' : 'Найти и добавить товар'}
             </button>
-            {!aiScan && (
-              <p className="text-center text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                Сканируйте QR / штрих-код чтобы активировать кнопку
-              </p>
-            )}
+            <p className="text-center text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+              QR / штрих-код — необязательно, но улучшает точность
+            </p>
           </div>
 
         </div>
