@@ -281,6 +281,30 @@ async def check_barcode_global(
     return {"found": False, "product": None, "store_name": None}
 
 
+# Stop-words to skip when tokenising a search query
+_STOP = {"для", "и", "с", "на", "в", "по", "к", "от", "из", "или", "а", "но",
+         "не", "то", "это", "как", "уже", "же", "еще", "ещё", "бы", "ли"}
+
+
+def _tokens(text: str) -> list[str]:
+    """Return significant lowercase words (≥2 chars, not stop-words)."""
+    import re
+    words = re.split(r"[\s,./\\|;:!?()\"']+", text.lower())
+    return [w for w in words if len(w) >= 2 and w not in _STOP]
+
+
+def _word_score_sql(tokens: list[str], col: str, params: dict) -> tuple[str, dict]:
+    """Build a SQL score expression: +1 for each token found in col."""
+    if not tokens:
+        return "0", params
+    cases = []
+    for i, t in enumerate(tokens):
+        key = f"_tok_{i}"
+        cases.append(f"(CASE WHEN lower({col}) LIKE :{key} THEN 1 ELSE 0 END)")
+        params[key] = f"%{t}%"
+    return " + ".join(cases), params
+
+
 @router.get("/search-global")
 async def search_global_catalog(
     q: str = "",
@@ -288,25 +312,39 @@ async def search_global_catalog(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Search GlobalProduct catalog + products_cache cross-tenant by name."""
+    """Search GlobalProduct catalog + products_cache cross-tenant by name.
+    Uses word-by-word scoring so partial / reordered queries still match."""
     q = q.strip()
     if len(q) < 2:
         return []
     from sqlalchemy import text as _text
 
-    # 1. Search GlobalProduct (Open Food Facts catalog)
+    tokens = _tokens(q)
+    # Always include the full query as one extra token for exact-phrase boost
+    if q.lower() not in tokens:
+        tokens = [q.lower()] + tokens
+
+    params: dict = {"lim": limit * 2}
+    score_expr, params = _word_score_sql(tokens, "name", params)
+
+    # Build WHERE: at least one token must match
+    where_parts = [f"lower(name) LIKE :_tok_{i}" for i in range(len(tokens))]
+    where_sql = " OR ".join(where_parts)
+
+    # 1. Search GlobalProduct
     gp_rows = (await db.execute(_text(
-        "SELECT barcode, name, price, purchase_price, article, category, unit, description "
-        "FROM global_products "
-        "WHERE lower(name) LIKE lower(:q) "
-        "ORDER BY name LIMIT :lim"
-    ), {"q": f"%{q}%", "lim": limit})).fetchall()
+        f"SELECT barcode, name, price, purchase_price, article, category, unit, description, "
+        f"({score_expr}) AS score "
+        f"FROM global_products "
+        f"WHERE {where_sql} "
+        f"ORDER BY score DESC, name LIMIT :lim"
+    ), params)).fetchall()
 
     results = [
         {"id": None, "store_id": None, "barcode": r[0], "name": r[1],
          "price": r[2], "purchase_price": r[3], "article": r[4],
          "category": r[5], "unit": r[6], "description": r[7],
-         "quantity": 0, "source": "catalog"}
+         "quantity": 0, "source": "catalog", "_score": r[8]}
         for r in gp_rows
     ]
 
@@ -314,26 +352,34 @@ async def search_global_catalog(
     remaining = limit - len(results)
     if remaining > 0:
         seen_names = {r["name"].lower() for r in results}
+        pc_params = {**params, "active": True}
+        pc_score_expr, pc_params = _word_score_sql(tokens, "pc.name", pc_params)
+        pc_where = " OR ".join(
+            f"lower(pc.name) LIKE :_tok_{i}" for i in range(len(tokens))
+        )
         pc_rows = (await db.execute(_text(
-            "SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
-            "pc.article, pc.category, pc.unit, pc.description "
-            "FROM products_cache pc "
-            "WHERE lower(pc.name) LIKE lower(:q) AND pc.is_active = :active "
-            "LIMIT :lim"
-        ), {"q": f"%{q}%", "lim": remaining * 2, "active": True})).fetchall()
+            f"SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
+            f"pc.article, pc.category, pc.unit, pc.description, "
+            f"({pc_score_expr}) AS score "
+            f"FROM products_cache pc "
+            f"WHERE ({pc_where}) AND pc.is_active = :active "
+            f"ORDER BY score DESC LIMIT :lim"
+        ), pc_params)).fetchall()
         for r in pc_rows:
             if r[1].lower() not in seen_names:
                 results.append({
                     "id": None, "store_id": None, "barcode": r[0], "name": r[1],
                     "price": r[2], "purchase_price": r[3], "article": r[4],
                     "category": r[5], "unit": r[6], "description": r[7],
-                    "quantity": 0, "source": "user_catalog"
+                    "quantity": 0, "source": "user_catalog", "_score": r[8]
                 })
                 seen_names.add(r[1].lower())
             if len(results) >= limit:
                 break
 
-    return results
+    # Sort merged list by score descending, trim to limit
+    results.sort(key=lambda x: x.get("_score", 0), reverse=True)
+    return results[:limit]
 
 
 @router.get("/{store_id}")
