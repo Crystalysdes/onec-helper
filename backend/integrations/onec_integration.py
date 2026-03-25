@@ -235,11 +235,15 @@ class OneCClient:
                     logger.info(f"1C price updated ({register}): {onec_id} → {price}")
                     return True
 
-            # POST new record
+            # POST new record — include zero-GUID optional dimensions required
+            # by 1C Retail (Розница) and some УНФ configurations
+            _zero = "00000000-0000-0000-0000-000000000000"
             post_payload: dict = {
                 "Период": period,
                 "Номенклатура_Key": onec_id,
                 "Цена": price,
+                "Характеристика_Key": _zero,
+                "Упаковка_Key": _zero,
             }
             if price_type_key:
                 post_payload["ВидЦены_Key"] = price_type_key
@@ -248,6 +252,15 @@ class OneCClient:
             )
             if ok:
                 logger.info(f"1C price created ({register}): {onec_id} → {price}")
+                return True
+            # Retry without optional dimensions in case they're not in this config
+            post_payload_min = {k: v for k, v in post_payload.items()
+                                if k not in ("Характеристика_Key", "Упаковка_Key")}
+            ok, resp = await self._request(
+                "POST", f"odata/standard.odata/{register}", json=post_payload_min
+            )
+            if ok:
+                logger.info(f"1C price created minimal ({register}): {onec_id} → {price}")
                 return True
             logger.debug(f"1C price POST failed ({register}): {resp}")
 
@@ -407,37 +420,91 @@ class OneCClient:
         return self._price_type_key
 
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
-        """Create a barcode record in 1C for the given product."""
+        """Create a barcode record in 1C for the given product.
+
+        Tries multiple payload combinations to handle different 1C configurations:
+        - With / without ТипШтрихкода
+        - With / without Владелец_Type (required when Владелец is a composite reference)
+        - Different entity / owner field names across configurations
+        """
         bc_type = self._detect_barcode_type(barcode)
-        # Entity / field name variants across different 1C configurations
+        owner_type = "StandardODATA.Catalog_Номенклатура"
+
+        # (entity, owner_key_field, barcode_field, include_type_field)
         entity_variants = [
-            ("Catalog_ШтрихкодыНоменклатуры", "Владелец_Key", "Штрихкод", "ТипШтрихкода"),
-            ("Catalog_ШтрихкодыНоменклатуры", "Owner_Key",    "Штрихкод", "ТипШтрихкода"),
-            ("Catalog_НоменклатураШтрихкоды",  "Владелец_Key", "Штрихкод", "ТипШтрихкода"),
+            "Catalog_ШтрихкодыНоменклатуры",
+            "Catalog_НоменклатураШтрихкоды",
         ]
-        for entity, owner_field, bc_field, type_field in entity_variants:
-            payload = {
-                owner_field: onec_id,
-                bc_field: barcode,
-                type_field: bc_type,
-                "Description": barcode,
-            }
-            success, data = await self._request(
-                "POST", f"odata/standard.odata/{entity}", json=payload
-            )
-            if success:
-                logger.info(f"1C barcode created: {barcode} ({bc_type}) → {onec_id}")
-                return True
-            # If rejected because of type field, retry without it
-            payload_no_type = {owner_field: onec_id, bc_field: barcode, "Description": barcode}
-            success, data = await self._request(
-                "POST", f"odata/standard.odata/{entity}", json=payload_no_type
-            )
-            if success:
-                logger.info(f"1C barcode created (no type): {barcode} → {onec_id}")
-                return True
-        logger.warning(f"1C barcode create failed for {barcode} / onec_id={onec_id}")
+        owner_key_variants = ["Владелец_Key", "Owner_Key", "Номенклатура_Key"]
+
+        for entity in entity_variants:
+            for owner_field in owner_key_variants:
+                base = {
+                    owner_field: onec_id,
+                    "Штрихкод": barcode,
+                    "Description": barcode,
+                }
+                # Build payload variants: with/without type, with/without Владелец_Type
+                payloads = [
+                    {**base, "ТипШтрихкода": bc_type, f"{owner_field[:-4]}_Type": owner_type},  # full
+                    {**base, "ТипШтрихкода": bc_type},                                                    # no composite type
+                    {**base, f"{owner_field[:-4]}_Type": owner_type},                                    # no barcode type
+                    base,                                                                                # minimal
+                ]
+                for pl in payloads:
+                    ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
+                    if ok:
+                        logger.info(f"1C barcode created: {barcode} ({bc_type}) → {onec_id} via {entity}")
+                        return True
+                    logger.debug(f"1C barcode attempt failed ({entity}/{owner_field}): {resp}")
+
+        logger.warning(f"1C barcode create FAILED for barcode={barcode} onec_id={onec_id}")
         return False
+
+    async def probe_barcode_price(self, onec_id: str, test_barcode: str = "4607141232117", test_price: float = 100.0) -> dict:
+        """Diagnostic: try barcode/price writes and return full error details from 1C."""
+        from datetime import datetime as _dt
+        period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        bc_type = self._detect_barcode_type(test_barcode)
+        _zero = "00000000-0000-0000-0000-000000000000"
+
+        # Probe price types
+        price_types = await self.get_price_types()
+        price_type_key = await self._get_or_fetch_price_type_key()
+
+        # Probe barcode
+        bc_results = []
+        for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
+            for owner_field in ("Владелец_Key", "Номенклатура_Key"):
+                pl = {owner_field: onec_id, "Штрихкод": test_barcode,
+                      "ТипШтрихкода": bc_type, "Description": test_barcode,
+                      f"{owner_field[:-4]}_Type": "StandardODATA.Catalog_Номенклатура"}
+                ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
+                bc_results.append({"entity": entity, "owner_field": owner_field,
+                                   "ok": ok, "resp": str(resp)[:300]})
+                if ok:
+                    break
+            else:
+                continue
+            break
+
+        # Probe price
+        price_results = []
+        for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
+            pl = {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                  "Характеристика_Key": _zero, "Упаковка_Key": _zero}
+            if price_type_key:
+                pl["ВидЦены_Key"] = price_type_key
+            ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
+            price_results.append({"register": register, "ok": ok, "resp": str(resp)[:300]})
+
+        return {
+            "onec_id": onec_id,
+            "price_types_found": [t.get("Description") for t in price_types],
+            "price_type_key": price_type_key,
+            "barcode_attempts": bc_results,
+            "price_attempts": price_results,
+        }
 
     async def create_receipt(
         self, products: List[dict], supplier: str = "Поставщик"

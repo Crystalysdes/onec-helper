@@ -530,6 +530,19 @@ async def diagnose_onec(
         for e in entities
     )
 
+    # Probe barcode+price write using first product that has an onec_id
+    probe_result = None
+    probe_product = next((p for p in synced_count if p.onec_id), None)
+    if probe_product:
+        try:
+            test_bc = probe_product.barcode or "4607141232117"
+            test_price = float(probe_product.price or 100.0)
+            probe_result = await client.probe_barcode_price(
+                probe_product.onec_id, test_bc, test_price
+            )
+        except Exception as e:
+            probe_result = {"error": str(e)}
+
     return {
         "entities_published": len(entities),
         "entities": entities[:30],
@@ -542,6 +555,7 @@ async def diagnose_onec(
         "barcodes_sample": dict(list(barcodes.items())[:5]),
         "synced_in_db": len(synced_count),
         "synced_with_barcode": sum(1 for p in synced_count if p.barcode),
+        "probe_barcode_price": probe_result,
     }
 
 
