@@ -76,11 +76,35 @@ _UNIT_PATTERNS = [
 _GARBAGE_PATTERNS = [
     re.compile(r'^[\d\s\-_/\\.,;:]+$'),           # only digits/punctuation
     re.compile(r'^[a-z0-9]{6,}$', re.I),          # looks like a barcode/hash
-    re.compile(r'[^\w\s\-.,()/%]', re.U),          # too many weird chars
 ]
 
 _GARBAGE_WORDS = {'null', 'none', 'n/a', 'na', 'test', 'unknown', 'no name', 'noname',
                   'товар', 'product', 'item', 'undefined', 'не определено'}
+
+# Mojibake signatures: Cyrillic uppercase R/S immediately followed by Latin-extended chars
+# These appear when UTF-8 Cyrillic bytes are read as Latin-1/Windows-1252
+_MOJIBAKE_RE = re.compile(
+    r'[РСрс][\u00b0\u00b1\u00ab\u00bb\u00b2\u00b3\u00b5-\u00bf\u00c0-\u00ff]'
+    r'|[\u0080-\u00bf]{2,}'  # multiple Latin-extended in a row
+)
+
+
+def _is_mojibake(text: str) -> bool:
+    """Return True if text looks like encoding-corrupted (mojibake) data."""
+    if not text or len(text) < 4:
+        return False
+    # High density of Latin-extended range chars (0x80..0xFF) = classic UTF-8 read as Latin-1
+    ext = sum(1 for c in text if '\x80' <= c <= '\xff')
+    if ext > max(2, len(text) * 0.15):
+        return True
+    # Specific mojibake two-char sequences
+    if _MOJIBAKE_RE.search(text):
+        return True
+    # Lone Cyrillic uppercase alternating with non-letters > 40% of chars
+    caps = sum(1 for c in text if '\u0410' <= c <= '\u042f')
+    if caps > len(text) * 0.40 and len(text) > 8:
+        return True
+    return False
 
 
 def translate_category(raw: Optional[str]) -> Optional[str]:
@@ -145,6 +169,10 @@ def normalize_name(name: str, vendor: str = "") -> Optional[str]:
 
     # Must have at least one letter
     if not re.search(r'[a-zA-Zа-яёА-ЯЁ]', name):
+        return None
+
+    # Reject encoding-corrupted (mojibake) names
+    if _is_mojibake(name):
         return None
 
     # Normalize whitespace

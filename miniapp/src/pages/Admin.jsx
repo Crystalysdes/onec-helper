@@ -495,6 +495,23 @@ export default function Admin() {
                   </button>
                   <button
                     className="px-3 py-2 rounded-xl text-xs font-medium active:opacity-70 flex-shrink-0"
+                    style={{ background: 'rgba(245,158,11,0.12)', color: '#f59e0b' }}
+                    disabled={catLoading}
+                    onClick={async () => {
+                      if (!window.confirm('Удалить записи с кракозябрами (кривая кодировка)? Займёт ~1-2 мин.')) return
+                      const tid = toast.loading('Чищу мусорные записи...')
+                      try {
+                        const r = await adminAPI.cleanGarbled()
+                        toast.success(`Удалено ${(r.data.deleted||0).toLocaleString('ru-RU')} мусорных записей`, { id: tid })
+                      } catch (e) {
+                        toast.error(e.response?.data?.detail || 'Ошибка', { id: tid })
+                      }
+                    }}
+                  >
+                    🧹 Мусор
+                  </button>
+                  <button
+                    className="px-3 py-2 rounded-xl text-xs font-medium active:opacity-70 flex-shrink-0"
                     style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
                     disabled={catLoading}
                     onClick={async () => {

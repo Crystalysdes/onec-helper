@@ -493,6 +493,35 @@ async def ensure_catalog_index(current_user: User = Depends(get_current_admin)):
     return {"status": "ok"}
 
 
+@router.post("/clean-garbled")
+async def clean_garbled_catalog(current_user: User = Depends(get_current_admin)):
+    """Delete encoding-corrupted (mojibake) records from global_products."""
+    from backend.services.catalog_cleaner import _is_mojibake
+    from sqlalchemy import text as _text
+    from backend.database.connection import AsyncSessionLocal
+    deleted = 0
+    async with AsyncSessionLocal() as db:
+        offset = 0
+        batch_size = 5000
+        while True:
+            rows = (await db.execute(
+                _text("SELECT id, name FROM global_products ORDER BY id OFFSET :off LIMIT :lim"),
+                {"off": offset, "lim": batch_size}
+            )).fetchall()
+            if not rows:
+                break
+            bad_ids = [str(r[0]) for r in rows if _is_mojibake(r[1])]
+            if bad_ids:
+                await db.execute(
+                    _text(f"DELETE FROM global_products WHERE id = ANY(:ids::uuid[])"),
+                    {"ids": bad_ids}
+                )
+                await db.commit()
+                deleted += len(bad_ids)
+            offset += batch_size
+    return {"status": "ok", "deleted": deleted}
+
+
 @router.delete("/clear-catalog")
 async def clear_catalog(current_user: User = Depends(get_current_admin)):
     """Truncate global_products to free DB space before re-import."""

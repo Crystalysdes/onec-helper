@@ -134,6 +134,7 @@ export const adminAPI = {
   getProduct: (id) => api.get(`/admin/products/${id}`),
   bulkDeleteProducts: (ids) => api.delete('/admin/products/bulk-delete', { data: { ids } }),
   clearCatalog: () => api.delete('/admin/clear-catalog'),
+  cleanGarbled: () => api.post('/admin/clean-garbled', null, { timeout: 120000 }),
   globalCatalog: (params) => api.get('/admin/global-catalog', { params }),
 }
 
