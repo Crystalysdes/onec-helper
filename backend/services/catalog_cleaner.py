@@ -72,6 +72,9 @@ _UNIT_PATTERNS = [
     (re.compile(r'\b(\d+(?:[.,]\d+)?)\s*(рулон|рул|roll)\b', re.I), 'рулон'),
 ]
 
+# Standard barcode lengths: EAN-8, UPC-A, EAN-13, ITF-14
+_VALID_BARCODE_LENGTHS = {8, 12, 13, 14}
+
 # ── Garbage detection ──
 _GARBAGE_PATTERNS = [
     re.compile(r'^[\d\s\-_/\\.,;:]+$'),           # only digits/punctuation
@@ -80,6 +83,12 @@ _GARBAGE_PATTERNS = [
 
 _GARBAGE_WORDS = {'null', 'none', 'n/a', 'na', 'test', 'unknown', 'no name', 'noname',
                   'товар', 'product', 'item', 'undefined', 'не определено'}
+
+# Characters allowed in a clean product name
+_ALLOWED_CHARS_RE = re.compile(
+    r'[^Ѐ-ӿa-zA-Z0-9\s\-.,()/%&«»"\'!+*#№]',
+    re.UNICODE
+)
 
 # Mojibake signatures: Cyrillic uppercase R/S immediately followed by Latin-extended chars
 # These appear when UTF-8 Cyrillic bytes are read as Latin-1/Windows-1252
@@ -145,6 +154,9 @@ def normalize_name(name: str, vendor: str = "") -> Optional[str]:
         return None
     name = name.strip()
 
+    # Strip non-allowed characters (keep Cyrillic, Latin, digits, common punctuation)
+    name = _ALLOWED_CHARS_RE.sub('', name).strip()
+
     # Length checks
     if len(name) < 3 or len(name) > 300:
         return None
@@ -163,12 +175,19 @@ def normalize_name(name: str, vendor: str = "") -> Optional[str]:
     if re.search(r'(.)\1{5,}', name):
         return None
 
-    # Must have at least one letter
-    if not re.search(r'[a-zA-Zа-яёА-ЯЁ]', name):
+    # Must have at least one Cyrillic OR at least 3 consecutive Latin letters (brand)
+    has_cyrillic = bool(re.search(r'[А-яЁё]', name))
+    has_latin_word = bool(re.search(r'[a-zA-Z]{3,}', name))
+    if not has_cyrillic and not has_latin_word:
         return None
 
     # Reject encoding-corrupted (mojibake) names
     if _is_mojibake(name):
+        return None
+
+    # Too many digits — likely a code, not a name (max 35%)
+    digit_count = sum(1 for c in name if c.isdigit())
+    if digit_count > len(name) * 0.35:
         return None
 
     # Normalize whitespace
@@ -192,7 +211,8 @@ def clean_record(row: dict) -> Optional[dict]:
     """
     # Barcode: OFF uses 'code', catalog.app uses 'Barcode'/'barcode'
     barcode = (row.get("code") or row.get("Barcode") or row.get("barcode") or "").strip()
-    if not barcode or not barcode.isdigit() or len(barcode) < 8:
+    # Accept only standard barcode formats: EAN-8, UPC-A, EAN-13, ITF-14
+    if not barcode or not barcode.isdigit() or len(barcode) not in _VALID_BARCODE_LENGTHS:
         return None
 
     # Name: OFF has product_name_ru (best), product_name (fallback); catalog.app has Name
