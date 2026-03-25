@@ -732,11 +732,11 @@ export default function AddProduct() {
 
       {/* ── AI Preview Modal ── */}
       {aiPreview && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6"
-          style={{ background: 'rgba(0,0,0,0.5)' }}
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ background: 'rgba(0,0,0,0.6)' }}
           onClick={() => setAiPreview(null)}>
-          <div className="w-full max-w-sm rounded-3xl px-5 py-5 flex flex-col gap-3"
-            style={{ background: 'var(--tg-theme-bg-color)' }}
+          <div className="w-full max-w-sm rounded-3xl px-5 py-5 flex flex-col gap-3 overflow-y-auto"
+            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '88vh' }}
             onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
