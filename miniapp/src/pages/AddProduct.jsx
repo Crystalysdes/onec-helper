@@ -347,6 +347,44 @@ export default function AddProduct() {
       .catch(() => {})
   }, [method, currentStore])
 
+  // ── Smart catalog search: tries AI name, then individual key words ─
+  const searchCatalogSmart = useCallback(async (aiName, originalText = '') => {
+    const STOP = new Set(['для','и','с','на','в','по','к','от','из','или','а','но','не','это','как'])
+    const tokenize = (t) => t.toLowerCase()
+      .split(/[\s,./\\|;:!?()"']+/)
+      .filter(w => w.length >= 3 && !STOP.has(w))
+
+    const trySearch = async (q) => {
+      if (!q || q.length < 2) return []
+      try {
+        const r = await productsAPI.searchGlobal(q)
+        return Array.isArray(r.data) ? r.data : []
+      } catch { return [] }
+    }
+
+    // 1. Try full AI-normalized name
+    const r1 = await trySearch(aiName)
+    if (r1.length > 0) return r1
+
+    // 2. Try individual meaningful words from AI name (longest first)
+    const aiTokens = tokenize(aiName).sort((a, b) => b.length - a.length)
+    for (const word of aiTokens.slice(0, 4)) {
+      const r = await trySearch(word)
+      if (r.length > 0) return r
+    }
+
+    // 3. Try individual words from the original user text
+    if (originalText) {
+      const origTokens = tokenize(originalText).sort((a, b) => b.length - a.length)
+      for (const word of origTokens.slice(0, 4)) {
+        const r = await trySearch(word)
+        if (r.length > 0) return r
+      }
+    }
+
+    return []
+  }, [])
+
   // ── Silent AI enrichment helper ──────────────────────────────────
   const enrichAndUpdate = useCallback(async (product, setScan, code) => {
     if (!product?.name) return
@@ -435,16 +473,13 @@ export default function AddProduct() {
       if (!data.name) data.name = aiText.trim()
       if (aiScan?.code && !data.barcode) data.barcode = aiScan.code
 
-      // 2. Search global catalog by parsed name
-      try {
-        const globalRes = await productsAPI.searchGlobal(data.name)
-        const matches = Array.isArray(globalRes.data) ? globalRes.data : []
-        if (matches.length > 0) {
-          const best = matches[0]
-          setAiPreview({ ...data, ...best, name: best.name || data.name, _source: 'catalog' })
-          return
-        }
-      } catch { /* catalog not reachable */ }
+      // 2. Search global catalog with smart multi-word fallback
+      const matches = await searchCatalogSmart(data.name, aiText.trim())
+      if (matches.length > 0) {
+        const best = matches[0]
+        setAiPreview({ ...data, ...best, name: best.name || data.name, _source: 'catalog' })
+        return
+      }
 
       // 3. Not found in catalog — show AI preview with option to scan barcode
       setAiPreview({ ...data, _source: 'ai', _notInCatalog: true })
@@ -530,19 +565,15 @@ export default function AddProduct() {
       }
 
       if (r?.name) {
-        // Search global catalog by AI-recognized name
-        try {
-          const globalRes = await productsAPI.searchGlobal(r.name)
-          const matches = Array.isArray(globalRes.data) ? globalRes.data : []
-          if (matches.length > 0) {
-            // Merge catalog data with AI data (catalog has better structured fields)
-            const best = matches[0]
-            setAiPreview({ ...r, ...best, name: best.name || r.name })
-            setPhotoState(null)
-            setPhotoProduct(null)
-            return
-          }
-        } catch { /* no match — fall through to barcode scan */ }
+        // Search global catalog with smart multi-word fallback
+        const matches = await searchCatalogSmart(r.name)
+        if (matches.length > 0) {
+          const best = matches[0]
+          setAiPreview({ ...r, ...best, name: best.name || r.name })
+          setPhotoState(null)
+          setPhotoProduct(null)
+          return
+        }
 
         setPhotoProduct(r)
         setPhotoState('scan')
