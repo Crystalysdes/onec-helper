@@ -824,35 +824,38 @@ async def import_csv(
         await db.flush()
         created_count += len(b)
 
+    from backend.services.catalog_cleaner import (
+        normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
+    )
+
     for row in reader:
-        name = row.get(col_name, "").strip() if col_name else ""
-        if not name or len(name) < 2:
+        raw_name = row.get(col_name, "").strip() if col_name else ""
+        brand = row.get(col_brand, "").strip() if col_brand else ""
+        name = normalize_name(raw_name, vendor=brand)
+        if not name:
             skipped_count += 1
             continue
 
         barcode = row.get(col_barcode, "").strip() if col_barcode else None
-        if barcode and not barcode.isdigit():
-            barcode = None
-
-        brand = row.get(col_brand, "").strip() if col_brand else ""
-        if brand and brand.lower() not in name.lower():
-            name = f"{name} {brand}".strip()
+        if barcode:
+            if not barcode.isdigit() or len(barcode) not in _VALID_BARCODE_LENGTHS:
+                barcode = None
 
         category_raw = row.get(col_category, "").strip() if col_category else None
-        category = None
-        if category_raw:
-            parts = [p.strip() for p in category_raw.replace(";", ",").split(",") if p.strip()]
-            category = parts[0][:60] if parts else None
+        category = translate_category(category_raw) if category_raw else None
+
+        raw_unit = (row.get(col_unit, "").strip()[:20] if col_unit else None)
+        unit = raw_unit or detect_unit(name) or "шт"
 
         product = ProductCache(
             id=uuid.uuid4(),
             store_id=store_id_uuid,
-            name=name[:255],
+            name=name,
             barcode=barcode,
             category=category,
             price=_parse_float(row.get(col_price, "") if col_price else ""),
             purchase_price=_parse_float(row.get(col_purchase, "") if col_purchase else ""),
-            unit=(row.get(col_unit, "").strip()[:20] if col_unit else None) or "шт",
+            unit=unit,
             description=(row.get(col_desc, "").strip()[:500] if col_desc else None) or None,
             is_active=True,
             created_at=datetime.now(timezone.utc),
@@ -866,6 +869,25 @@ async def import_csv(
         await flush_batch(batch)
 
     await db.commit()
+
+    # Push imported products with barcodes to global catalog
+    try:
+        from sqlalchemy import text as _txt
+        res = await db.execute(_txt(
+            "SELECT id, barcode, name, price, purchase_price, article, category, unit, description "
+            "FROM products_cache WHERE store_id=:sid AND is_active=true AND barcode IS NOT NULL"
+        ), {"sid": str(store_id_uuid)})
+        for r in res.fetchall():
+            class _P:
+                pass
+            p = _P()
+            p.barcode = r[1]; p.name = r[2]; p.price = r[3]
+            p.purchase_price = r[4]; p.article = r[5]
+            p.category = r[6]; p.unit = r[7]; p.description = r[8]
+            await _upsert_global_product(db, p)
+        await db.commit()
+    except Exception as _e:
+        _log.warning(f"CSV import global upsert failed: {_e}")
     return {
         "imported": created_count,
         "skipped": skipped_count,
