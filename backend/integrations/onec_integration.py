@@ -515,6 +515,19 @@ class OneCClient:
         price_types = await self.get_price_types()
         price_type_key = await self._get_or_fetch_price_type_key()
 
+        # ── GET existing records to discover real field structure
+        existing_bc, existing_price = {}, {}
+        for entity in ("InformationRegister_ШтрихкодыНоменклатуры",):
+            ok, data = await self._request("GET", f"odata/standard.odata/{entity}?$format=json&$top=1")
+            if ok and isinstance(data, dict) and data.get("value"):
+                existing_bc = {k: type(v).__name__ for k, v in data["value"][0].items()
+                               if not k.startswith("odata")}
+        for entity in ("InformationRegister_ЦеныНоменклатуры",):
+            ok, data = await self._request("GET", f"odata/standard.odata/{entity}?$format=json&$top=1")
+            if ok and isinstance(data, dict) and data.get("value"):
+                existing_price = {k: type(v).__name__ for k, v in data["value"][0].items()
+                                  if not k.startswith("odata")}
+
         bc_results = []
         # ── Catalog variants
         for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
@@ -522,34 +535,32 @@ class OneCClient:
                 pl = {owner_field: onec_id, f"{owner_field[:-4]}_Type": "StandardODATA.Catalog_Номенклатура",
                       "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}
                 ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                bc_results.append({"entity": entity, "payload": "catalog+type", "ok": ok, "resp": str(resp)[:250]})
-        # ── InformationRegister variants (from screenshot: only Номенклатура + Штрихкод)
+                bc_results.append({"entity": entity, "payload": "catalog+type", "ok": ok, "resp": str(resp)[:600]})
+        # ── InformationRegister variants
         for entity in ("InformationRegister_ШтрихкодыНоменклатуры", "InformationRegister_Штрихкоды"):
             for pl in [
                 {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
                 {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type},
                 {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "Характеристика_Key": _zero},
+                {"Период": period, "Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
             ]:
                 ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                bc_results.append({"entity": entity, "payload": str(list(pl.keys())), "ok": ok, "resp": str(resp)[:250]})
+                bc_results.append({"entity": entity, "payload": str(list(pl.keys())), "ok": ok, "resp": str(resp)[:600]})
                 if ok:
                     break
 
         price_results = []
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
             for pl in [
-                # with price type + extra dims
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
                  "ВидЦены_Key": price_type_key or _zero, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                # with price type, no extra dims
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
                  "ВидЦены_Key": price_type_key or _zero},
-                # without price type (minimal)
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price},
             ]:
                 ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
                 price_results.append({"register": register, "payload": str(list(pl.keys())),
-                                      "ok": ok, "resp": str(resp)[:250]})
+                                      "ok": ok, "resp": str(resp)[:600]})
                 if ok:
                     break
 
@@ -557,6 +568,8 @@ class OneCClient:
             "onec_id": onec_id,
             "price_types_found": [t.get("Description") for t in price_types],
             "price_type_key": price_type_key,
+            "existing_barcode_fields": existing_bc,
+            "existing_price_fields": existing_price,
             "barcode_attempts": bc_results,
             "price_attempts": price_results,
         }

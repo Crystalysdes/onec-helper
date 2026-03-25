@@ -249,14 +249,24 @@ export default function ProductDetail() {
                 </div>
               )}
 
-              {/* Probe: price types */}
+              {/* Probe: price types + existing fields */}
               {syncResult.probe && (
-                <div className="p-2 rounded-xl" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                <div className="p-2 rounded-xl flex flex-col gap-1" style={{ background: 'var(--tg-theme-bg-color)' }}>
                   <p style={{ color: 'var(--tg-theme-hint-color)' }}>
                     Типы цен: {syncResult.probe.price_types_found?.length
                       ? syncResult.probe.price_types_found.join(', ')
-                      : '❌ не найдены (нужно опубликовать Catalog_ВидыЦен)'}
+                      : '❌ не найдены'}
                   </p>
+                  {syncResult.probe.existing_barcode_fields && Object.keys(syncResult.probe.existing_barcode_fields).length > 0 && (
+                    <p className="break-all" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      📋 Поля штрихкода: {Object.keys(syncResult.probe.existing_barcode_fields).join(', ')}
+                    </p>
+                  )}
+                  {syncResult.probe.existing_price_fields && Object.keys(syncResult.probe.existing_price_fields).length > 0 && (
+                    <p className="break-all" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      📋 Поля цены: {Object.keys(syncResult.probe.existing_price_fields).join(', ')}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -269,7 +279,7 @@ export default function ProductDetail() {
                   <div className="mt-1 flex flex-col gap-1">
                     {syncResult.probe.barcode_attempts.map((a, i) => (
                       <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
-                        {a.ok ? '✅' : '❌'} {a.entity} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,150)}
+                        {a.ok ? '✅' : '❌'} {a.entity} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,400)}
                       </p>
                     ))}
                   </div>
@@ -285,7 +295,7 @@ export default function ProductDetail() {
                   <div className="mt-1 flex flex-col gap-1">
                     {syncResult.probe.price_attempts.map((a, i) => (
                       <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
-                        {a.ok ? '✅' : '❌'} {a.register} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,150)}
+                        {a.ok ? '✅' : '❌'} {a.register} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,400)}
                       </p>
                     ))}
                   </div>
