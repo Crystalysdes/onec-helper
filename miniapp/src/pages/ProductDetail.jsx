@@ -236,20 +236,61 @@ export default function ProductDetail() {
             <div className="rounded-2xl p-3 flex flex-col gap-2 text-xs"
               style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
               <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📋 Результат синхронизации</p>
-              {Object.entries(syncResult.steps).map(([key, step]) => (
-                <div key={key} className="p-2 rounded-xl" style={{ background: 'var(--tg-theme-bg-color)' }}>
-                  <p className="font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {step.ok === true ? '✅' : step.ok === false ? '❌' : 'ℹ️'} {key}
+
+              {/* Product step */}
+              {syncResult.steps?.product && (
+                <div className="p-2 rounded-xl" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                  <p style={{ color: syncResult.steps.product.ok ? '#22c55e' : '#ef4444' }}>
+                    {syncResult.steps.product.ok ? '✅' : '❌'} Товар в 1С ({syncResult.steps.product.action})
                   </p>
-                  {step.reason && <p style={{ color: 'var(--tg-theme-hint-color)' }}>{step.reason}</p>}
-                  {step.resp && step.ok === false && (
-                    <p className="mt-0.5 break-all" style={{ color: '#ef4444' }}>{step.resp.slice(0, 200)}</p>
-                  )}
-                  {step.price_type_key === null && key === 'price' && (
-                    <p style={{ color: '#f97316' }}>⚠️ Тип цены не найден — Catalog_ВидыЦен не опубликован и регистр пуст</p>
+                  {!syncResult.steps.product.ok && (
+                    <p className="break-all mt-0.5" style={{ color: '#ef4444' }}>{syncResult.steps.product.resp?.slice(0,200)}</p>
                   )}
                 </div>
-              ))}
+              )}
+
+              {/* Probe: price types */}
+              {syncResult.probe && (
+                <div className="p-2 rounded-xl" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                  <p style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    Типы цен: {syncResult.probe.price_types_found?.length
+                      ? syncResult.probe.price_types_found.join(', ')
+                      : '❌ не найдены (нужно опубликовать Catalog_ВидыЦен)'}
+                  </p>
+                </div>
+              )}
+
+              {/* Probe: barcode attempts */}
+              {syncResult.probe?.barcode_attempts?.length > 0 && (
+                <details>
+                  <summary className="cursor-pointer font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    🔖 Попытки штрихкода ({syncResult.probe.barcode_attempts.filter(a=>a.ok).length > 0 ? '✅ успех' : '❌ все провалились'})
+                  </summary>
+                  <div className="mt-1 flex flex-col gap-1">
+                    {syncResult.probe.barcode_attempts.map((a, i) => (
+                      <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
+                        {a.ok ? '✅' : '❌'} {a.entity} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,150)}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              {/* Probe: price attempts */}
+              {syncResult.probe?.price_attempts?.length > 0 && (
+                <details>
+                  <summary className="cursor-pointer font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    💰 Попытки цены ({syncResult.probe.price_attempts.filter(a=>a.ok).length > 0 ? '✅ успех' : '❌ все провалились'})
+                  </summary>
+                  <div className="mt-1 flex flex-col gap-1">
+                    {syncResult.probe.price_attempts.map((a, i) => (
+                      <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
+                        {a.ok ? '✅' : '❌'} {a.register} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,150)}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           )}
 

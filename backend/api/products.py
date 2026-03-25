@@ -735,27 +735,20 @@ async def sync_product_to_onec(
                             "onec_id": product.onec_id, "resp": str(data)[:300]}
 
     clean_id = (product.onec_id or "").strip("{}")
+    if not clean_id:
+        return {"product_name": product.name, "onec_id": None,
+                "steps": steps, "probe": None}
 
-    # Step 2: barcode
-    if clean_id and product.barcode and product.barcode.strip():
-        bc_ok = await client.create_barcode(clean_id, product.barcode.strip())
-        steps["barcode"] = {"ok": bc_ok, "barcode": product.barcode.strip()}
-    else:
-        steps["barcode"] = {"ok": None, "reason": "no barcode or no onec_id"}
-
-    # Step 3: price
-    if clean_id and product.price and product.price > 0:
-        price_type_key = await client._get_or_fetch_price_type_key()
-        pr_ok = await client.set_price(clean_id, float(product.price))
-        steps["price"] = {"ok": pr_ok, "price": product.price,
-                          "price_type_key": price_type_key}
-    else:
-        steps["price"] = {"ok": None, "reason": "no price or no onec_id"}
+    # Steps 2+3: use probe which tries every variant and returns exact 1C errors
+    test_bc = (product.barcode or "").strip() or "4607141232117"
+    test_price = float(product.price or 100.0)
+    probe = await client.probe_barcode_price(clean_id, test_bc, test_price)
 
     return {
         "product_name": product.name,
         "onec_id": clean_id,
         "steps": steps,
+        "probe": probe,
     }
 
 

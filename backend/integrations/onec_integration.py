@@ -502,41 +502,53 @@ class OneCClient:
         return False
 
     async def probe_barcode_price(self, onec_id: str, test_barcode: str = "4607141232117", test_price: float = 100.0) -> dict:
-        """Diagnostic: try barcode/price writes and return full error details from 1C."""
+        """Diagnostic: try all barcode/price write variants, return full 1C error details."""
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         bc_type = self._detect_barcode_type(test_barcode)
         _zero = "00000000-0000-0000-0000-000000000000"
+        onec_id = str(onec_id).strip("{}")
 
-        # Probe price types
         price_types = await self.get_price_types()
         price_type_key = await self._get_or_fetch_price_type_key()
 
-        # Probe barcode
         bc_results = []
+        # ── Catalog variants
         for entity in ("Catalog_ШтрихкодыНоменклатуры", "Catalog_НоменклатураШтрихкоды"):
-            for owner_field in ("Владелец_Key", "Номенклатура_Key"):
-                pl = {owner_field: onec_id, "Штрихкод": test_barcode,
-                      "ТипШтрихкода": bc_type, "Description": test_barcode,
-                      f"{owner_field[:-4]}_Type": "StandardODATA.Catalog_Номенклатура"}
+            for owner_field in ("Владелец_Key", "Owner_Key"):
+                pl = {owner_field: onec_id, f"{owner_field[:-4]}_Type": "StandardODATA.Catalog_Номенклатура",
+                      "Штрихкод": test_barcode, "ТипШтрихкода": bc_type}
                 ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
-                bc_results.append({"entity": entity, "owner_field": owner_field,
-                                   "ok": ok, "resp": str(resp)[:300]})
+                bc_results.append({"entity": entity, "payload": "catalog+type", "ok": ok, "resp": str(resp)[:250]})
+        # ── InformationRegister variants (from screenshot: only Номенклатура + Штрихкод)
+        for entity in ("InformationRegister_ШтрихкодыНоменклатуры", "InformationRegister_Штрихкоды"):
+            for pl in [
+                {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode},
+                {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "ТипШтрихкода": bc_type},
+                {"Номенклатура_Key": onec_id, "Штрихкод": test_barcode, "Характеристика_Key": _zero},
+            ]:
+                ok, resp = await self._request("POST", f"odata/standard.odata/{entity}", json=pl)
+                bc_results.append({"entity": entity, "payload": str(list(pl.keys())), "ok": ok, "resp": str(resp)[:250]})
                 if ok:
                     break
-            else:
-                continue
-            break
 
-        # Probe price
         price_results = []
         for register in ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены"):
-            pl = {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
-                  "Характеристика_Key": _zero, "Упаковка_Key": _zero}
-            if price_type_key:
-                pl["ВидЦены_Key"] = price_type_key
-            ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
-            price_results.append({"register": register, "ok": ok, "resp": str(resp)[:300]})
+            for pl in [
+                # with price type + extra dims
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                 "ВидЦены_Key": price_type_key or _zero, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                # with price type, no extra dims
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price,
+                 "ВидЦены_Key": price_type_key or _zero},
+                # without price type (minimal)
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": test_price},
+            ]:
+                ok, resp = await self._request("POST", f"odata/standard.odata/{register}", json=pl)
+                price_results.append({"register": register, "payload": str(list(pl.keys())),
+                                      "ok": ok, "resp": str(resp)[:250]})
+                if ok:
+                    break
 
         return {
             "onec_id": onec_id,
