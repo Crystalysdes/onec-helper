@@ -91,6 +91,7 @@ export const productsAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  syncToOnec: (id) => api.post(`/products/detail/${id}/sync-to-onec`),
   bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),
   importCSV: (storeId, file) => {
     const fd = new FormData()

@@ -687,6 +687,78 @@ async def update_product(
     return result
 
 
+@router.post("/detail/{product_id}/sync-to-onec")
+async def sync_product_to_onec(
+    product_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Synchronously push product → 1C and return full step-by-step result for debugging."""
+    from backend.integrations.onec_integration import OneCClient
+    from backend.core.security import decrypt_password
+
+    result_db = await db.execute(select(ProductCache).where(ProductCache.id == product_id))
+    product = result_db.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    await _check_store_access(product.store_id, current_user, db)
+
+    integ_result = await db.execute(
+        select(Integration).where(
+            Integration.store_id == product.store_id,
+            Integration.status == IntegrationStatus.active,
+        )
+    )
+    integration = integ_result.scalars().first()
+    if not integration:
+        raise HTTPException(status_code=400, detail="Нет активной интеграции с 1С")
+
+    client = OneCClient(
+        url=integration.onec_url,
+        username=integration.onec_username,
+        password=decrypt_password(integration.onec_password_encrypted),
+    )
+
+    steps = {}
+
+    # Step 1: create or update product
+    if product.onec_id:
+        ok, data = await client.update_product(product.onec_id, product)
+        steps["product"] = {"action": "update", "ok": ok, "onec_id": product.onec_id,
+                            "resp": str(data)[:300]}
+    else:
+        ok, data = await client.create_product(product)
+        if ok and data and data.get("Ref_Key"):
+            product.onec_id = str(data["Ref_Key"]).strip("{}")
+            await db.commit()
+        steps["product"] = {"action": "create", "ok": ok,
+                            "onec_id": product.onec_id, "resp": str(data)[:300]}
+
+    clean_id = (product.onec_id or "").strip("{}")
+
+    # Step 2: barcode
+    if clean_id and product.barcode and product.barcode.strip():
+        bc_ok = await client.create_barcode(clean_id, product.barcode.strip())
+        steps["barcode"] = {"ok": bc_ok, "barcode": product.barcode.strip()}
+    else:
+        steps["barcode"] = {"ok": None, "reason": "no barcode or no onec_id"}
+
+    # Step 3: price
+    if clean_id and product.price and product.price > 0:
+        price_type_key = await client._get_or_fetch_price_type_key()
+        pr_ok = await client.set_price(clean_id, float(product.price))
+        steps["price"] = {"ok": pr_ok, "price": product.price,
+                          "price_type_key": price_type_key}
+    else:
+        steps["price"] = {"ok": None, "reason": "no price or no onec_id"}
+
+    return {
+        "product_name": product.name,
+        "onec_id": clean_id,
+        "steps": steps,
+    }
+
+
 class EnrichRequest(BaseModel):
     name: str
     barcode: Optional[str] = None

@@ -46,6 +46,8 @@ export default function ProductDetail() {
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [scannerCb, setScannerCb] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm()
 
@@ -92,6 +94,22 @@ export default function ProductDetail() {
   }
 
   const openScanner = () => setScannerCb({ fn: (code) => { if (code) setValue('barcode', code) } })
+
+  const syncToOnec = async () => {
+    setSyncing(true)
+    setSyncResult(null)
+    try {
+      const res = await productsAPI.syncToOnec(id)
+      setSyncResult(res.data)
+      const allOk = Object.values(res.data.steps).every(s => s.ok !== false)
+      if (allOk) toast.success('Синхронизация выполнена')
+      else toast.error('Часть шагов не выполнена — см. детали')
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка синхронизации')
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -198,6 +216,42 @@ export default function ProductDetail() {
               </div>
             </div>
           </div>
+
+          {/* 1C Sync */}
+          <button
+            className="flex items-center justify-center gap-2 py-3 rounded-2xl active:opacity-70 transition-opacity"
+            style={{ background: 'var(--tg-theme-secondary-bg-color)', border: '1px solid rgba(128,128,128,0.15)' }}
+            onClick={syncToOnec}
+            disabled={syncing}
+          >
+            {syncing
+              ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              : <span>🔄</span>}
+            <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>
+              {syncing ? 'Отправка в 1С...' : 'Отправить в 1С (штрихкод + цена)'}
+            </span>
+          </button>
+
+          {syncResult && (
+            <div className="rounded-2xl p-3 flex flex-col gap-2 text-xs"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+              <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📋 Результат синхронизации</p>
+              {Object.entries(syncResult.steps).map(([key, step]) => (
+                <div key={key} className="p-2 rounded-xl" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                  <p className="font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    {step.ok === true ? '✅' : step.ok === false ? '❌' : 'ℹ️'} {key}
+                  </p>
+                  {step.reason && <p style={{ color: 'var(--tg-theme-hint-color)' }}>{step.reason}</p>}
+                  {step.resp && step.ok === false && (
+                    <p className="mt-0.5 break-all" style={{ color: '#ef4444' }}>{step.resp.slice(0, 200)}</p>
+                  )}
+                  {step.price_type_key === null && key === 'price' && (
+                    <p style={{ color: '#f97316' }}>⚠️ Тип цены не найден — Catalog_ВидыЦен не опубликован и регистр пуст</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Delete */}
           {!confirmDelete ? (
