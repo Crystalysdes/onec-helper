@@ -113,26 +113,14 @@ export default function Admin() {
       return
     }
     loadTab('stats')
-    // Resume polling if tasks were running before navigation
+    // Resume import polling if it was running before navigation
     ;(async () => {
       try {
-        const [catSt, aiSt] = await Promise.all([
-          adminAPI.catalogImportStatus(),
-          adminAPI.aiCleanupStatus(),
-        ])
+        const catSt = await adminAPI.catalogImportStatus()
         if (catSt.data.running) {
           setCatLoading(true)
           setCatProgress(catSt.data)
-          startCatPoll((done) => {
-            if (autoAiClean && done.done && !done.error) {
-              triggerAiClean()
-            }
-          })
-        }
-        if (aiSt.data.running) {
-          setAiCleanLoading(true)
-          setAiCleanProgress(aiSt.data)
-          startAiPoll()
+          startCatPoll()
         }
       } catch {}
     })()
@@ -159,18 +147,6 @@ export default function Admin() {
     }, 2000)
   }
 
-  const triggerAiClean = async () => {
-    setAiCleanLoading(true)
-    setAiCleanProgress(null)
-    try {
-      await adminAPI.aiCleanupCatalog()
-      toast.success('ИИ-очистка запущена...')
-      startAiPoll()
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка ИИ-очистки')
-      setAiCleanLoading(false)
-    }
-  }
 
   const loadTab = async (t = tab) => {
     setLoading(true)
@@ -491,21 +467,6 @@ export default function Admin() {
                   </div>
                 )}
 
-                {/* Auto AI cleanup toggle */}
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <div
-                    className="w-9 h-5 rounded-full relative transition-colors"
-                    style={{ background: autoAiClean ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)' }}
-                    onClick={() => setAutoAiClean(v => !v)}
-                  >
-                    <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all"
-                      style={{ left: autoAiClean ? '18px' : '2px' }} />
-                  </div>
-                  <span className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    После импорта → автоматически ИИ-очистка
-                  </span>
-                </label>
-
                 <button
                   className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
                   disabled={catLoading}
@@ -515,9 +476,7 @@ export default function Admin() {
                     try {
                       await adminAPI.importCatalog(catLimit)
                       toast.success('Импорт запущен...')
-                      startCatPoll((done) => {
-                        if (autoAiClean && done.done && !done.error) triggerAiClean()
-                      })
+                      startCatPoll()
                     } catch (e) {
                       toast.error(e.response?.data?.detail || 'Ошибка')
                       setCatLoading(false)
@@ -530,48 +489,7 @@ export default function Admin() {
                 </button>
               </div>
 
-              {/* AI catalog cleanup */}
-              <div className="card flex flex-col gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">🤖</span>
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>ИИ-очистка каталога</p>
-                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Исправит мусор, переведёт на русский, заполнит категории · все подозрительные записи</p>
-                  </div>
-                </div>
 
-                {aiCleanProgress && (
-                  <div className="p-3 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                    {aiCleanProgress.error ? (
-                      <p className="text-xs" style={{ color: '#ef4444' }}>❌ {aiCleanProgress.error}</p>
-                    ) : aiCleanProgress.done ? (
-                      <>
-                        <p className="text-sm font-medium" style={{ color: '#22c55e' }}>✅ Готово!</p>
-                        <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>Обработано: {aiCleanProgress.processed} · Исправлено/удалено: {aiCleanProgress.fixed}</p>
-                      </>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                        <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          Обработано: <b style={{ color: 'var(--tg-theme-text-color)' }}>{aiCleanProgress.processed}</b>
-                          {aiCleanProgress.total > 0 && ` из ${aiCleanProgress.total}`}
-                          {' '}· Исправлено: {aiCleanProgress.fixed}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <button
-                  className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
-                  disabled={aiCleanLoading}
-                  onClick={() => triggerAiClean()}
-                >
-                  {aiCleanLoading
-                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Очистка идёт...</>
-                    : '🧹 Запустить ИИ-очистку'}
-                </button>
-              </div>
 
             </>
           ) : (
