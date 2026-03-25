@@ -610,33 +610,52 @@ export default function Admin() {
           </div>
 
           {/* Stats row */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              Всего: <b style={{ color: 'var(--tg-theme-text-color)' }}>{dbTotal}</b> товаров
+              Всего: <b style={{ color: 'var(--tg-theme-text-color)' }}>{dbTotal.toLocaleString('ru-RU')}</b>
               {dbSelectMode && dbSelected.size > 0 && (
-                <span> · выбрано: <b style={{ color: 'var(--tg-theme-button-color)' }}>{dbSelected.size}</b></span>
+                <span> · <b style={{ color: 'var(--tg-theme-button-color)' }}>{dbSelected.size}</b> выбрано</span>
               )}
             </p>
-            {dbSelectMode && (
-              <div className="flex gap-2">
-                <button
-                  className="text-xs px-2.5 py-1 rounded-lg active:opacity-70"
-                  style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
-                  onClick={dbAllSelected ? dbDeselectAll : dbSelectAll}
-                >
-                  {dbAllSelected ? 'Снять всё' : 'Выбрать всё'}
-                </button>
-                <button
-                  className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70 disabled:opacity-40"
-                  style={{ background: dbSelected.size > 0 ? 'rgba(239,68,68,0.12)' : 'var(--tg-theme-secondary-bg-color)', color: dbSelected.size > 0 ? '#ef4444' : 'var(--tg-theme-hint-color)' }}
-                  onClick={handleDbBulkDelete}
-                  disabled={dbSelected.size === 0 || dbDeleting}
-                >
-                  <Trash2 size={12} />
-                  {dbDeleting ? '...' : `Удалить (${dbSelected.size})`}
-                </button>
-              </div>
-            )}
+            <div className="flex gap-2 flex-shrink-0">
+              {dbSelectMode ? (
+                <>
+                  <button
+                    className="text-xs px-2.5 py-1 rounded-lg active:opacity-70"
+                    style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                    onClick={dbAllSelected ? dbDeselectAll : dbSelectAll}
+                  >
+                    {dbAllSelected ? 'Снять' : 'Все стр.'}
+                  </button>
+                  <button
+                    className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70 disabled:opacity-40"
+                    style={{ background: dbSelected.size > 0 ? 'rgba(239,68,68,0.12)' : 'var(--tg-theme-secondary-bg-color)', color: dbSelected.size > 0 ? '#ef4444' : 'var(--tg-theme-hint-color)' }}
+                    onClick={handleDbBulkDelete}
+                    disabled={dbSelected.size === 0 || dbDeleting}
+                  >
+                    <Trash2 size={12} />
+                    {dbDeleting ? '...' : `(${dbSelected.size})`}
+                  </button>
+                </>
+              ) : null}
+              <button
+                className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70"
+                style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
+                onClick={async () => {
+                  if (!window.confirm(`Удалить все ${dbTotal.toLocaleString('ru-RU')} записей из каталога? Это нельзя отменить.`)) return
+                  try {
+                    const r = await adminAPI.clearCatalog()
+                    toast.success(`Каталог очищен (${(r.data.deleted || 0).toLocaleString('ru-RU')} записей)`)
+                    setDbProducts([])
+                    setDbTotal(0)
+                    setDbPage(1)
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                }}
+              >
+                <Trash2 size={12} />
+                Удалить всё
+              </button>
+            </div>
           </div>
 
           {/* Product list */}
