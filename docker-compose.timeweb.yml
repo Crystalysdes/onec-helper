@@ -1,10 +1,28 @@
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: onec
+      POSTGRES_USER: onec
+      POSTGRES_PASSWORD: onec_secret_2024
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onec -d onec"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     env_file: .env
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -13,3 +31,4 @@ services:
 
 volumes:
   uploads:
+  pgdata:
