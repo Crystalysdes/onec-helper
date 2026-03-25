@@ -328,8 +328,30 @@ async def list_products(
     limit: int = 50,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks,
 ):
     await _check_store_access(store_id, current_user, db)
+
+    # On first page open (no search/filter) — kick off 1C sync if stale > 2 min
+    if page == 1 and not search and not category:
+        from backend.database.models import Integration, IntegrationStatus
+        from datetime import timezone as _tz
+        integ_row = (await db.execute(
+            select(Integration).where(
+                Integration.store_id == store_id,
+                Integration.status == IntegrationStatus.active,
+            )
+        )).scalars().first()
+        if integ_row:
+            stale = True
+            if integ_row.last_sync_at:
+                age = (datetime.now(_tz.utc) - integ_row.last_sync_at).total_seconds()
+                stale = age > 120  # re-sync if older than 2 minutes
+            if stale:
+                from backend.api.stores import _run_sync_in_background
+                background_tasks.add_task(
+                    _run_sync_in_background, store_id, integ_row.id
+                )
 
     query = select(ProductCache).where(
         and_(ProductCache.store_id == store_id, ProductCache.is_active == True)
