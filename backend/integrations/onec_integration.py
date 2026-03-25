@@ -517,6 +517,15 @@ class OneCClient:
                 existing_price = {k: type(v).__name__ for k, v in data["value"][0].items()
                                   if not k.startswith("odata")}
 
+        # ── GET the actual product to see what fields Catalog_Номенклатура has
+        nom_fields = []
+        ok, data = await self._request(
+            "GET", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')?$format=json"
+        )
+        if ok and isinstance(data, dict):
+            nom_fields = [k for k in data.keys() if not k.startswith("odata") and
+                          any(s in k.lower() for s in ("цен", "price", "штрих", "barcode"))]
+
         bc_results = []
         # ── 1. PATCH Catalog_Номенклатура tabular section (most reliable for 1C Fresh)
         for bc_pl in [
@@ -568,7 +577,7 @@ class OneCClient:
                                       "ok": ok, "resp": str(resp)[:600]})
                 if ok:
                     break
-        # PATCH Catalog_Номенклатура with direct price field
+        # PATCH Catalog_Номенклатура with direct price field (may be silently ignored)
         for price_field in ("Цена", "ЦенаРозничная", "ЦенаЗакупка"):
             ok, resp = await self._request(
                 "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
@@ -579,10 +588,27 @@ class OneCClient:
             if ok:
                 break
 
+        # Document_УстановкаЦенНоменклатуры — the standard 1C way to set prices
+        from datetime import datetime as _dt
+        doc_date = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        vid = price_type_key or _zero
+        for doc_entity in ("Document_УстановкаЦенНоменклатуры", "Document_УстановкаЦен"):
+            doc_pl = {
+                "Дата": doc_date,
+                "ВидЦены_Key": vid,
+                "Товары": [{"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": test_price}],
+            }
+            ok, resp = await self._request("POST", f"odata/standard.odata/{doc_entity}", json=doc_pl)
+            price_results.append({"register": doc_entity, "payload": "doc+ВидЦены+Товары",
+                                   "ok": ok, "resp": str(resp)[:600]})
+            if ok:
+                break
+
         return {
             "onec_id": onec_id,
             "price_types_found": [t.get("Description") for t in price_types],
             "price_type_key": price_type_key,
+            "nom_price_barcode_fields": nom_fields,
             "existing_barcode_fields": existing_bc,
             "existing_price_fields": existing_price,
             "barcode_attempts": bc_results,
