@@ -452,6 +452,19 @@ async def ensure_catalog_index(current_user: User = Depends(get_current_admin)):
     return {"status": "ok"}
 
 
+@router.delete("/clear-catalog")
+async def clear_catalog(current_user: User = Depends(get_current_admin)):
+    """Truncate global_products to free DB space before re-import."""
+    from sqlalchemy import text as _text
+    from backend.database.connection import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(_text("SELECT COUNT(*) FROM global_products"))
+        count = result.scalar()
+        await db.execute(_text("TRUNCATE TABLE global_products RESTART IDENTITY CASCADE"))
+        await db.commit()
+    return {"status": "cleared", "deleted": count}
+
+
 class DownloadCatalogRequest(BaseModel):
     url: str
     filename: str  # e.g. "barcodes.csv" or "products.zip"

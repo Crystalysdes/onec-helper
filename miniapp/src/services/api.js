@@ -133,6 +133,7 @@ export const adminAPI = {
   products: (params) => api.get('/admin/products', { params }),
   getProduct: (id) => api.get(`/admin/products/${id}`),
   bulkDeleteProducts: (ids) => api.delete('/admin/products/bulk-delete', { data: { ids } }),
+  clearCatalog: () => api.delete('/admin/clear-catalog'),
 }
 
 export const subscriptionsAPI = {

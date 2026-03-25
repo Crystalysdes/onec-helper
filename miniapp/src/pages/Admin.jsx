@@ -467,26 +467,45 @@ export default function Admin() {
                   </div>
                 )}
 
-                <button
-                  className="btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50"
-                  disabled={catLoading}
-                  onClick={async () => {
-                    setCatLoading(true)
-                    setCatProgress(null)
-                    try {
-                      await adminAPI.importCatalog(catLimit)
-                      toast.success('Импорт запущен...')
-                      startCatPoll()
-                    } catch (e) {
-                      toast.error(e.response?.data?.detail || 'Ошибка')
-                      setCatLoading(false)
-                    }
-                  }}
-                >
-                  {catLoading
-                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Импорт идёт...</>
-                    : '📥 Запустить импорт'}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    className="btn-primary flex-1 flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                    disabled={catLoading}
+                    onClick={async () => {
+                      setCatLoading(true)
+                      setCatProgress(null)
+                      try {
+                        await adminAPI.importCatalog(catLimit)
+                        toast.success('Импорт запущен...')
+                        startCatPoll()
+                      } catch (e) {
+                        toast.error(e.response?.data?.detail || 'Ошибка')
+                        setCatLoading(false)
+                      }
+                    }}
+                  >
+                    {catLoading
+                      ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Идёт...</>
+                      : '📥 Запустить импорт'}
+                  </button>
+                  <button
+                    className="px-3 py-2 rounded-xl text-xs font-medium active:opacity-70 flex-shrink-0"
+                    style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
+                    disabled={catLoading}
+                    onClick={async () => {
+                      if (!window.confirm('Удалить все товары из базы? Это освободит место для нового импорта.')) return
+                      try {
+                        const r = await adminAPI.clearCatalog()
+                        toast.success(`Каталог очищен (${(r.data.deleted||0).toLocaleString('ru-RU')} записей)`)
+                        setCatFile(null)
+                      } catch (e) {
+                        toast.error(e.response?.data?.detail || 'Ошибка очистки')
+                      }
+                    }}
+                  >
+                    🗑 Очистить
+                  </button>
+                </div>
               </div>
 
 
