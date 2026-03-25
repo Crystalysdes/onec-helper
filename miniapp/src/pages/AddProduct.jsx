@@ -375,7 +375,7 @@ export default function AddProduct() {
       if (res.data.found) {
         setScan({ code, status: 'found', product: res.data.product, storeName: res.data.store_name })
         // Silently enrich catalog products in the background
-        if (res.data.source === 'catalog') {
+        if (res.data.source === 'catalog' || res.data.source === 'global') {
           enrichAndUpdate(res.data.product, setScan, code)
         }
         return
@@ -442,14 +442,15 @@ export default function AddProduct() {
     if (!aiPreview || !currentStore) return
     setLoading(true)
     try {
-      const res = await productsAPI.quickAdd(currentStore.id, aiText.trim() || aiPreview.name, aiScan?.code || null)
-      toast.success(`"${res.data.name}" добавлен!`)
+      // Use already-enriched aiPreview data directly — no need to re-call AI
+      await productsAPI.create({ ...aiPreview, store_id: currentStore.id, id: undefined })
+      toast.success(`"${aiPreview.name}" добавлен!`)
       setAiText(''); setAiScan(null); setAiPreview(null); setPhotoState(null); setPhotoProduct(null)
       navigate('/products')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка добавления')
     } finally { setLoading(false) }
-  }, [aiPreview, aiText, aiScan, currentStore, navigate])
+  }, [aiPreview, currentStore, navigate])
 
   const editAiPreview = useCallback(() => {
     if (!aiPreview) return
@@ -517,13 +518,30 @@ export default function AddProduct() {
   }, [currentStore])
 
   const handlePhotoBarcodeScan = useCallback(() => {
-    openScanner((code) => {
+    openScanner(async (code) => {
       if (!code) return
+      // Check global catalog first before using photo-recognized data
+      try {
+        const res = await productsAPI.checkBarcode(code)
+        if (res.data.found) {
+          // Merge photo AI data with catalog data (catalog may have better structured fields)
+          const merged = { ...photoProduct, ...res.data.product, barcode: code }
+          setAiPreview(merged)
+          if (res.data.source === 'catalog' || res.data.source === 'global') {
+            enrichAndUpdate(merged, (updater) => {
+              setAiPreview(prev => prev ? (typeof updater === 'function' ? updater(prev) : updater) : prev)
+            }, code)
+          }
+          setPhotoState(null)
+          setPhotoProduct(null)
+          return
+        }
+      } catch { /* fall through to photo data */ }
       setAiPreview({ ...photoProduct, barcode: code })
       setPhotoState(null)
       setPhotoProduct(null)
     })
-  }, [openScanner, photoProduct])
+  }, [openScanner, photoProduct, enrichAndUpdate])
 
   const skipPhotoBarcode = useCallback(() => {
     setAiPreview(photoProduct)
@@ -542,8 +560,23 @@ export default function AddProduct() {
         await productsAPI.update(editingProductId, data)
         toast.success('Товар обновлён!')
       } else {
-        await productsAPI.create({ ...data, store_id: currentStore.id })
-        toast.success('Товар добавлен!')
+        // Check if barcode already exists in own store — update instead of creating duplicate
+        let targetId = null
+        if (data.barcode?.trim()) {
+          try {
+            const res = await productsAPI.checkBarcode(data.barcode.trim())
+            if (res.data.found && res.data.source === 'own' && res.data.product?.id) {
+              targetId = res.data.product.id
+            }
+          } catch { /* ignore, proceed to create */ }
+        }
+        if (targetId) {
+          await productsAPI.update(targetId, data)
+          toast.success('Товар обновлён (штрих-код уже был в магазине)')
+        } else {
+          await productsAPI.create({ ...data, store_id: currentStore.id })
+          toast.success('Товар добавлен!')
+        }
       }
       reset()
       setEditingProductId(null)
@@ -603,13 +636,7 @@ export default function AddProduct() {
     })
   }, [openScanner, setValue, currentStore])
 
-  // Auto-navigate to manual form when any scan finds no product in DB
-  useEffect(() => {
-    if (barScan?.status !== 'new') return
-    setValue('barcode', barScan.code)
-    setBarScan(null)
-    setMethod('manual')
-  }, [barScan, setValue])
+  // No auto-redirect on barScan 'new' — let user choose between AI and Manual from the barcode tab UI
 
   // ════════════════════════════════════════════════════════════════
   //  RENDER
