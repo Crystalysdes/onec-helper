@@ -637,35 +637,38 @@ export default function Settings() {
                       </span>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-3 gap-1.5">
                     <button
-                      className="btn-secondary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
+                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70"
+                      style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
                       disabled={testLoading}
                       onClick={() => testIntegration(currentStore.id, int.id)}
                     >
                       {testLoading
-                        ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                        : <TestTube2 size={14} />}
+                        ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                        : <TestTube2 size={12} />}
                       Тест
                     </button>
                     <button
-                      className="btn-secondary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
+                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70"
+                      style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
                       disabled={diagnoseLoading}
                       onClick={() => diagnoseIntegration(currentStore.id, int.id)}
                     >
                       {diagnoseLoading
-                        ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                        ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                         : <span>🔍</span>}
                       Диагностика
                     </button>
                     <button
-                      className="btn-primary flex-1 flex items-center justify-center gap-2 py-2 text-sm"
+                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70 text-white"
+                      style={{ background: 'var(--tg-theme-button-color)' }}
                       disabled={syncLoading}
                       onClick={() => syncIntegration(currentStore.id, int.id)}
                     >
                       {syncLoading
-                        ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        : <RotateCcw size={14} />}
+                        ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        : <RotateCcw size={12} />}
                       Импорт
                     </button>
                   </div>
@@ -675,7 +678,7 @@ export default function Settings() {
                       <div className="grid grid-cols-2 gap-1.5">
                         {[
                           ['Объектов OData', diagnoseResult.entities_published],
-                          ['Товаров в 1С (первые 5)', diagnoseResult.products_ok ? diagnoseResult.products_sample?.length : '❌ ошибка'],
+                          ['Товаров в 1С (пример)', diagnoseResult.products_ok ? diagnoseResult.products_sample?.length : `❌ ${diagnoseResult.products_error || 'нет доступа'}`],
                           ['Штрихкодов в 1С', diagnoseResult.barcodes_fetched],
                           ['Товаров в боте', diagnoseResult.synced_in_db],
                           ['Товаров с баркодом', diagnoseResult.synced_with_barcode],
@@ -702,10 +705,18 @@ export default function Settings() {
                           ))}
                         </div>
                       )}
+                      {diagnoseResult.nom_entities?.length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Каталоги номенклатуры в OData:</p>
+                          {diagnoseResult.nom_entities.map((e, i) => (
+                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
+                          ))}
+                        </div>
+                      )}
                       {diagnoseResult.entities?.length > 0 && (
                         <details>
-                          <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>Опубликованные объекты OData</summary>
-                          <p style={{ color: 'var(--tg-theme-text-color)' }} className="mt-1">{diagnoseResult.entities.join(', ')}</p>
+                          <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>Все объекты OData ({diagnoseResult.entities_published})</summary>
+                          <p style={{ color: 'var(--tg-theme-text-color)' }} className="mt-1 break-all">{diagnoseResult.entities.join(', ')}</p>
                         </details>
                       )}
                     </div>

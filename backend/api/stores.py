@@ -495,7 +495,16 @@ async def diagnose_onec(
     )
 
     entities = await client.get_entities()
-    ok_products, products = await client.get_products(limit=5, offset=0)
+
+    products_error = None
+    try:
+        ok_products, products = await client.get_products(limit=5, offset=0)
+        if not ok_products:
+            products_error = "Catalog_Номенклатура не опубликован в OData"
+    except Exception as e:
+        ok_products, products = False, []
+        products_error = str(e)
+
     barcodes = await client.get_barcodes()
 
     # Count synced products in DB
@@ -503,11 +512,16 @@ async def diagnose_onec(
         select(ProductCache).where(ProductCache.store_id == store_id)
     )).scalars().all()
 
+    # Find which entities match nomenclature
+    nom_entities = [e for e in entities if "омен" in e or "Catalog" in e][:10]
+
     return {
         "entities_published": len(entities),
         "entities": entities[:30],
+        "nom_entities": nom_entities,
         "products_ok": ok_products,
         "products_sample": products[:5],
+        "products_error": products_error,
         "barcodes_fetched": len(barcodes),
         "barcodes_sample": dict(list(barcodes.items())[:5]),
         "synced_in_db": len(synced_count),
