@@ -146,6 +146,44 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
     return store
 
 
+async def _push_barcode_and_prices(
+    onec_url: str, onec_username: str, onec_password_enc: str,
+    onec_id: str, barcode: Optional[str], price: Optional[float],
+    purchase_price: Optional[float], name: str, article: Optional[str],
+    delay: int = 5,
+):
+    """Push barcode + prices to 1C after a delay so the entity is fully settled."""
+    import asyncio
+    from backend.integrations.onec_integration import OneCClient
+    from backend.core.security import decrypt_password
+    from loguru import logger
+
+    await asyncio.sleep(delay)
+    try:
+        client = OneCClient(onec_url, onec_username, decrypt_password(onec_password_enc))
+        clean_id = str(onec_id).strip("{}")
+
+        class _S:
+            pass
+        snap = _S()
+        snap.name = name
+        snap.barcode = barcode
+        snap.article = article
+        snap.category = None
+
+        await client.update_product(clean_id, snap)
+        if barcode and str(barcode).strip():
+            await client.create_barcode(clean_id, str(barcode).strip())
+        if price and price > 0:
+            await client.set_price(clean_id, float(price), price_type_name="розн")
+        if purchase_price and purchase_price > 0:
+            await client.set_price(clean_id, float(purchase_price), price_type_name="закуп")
+        logger.info(f"[1C] barcode+prices pushed for '{name}' (onec_id={clean_id}, barcode={barcode})")
+    except Exception as e:
+        from loguru import logger as _log
+        _log.error(f"[1C] barcode push error for '{name}': {e}")
+
+
 class _ProductSnapshot:
     """Lightweight product data carrier for background 1C push (no DB re-fetch needed)."""
     def __init__(self, id, name, barcode, price, purchase_price, onec_id, article, category, unit, description):
@@ -471,7 +509,7 @@ async def create_product(
     await db.commit()
     result = _serialize_product(product)
 
-    # ── Synchronous 1C push (same logic as "В 1С" button, proven to work) ──
+    # ── Phase 1: create product in 1C synchronously, save onec_id ──
     try:
         integ_r = await db.execute(
             select(Integration).where(
@@ -484,6 +522,7 @@ async def create_product(
             from backend.integrations.onec_integration import OneCClient
             from backend.core.security import decrypt_password
             from loguru import logger as _log
+            import asyncio as _aio
             client = OneCClient(
                 url=integration.onec_url,
                 username=integration.onec_username,
@@ -498,21 +537,25 @@ async def create_product(
                 if found:
                     product.onec_id = found
                     await db.commit()
+
+            # ── Phase 2: barcode + prices after 5s delay (entity must settle in 1C first) ──
             if product.onec_id:
-                clean_id = product.onec_id.strip("{}")
-                # PATCH update (sets Штрихкод + settles entity in 1C)
-                await client.update_product(clean_id, product)
-                # Also push barcode to InformationRegister
-                if product.barcode and product.barcode.strip():
-                    await client.create_barcode(clean_id, product.barcode.strip())
-                if product.price and product.price > 0:
-                    await client.set_price(clean_id, float(product.price), price_type_name="розн")
-                if product.purchase_price and product.purchase_price > 0:
-                    await client.set_price(clean_id, float(product.purchase_price), price_type_name="закуп")
-                _log.info(f"[1C create] '{product.name}' synced barcode={product.barcode} onec_id={clean_id}")
+                _aio.ensure_future(_push_barcode_and_prices(
+                    onec_url=integration.onec_url,
+                    onec_username=integration.onec_username,
+                    onec_password_enc=integration.onec_password_encrypted,
+                    onec_id=product.onec_id,
+                    barcode=product.barcode,
+                    price=product.price,
+                    purchase_price=product.purchase_price,
+                    name=product.name,
+                    article=product.article,
+                    delay=5,
+                ))
+                _log.info(f"[1C] '{product.name}' created in 1C, barcode push scheduled in 5s")
     except Exception as _e:
         from loguru import logger as _log
-        _log.error(f"[1C create] push failed for '{product.name}': {_e}")
+        _log.error(f"[1C create] error for '{product.name}': {_e}")
 
     return result
 
