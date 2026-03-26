@@ -569,7 +569,7 @@ async def create_product(
                     name=product.name,
                     article=product.article,
                     quantity=product.quantity,
-                    use_accounting=bool(_settings.get("use_accounting", True)),
+                    use_accounting=bool(_settings.get("use_accounting", False)),
                     delay=5,
                 ))
                 _log.info(f"[1C P2] '{product.name}' barcode push scheduled in 5s (onec_id={product.onec_id})")

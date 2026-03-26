@@ -32,7 +32,7 @@ class IntegrationCreate(BaseModel):
     onec_username: str
     onec_password: str
     name: Optional[str] = "1C Integration"
-    use_accounting: bool = True   # False = skip bookkeeping journal (ФормироватьПроводки=false)
+    use_accounting: bool = False  # True = require debit account in bookkeeping journal
 
 
 class IntegrationUpdate(BaseModel):
