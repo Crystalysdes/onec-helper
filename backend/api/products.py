@@ -436,7 +436,6 @@ async def list_products(
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_product(
     payload: ProductCreate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -471,11 +470,50 @@ async def create_product(
     db.add(log)
     await db.commit()
     result = _serialize_product(product)
-    background_tasks.add_task(
-        _push_to_onec_bg, store_id, product.id,
-        product.name, product.barcode, product.price, product.purchase_price,
-        product.onec_id, product.article, product.category, product.unit, product.description
-    )
+
+    # ── Synchronous 1C push (same logic as "В 1С" button, proven to work) ──
+    try:
+        integ_r = await db.execute(
+            select(Integration).where(
+                Integration.store_id == store_id,
+                Integration.status == IntegrationStatus.active,
+            )
+        )
+        integration = integ_r.scalars().first()
+        if integration:
+            from backend.integrations.onec_integration import OneCClient
+            from backend.core.security import decrypt_password
+            from loguru import logger as _log
+            client = OneCClient(
+                url=integration.onec_url,
+                username=integration.onec_username,
+                password=decrypt_password(integration.onec_password_encrypted),
+            )
+            ok, data = await client.create_product(product)
+            if ok and data and data.get("Ref_Key"):
+                product.onec_id = str(data["Ref_Key"]).strip("{}")
+                await db.commit()
+            elif ok and not product.onec_id:
+                found = await client.find_product_by_name(product.name)
+                if found:
+                    product.onec_id = found
+                    await db.commit()
+            if product.onec_id:
+                clean_id = product.onec_id.strip("{}")
+                # PATCH update (sets Штрихкод + settles entity in 1C)
+                await client.update_product(clean_id, product)
+                # Also push barcode to InformationRegister
+                if product.barcode and product.barcode.strip():
+                    await client.create_barcode(clean_id, product.barcode.strip())
+                if product.price and product.price > 0:
+                    await client.set_price(clean_id, float(product.price), price_type_name="розн")
+                if product.purchase_price and product.purchase_price > 0:
+                    await client.set_price(clean_id, float(product.purchase_price), price_type_name="закуп")
+                _log.info(f"[1C create] '{product.name}' synced barcode={product.barcode} onec_id={clean_id}")
+    except Exception as _e:
+        from loguru import logger as _log
+        _log.error(f"[1C create] push failed for '{product.name}': {_e}")
+
     return result
 
 
