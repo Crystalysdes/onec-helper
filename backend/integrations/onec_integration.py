@@ -731,6 +731,7 @@ class OneCClient:
         base_reg = {
             "Номенклатура_Key": onec_id,
             "Количество": float(quantity),
+            "Стоимость": summa,          # cost — required resource in some registers
             "Характеристика_Key": _zero,
         }
         if wh_key:
@@ -740,8 +741,8 @@ class OneCClient:
 
         for acc_reg in (
             "AccumulationRegister_Запасы",              # 1С:УНФ
-            "AccumulationRegister_ТоварыНаСкладах",  # УТ/Розница
-            "AccumulationRegister_ТоварыОрганизаций", # КА
+            "AccumulationRegister_ТоварыНаСкладах",     # УТ/Розница
+            "AccumulationRegister_ТоварыОрганизаций",   # КА
         ):
             for rec_payload in [
                 {"Period": period, "RecordType": "Receipt", **base_reg},
@@ -753,7 +754,7 @@ class OneCClient:
                 if ok:
                     logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
                     return True
-            logger.warning(f"1C stock direct {acc_reg} failed")
+            logger.warning(f"1C stock direct {acc_reg} failed: {resp}")
 
         # ── 2-4. Document-based approaches ──
         debit_key, credit_key = await self._get_stock_accounts(onec_id)
@@ -786,6 +787,8 @@ class OneCClient:
         doc_variants = [
             # (doc_type, tab_section)
             ("Document_ОприходованиеЗапасов",   "Запасы"),  # УНФ / Розница 3.0
+            ("Document_ВводОстатков",            "Запасы"),  # УНФ opening balances — uses счет 00 automatically
+            ("Document_ВводОстатков",            "Товары"),  # alt tab name
             ("Document_ОприходованиеТоваров",    "Товары"),  # УТ/КА
             ("Document_ПоступлениеТоваровУслуг", "Товары"),  # КА fallback
         ]
