@@ -462,6 +462,32 @@ export default function AddProduct() {
   }, [currentStore, navigate])
 
   // ════════════════════════════════════════════════════════════════
+  //  fillFormAndEdit — must be declared before startAiScan/handlePhotoBarcodeScan
+  // ════════════════════════════════════════════════════════════════
+  const fillFormAndEdit = useCallback((product) => {
+    suppressSearch.current = true
+    setValue('name', product.name || '')
+    setValue('price', product.price ?? '')
+    setValue('purchase_price', product.purchase_price ?? '')
+    setValue('barcode', product.barcode || '')
+    setValue('article', product.article || '')
+    setValue('description', product.description || '')
+    setEditingProductId(product.id)
+    setNameSuggestions([])
+    setManualDuplicate(null)
+    setAiScan(null)
+    setBarScan(null)
+    const textLower = (aiText || '').toLowerCase()
+    const qtyMatch = textLower.match(/(\d+(?:\.\d+)?)\s*(шт|кг|гр|л|мл|упак|пара|рулон|м)\b/)
+    setValue('unit', qtyMatch ? qtyMatch[2] : (product.unit || 'шт'))
+    setValue('quantity', qtyMatch ? parseFloat(qtyMatch[1]) : (product.quantity ?? 0))
+    const catMap = { 'напитк': 'Напитки', 'молоч': 'Молочные продукты', 'выпеч': 'Выпечка', 'хоз': 'Хозтовары', 'бака': 'Бакалея', 'снек': 'Снеки', 'мяс': 'Мясо', 'конд': 'Кондитерские', 'алк': 'Алкоголь', 'косм': 'Косметика' }
+    const catFromText = Object.entries(catMap).find(([k]) => textLower.includes(k))
+    setValue('category', catFromText ? catFromText[1] : (product.category || ''))
+    setMethod('manual')
+  }, [setValue, aiText])
+
+  // ════════════════════════════════════════════════════════════════
   //  QUICK ADD handlers
   // ════════════════════════════════════════════════════════════════
   const startAiScan = useCallback(() => {
@@ -760,30 +786,6 @@ export default function AddProduct() {
       toast.error(e.response?.data?.detail || 'Ошибка')
     } finally { setLoading(false) }
   }, [currentStore, editingProductId, reset, navigate])
-
-  const fillFormAndEdit = useCallback((product) => {
-    suppressSearch.current = true
-    setValue('name', product.name || '')
-    setValue('price', product.price ?? '')
-    setValue('purchase_price', product.purchase_price ?? '')
-    setValue('barcode', product.barcode || '')
-    setValue('article', product.article || '')
-    setValue('description', product.description || '')
-    setEditingProductId(product.id)
-    setNameSuggestions([])
-    setManualDuplicate(null)
-    setAiScan(null)
-    setBarScan(null)
-    // Parse aiText for quantity/unit/category if user typed them
-    const textLower = (aiText || '').toLowerCase()
-    const qtyMatch = textLower.match(/(\d+(?:\.\d+)?)\s*(шт|кг|гр|л|мл|упак|пара|рулон|м)\b/)
-    setValue('unit', qtyMatch ? qtyMatch[2] : (product.unit || 'шт'))
-    setValue('quantity', qtyMatch ? parseFloat(qtyMatch[1]) : (product.quantity ?? 0))
-    const catMap = { 'напитк': 'Напитки', 'молоч': 'Молочные продукты', 'выпеч': 'Выпечка', 'хоз': 'Хозтовары', 'бака': 'Бакалея', 'снек': 'Снеки', 'мяс': 'Мясо', 'конд': 'Кондитерские', 'алк': 'Алкоголь', 'косм': 'Косметика' }
-    const catFromText = Object.entries(catMap).find(([k]) => textLower.includes(k))
-    setValue('category', catFromText ? catFromText[1] : (product.category || ''))
-    setMethod('manual')
-  }, [setValue, aiText])
 
   const scanForForm = useCallback(() => {
     openScanner(async (code) => {
