@@ -262,6 +262,7 @@ class OneCClient:
                "Характеристика_Key": _zero, "ВидЦены_Key": vid_key}
         doc = {"Date": period, "ВидЦены_Key": vid_key,
                 "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
+                "Комментарий": "Авто из 1С Хелпер",
                 "Запасы": [row]}
         if org_key:
             doc["Организация_Key"] = org_key
@@ -278,6 +279,12 @@ class OneCClient:
                 )
                 if ok2:
                     logger.info(f"1C price Document posted: {onec_id} → {price}")
+                    # Mark for deletion so it doesn’t clutter the 1C journal
+                    await self._request(
+                        "PATCH",
+                        f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{ref_key}')",
+                        json={"ПометкаУдаления": True}
+                    )
                     return True
                 logger.warning(f"1C price Document Post failed for {ref_key}: {resp2}")
         logger.warning(f"1C price Document_УстановкаЦен/Запасы failed: {resp}")
