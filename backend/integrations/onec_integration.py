@@ -767,25 +767,44 @@ class OneCClient:
         if org_key:
             base_std["Организация_Key"] = org_key
 
-        register_attempts = [
-            # (register_name, payload)
+        # Discover published AccumulationRegister entities once per client instance
+        if not getattr(self, "_published_acc_registers", None):
+            ok0, root = await self._request("GET", "odata/standard.odata/?$format=json")
+            if ok0 and isinstance(root, dict):
+                all_names = {e.get("name", "") for e in root.get("value", [])}
+                self._published_acc_registers = {
+                    n for n in all_names if n.startswith("AccumulationRegister_")
+                }
+                logger.info(f"1C published AccumulationRegisters: {sorted(self._published_acc_registers)}")
+            else:
+                self._published_acc_registers = set()
+        pub_regs = getattr(self, "_published_acc_registers", set())
+
+        register_candidates = [
+            # УНФ-specific registers (warehouse = СтруктурнаяЕдиница_Key)
             ("AccumulationRegister_ЗапасыНаСкладах", {"Period": period, "RecordType": "Receipt", **base_unf}),
             ("AccumulationRegister_ЗапасыНаСкладах", {"Period": period, "ВидДвижения": "Приход", **base_unf}),
             ("AccumulationRegister_Запасы",          {"Period": period, "RecordType": "Receipt", **base_unf}),
             ("AccumulationRegister_Запасы",          {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            # УТ/КА registers (warehouse = Склад_Key)
             ("AccumulationRegister_ТоварыНаСкладах", {"Period": period, "RecordType": "Receipt", **base_std}),
             ("AccumulationRegister_ТоварыОрганизаций",{"Period": period, "RecordType": "Receipt", **base_std}),
         ]
-        last_reg_resp: dict = {}
-        for acc_reg, rec_payload in register_attempts:
+        for acc_reg, rec_payload in register_candidates:
+            # Skip registers not published in this 1С instance
+            if pub_regs and acc_reg not in pub_regs:
+                logger.debug(f"1C skip unpublished {acc_reg}")
+                continue
             ok, resp = await self._request(
                 "POST", f"odata/standard.odata/{acc_reg}", json=rec_payload
             )
             if ok:
                 logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
                 return True
-            last_reg_resp = resp or {}
-        logger.warning(f"1C stock direct register write failed: {last_reg_resp}")
+            err_code = (resp or {}).get("status", "?")
+            err_msg  = str((resp or {}).get("error", ""))[:120]
+            logger.warning(f"1C {acc_reg} POST failed [{err_code}]: {err_msg}")
+        logger.warning("1C stock: all direct register writes failed — falling back to document")
 
         # ── 2-4. Document-based approaches ──
         debit_key, credit_key = await self._get_stock_accounts(onec_id)
