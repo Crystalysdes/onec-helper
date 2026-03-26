@@ -908,8 +908,10 @@ class OneCClient:
             ("Document_ОприходованиеТоваров",    "Товары", {}),  # УТ/КА
             ("Document_ПоступлениеТоваровУслуг", "Товары", {}),  # КА fallback
         ]
-        # Attempt order: with accounting first (if use_accounting), then without
-        acct_attempts = ([False, True] if use_accounting else [True])
+        # Always try with _zero accounts first (no_acc=False) — row gets СчетДт_Key=_zero
+        # which may trigger 1С ОбработкаЗаполнения to auto-fill the account.
+        # Then fall back to no-accounting attempt.
+        acct_attempts = [False, True]
 
         for doc_type, tab_name, extra_fields in doc_variants:
 
