@@ -11,7 +11,7 @@ from backend.database.connection import init_db
 from backend.database.backfill import backfill_global_products
 from backend.api import api_router
 from backend.tasks.auto_renewal import renewal_loop
-from backend.tasks.onec_sync import stock_alert_loop, auto_sync_loop
+from backend.tasks.onec_sync import stock_alert_loop, auto_sync_loop, fast_stock_sync_loop
 
 
 @asynccontextmanager
@@ -31,10 +31,12 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(renewal_loop())
     stock_task = asyncio.create_task(stock_alert_loop())
     sync_task = asyncio.create_task(auto_sync_loop())
+    fast_stock_task = asyncio.create_task(fast_stock_sync_loop())
     yield
     task.cancel()
     stock_task.cancel()
     sync_task.cancel()
+    fast_stock_task.cancel()
     logger.info("Shutting down 1С Helper API...")
 
 

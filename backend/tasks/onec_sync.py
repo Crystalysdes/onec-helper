@@ -15,7 +15,8 @@ from backend.database.connection import AsyncSessionLocal
 from backend.database.models import Integration, IntegrationStatus, ProductCache, Store, User
 from backend.core.security import decrypt_password
 
-SYNC_INTERVAL_SECONDS = 30
+SYNC_INTERVAL_SECONDS = 300        # full product+price+barcode sync: every 5 min
+FAST_STOCK_INTERVAL_SECONDS = 60   # stock-only sync: every 60 s
 STOCK_CHECK_INTERVAL_HOURS = 6
 LOW_STOCK_THRESHOLD = 5.0
 _TG_API = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
@@ -103,10 +104,56 @@ async def _check_and_notify():
                 logger.error(f"onec_sync notify error for integration {integration.id}: {e}")
 
 
+async def _fast_stock_sync_all():
+    """Lightweight stock-only sync: read balances from 1C and update product quantities."""
+    from backend.integrations.onec_integration import OneCClient
+    from sqlalchemy import update as sa_update
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Integration).where(Integration.status == IntegrationStatus.active)
+        )
+        integrations = result.scalars().all()
+
+    for integration in integrations:
+        try:
+            client = OneCClient(
+                url=integration.onec_url,
+                username=integration.onec_username,
+                password=decrypt_password(integration.onec_password_encrypted),
+            )
+            ok, balances = await client.get_stock_balances()
+            if not ok or not balances:
+                continue
+
+            stock_map = {str(b["onec_id"]).strip("{}"): b["quantity"] for b in balances}
+
+            async with AsyncSessionLocal() as db:
+                rows = (await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.store_id == integration.store_id,
+                        ProductCache.onec_id.isnot(None),
+                    )
+                )).scalars().all()
+
+                changed = 0
+                for p in rows:
+                    clean = str(p.onec_id).strip("{}")
+                    if clean in stock_map:
+                        new_qty = float(stock_map[clean])
+                        if p.quantity != new_qty:
+                            p.quantity = new_qty
+                            changed += 1
+                if changed:
+                    await db.commit()
+                    logger.info(f"[stock sync] {integration.store_id}: updated {changed} quantities")
+        except Exception as e:
+            logger.error(f"fast_stock_sync error for integration {integration.id}: {e}")
+
+
 async def auto_sync_loop():
-    """Background loop — sync products+stock from 1C every SYNC_INTERVAL_SECONDS."""
+    """Background loop — full sync (products+stock+prices+barcodes) every SYNC_INTERVAL_SECONDS."""
     logger.info(f"Auto-sync loop started (interval={SYNC_INTERVAL_SECONDS}s)")
-    # First run after 30 s to let server fully start
     await asyncio.sleep(30)
     while True:
         logger.info("Running auto 1C sync...")
@@ -115,6 +162,18 @@ async def auto_sync_loop():
         except Exception as e:
             logger.error(f"auto_sync_loop error: {e}")
         await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+
+
+async def fast_stock_sync_loop():
+    """Background loop — lightweight stock-only sync every FAST_STOCK_INTERVAL_SECONDS."""
+    logger.info(f"Fast stock sync loop started (interval={FAST_STOCK_INTERVAL_SECONDS}s)")
+    await asyncio.sleep(15)  # short initial delay
+    while True:
+        try:
+            await _fast_stock_sync_all()
+        except Exception as e:
+            logger.error(f"fast_stock_sync_loop error: {e}")
+        await asyncio.sleep(FAST_STOCK_INTERVAL_SECONDS)
 
 
 async def stock_alert_loop():

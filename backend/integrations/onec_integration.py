@@ -693,11 +693,6 @@ class OneCClient:
                 )
                 if ok2:
                     logger.info(f"1C stock posted ({doc_type}): {onec_id} qty={quantity}")
-                    await self._request(
-                        "PATCH",
-                        f"odata/standard.odata/{doc_type}(guid'{ref_key}')",
-                        json={"ПометкаУдаления": True}
-                    )
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type}): {resp2}")
             else:
