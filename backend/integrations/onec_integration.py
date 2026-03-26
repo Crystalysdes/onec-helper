@@ -667,6 +667,7 @@ class OneCClient:
 
         # ── Source 1.5: Read accounts from existing POSTED documents ─────────
         if not getattr(self, "_cached_doc_accounts", None):
+            self._cached_doc_accounts = None
             for doc_type, tab in (
                 ("Document_ОприходованиеЗапасов", "Запасы"),
                 ("Document_ОприходованиеТоваров", "Товары"),
@@ -695,7 +696,7 @@ class OneCClient:
                         break
                 if self._cached_doc_accounts:
                     break
-        if self._cached_doc_accounts:
+        if getattr(self, "_cached_doc_accounts", None):
             return self._cached_doc_accounts
 
         # ── Source 2: AccountingRegister — read GUIDs from existing transactions ─
@@ -923,26 +924,20 @@ class OneCClient:
                 doc_created = True
                 ref_key = str(resp["Ref_Key"]).strip("{}")
 
-                # ── GET back the created doc — 1С may auto-fill accounts via ОбработкаЗаполнения ──
+                # ── GET back the created doc header (no $expand — УНФ returns 501 for tabular) ──
                 ok_g, doc_data = await self._request(
                     "GET",
-                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
-                    f"?$format=json&$expand={tab_name}"
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')?$format=json"
                 )
                 if ok_g and isinstance(doc_data, dict):
-                    rows = doc_data.get(tab_name, [])
                     hdr_acct_fields = [k for k in doc_data if "Счет" in k or "Провод" in k]
-                    row_acct_fields = [k for k in (rows[0] if rows else {}) if "Счет" in k]
-                    logger.info(f"1C {doc_type} header acct fields: {hdr_acct_fields}; "
-                                f"row acct fields: {row_acct_fields}")
-                    # Check if 1С auto-filled a valid account in the row
-                    if rows:
-                        for af in ("СчетДт_Key", "СчетУчета_Key", "СчетДебета_Key"):
-                            auto_v = str(rows[0].get(af, "")).strip("{}")
-                            if auto_v and auto_v != _zero and not debit_key:
-                                debit_key = auto_v
-                                logger.info(f"1C auto-filled {af}={debit_key} in {doc_type} row")
-                                break
+                    logger.info(f"1C {doc_type} header acct fields: {hdr_acct_fields}")
+                    for af in ("СчетДт_Key", "СчетУчета_Key", "СчетДебета_Key"):
+                        auto_v = str(doc_data.get(af, "")).strip("{}")
+                        if auto_v and auto_v != _zero and not debit_key:
+                            debit_key = auto_v
+                            logger.info(f"1C auto-filled {af}={debit_key} in {doc_type} header")
+                            break
 
                 ok2, resp2 = await self._request(
                     "POST",
