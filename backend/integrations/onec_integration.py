@@ -569,6 +569,84 @@ class OneCClient:
             return self._org_key_cache
         return None
 
+    async def _get_warehouse_key(self) -> str | None:
+        """Return GUID of the first warehouse (Склад) from 1C."""
+        if hasattr(self, "_warehouse_key_cache") and self._warehouse_key_cache:
+            return self._warehouse_key_cache
+        for catalog in ("Catalog_Склады", "Catalog_МестаХранения"):
+            ok, data = await self._request(
+                "GET", f"odata/standard.odata/{catalog}?$format=json&$top=1&$filter=IsFolder eq false"
+            )
+            if ok and isinstance(data, dict) and data.get("value"):
+                self._warehouse_key_cache = str(data["value"][0].get("Ref_Key", "")).strip("{}")
+                logger.info(f"1C warehouse ({catalog}): {self._warehouse_key_cache}")
+                return self._warehouse_key_cache
+        return None
+
+    async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0) -> bool:
+        """Create a stock posting document in 1C to set the initial quantity.
+
+        Tries Document_ОприходованиеТоваров first (УТ/КА/УНФ/Розница),
+        then Document_ПоступлениеТоваровУслуг as fallback.
+        """
+        if not quantity or quantity <= 0:
+            return False
+        onec_id = str(onec_id).strip("{}")
+        from datetime import datetime as _dt
+        period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        _zero = "00000000-0000-0000-0000-000000000000"
+
+        org_key = await self._get_org_key()
+        wh_key = await self._get_warehouse_key()
+        summa = round(float(quantity) * float(price or 0), 2)
+        row = {
+            "LineNumber": 1,
+            "Номенклатура_Key": onec_id,
+            "Количество": float(quantity),
+            "Цена": float(price or 0),
+            "Сумма": summa,
+            "Характеристика_Key": _zero,
+        }
+
+        doc_types = [
+            ("Document_ОприходованиеТоваров", "Товары"),
+            ("Document_ПоступлениеТоваровУслуг", "Товары"),
+            ("Document_ПересчетТоваров", "Товары"),
+        ]
+        for doc_type, tab_name in doc_types:
+            doc: dict = {
+                "Date": period,
+                "Комментарий": "Авто из 1С Хелпер",
+                tab_name: [row],
+            }
+            if org_key:
+                doc["Организация_Key"] = org_key
+            if wh_key:
+                doc["Склад_Key"] = wh_key
+            ok, resp = await self._request(
+                "POST", f"odata/standard.odata/{doc_type}", json=doc
+            )
+            if ok and isinstance(resp, dict) and resp.get("Ref_Key"):
+                ref_key = str(resp["Ref_Key"]).strip("{}")
+                ok2, resp2 = await self._request(
+                    "POST",
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')/Post"
+                )
+                if ok2:
+                    logger.info(f"1C stock posted ({doc_type}): {onec_id} qty={quantity}")
+                    await self._request(
+                        "PATCH",
+                        f"odata/standard.odata/{doc_type}(guid'{ref_key}')",
+                        json={"ПометкаУдаления": True}
+                    )
+                    return True
+                logger.warning(f"1C stock Post failed ({doc_type}): {resp2}")
+            else:
+                logger.warning(f"1C stock create failed ({doc_type}): {resp}")
+
+        logger.warning(f"1C set_stock: all attempts failed for {onec_id} qty={quantity}")
+        return False
+
     async def create_barcode(self, onec_id: str, barcode: str) -> bool:
         """Create a barcode record in 1C.
 

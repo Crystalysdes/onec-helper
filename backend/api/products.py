@@ -150,9 +150,10 @@ async def _push_barcode_and_prices(
     onec_url: str, onec_username: str, onec_password_enc: str,
     onec_id: str, barcode: Optional[str], price: Optional[float],
     purchase_price: Optional[float], name: str, article: Optional[str],
+    quantity: Optional[float] = None,
     delay: int = 5,
 ):
-    """Push barcode + prices to 1C after a delay so the entity is fully settled."""
+    """Push barcode + prices + stock quantity to 1C after a delay so the entity is fully settled."""
     import asyncio
     from backend.integrations.onec_integration import OneCClient
     from backend.core.security import decrypt_password
@@ -182,7 +183,10 @@ async def _push_barcode_and_prices(
             await client.set_price(clean_id, float(price), price_type_name="розн")
         if purchase_price and purchase_price > 0:
             await client.set_price(clean_id, float(purchase_price), price_type_name="закуп")
-        logger.info(f"[1C P2] DONE for '{name}' barcode={barcode} onec_id={clean_id}")
+        if quantity and quantity > 0:
+            st_ok = await client.set_stock(clean_id, float(quantity), float(price or 0))
+            logger.info(f"[1C P2] set_stock ok={st_ok} qty={quantity}")
+        logger.info(f"[1C P2] DONE for '{name}' barcode={barcode} qty={quantity} onec_id={clean_id}")
     except Exception as e:
         from loguru import logger as _log
         _log.error(f"[1C P2] EXCEPTION for '{name}': {e}", exc_info=True)
@@ -561,6 +565,7 @@ async def create_product(
                     purchase_price=product.purchase_price,
                     name=product.name,
                     article=product.article,
+                    quantity=product.quantity,
                     delay=5,
                 ))
                 _log.info(f"[1C P2] '{product.name}' barcode push scheduled in 5s (onec_id={product.onec_id})")
