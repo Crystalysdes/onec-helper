@@ -454,68 +454,11 @@ export default function AddProduct() {
   //  QUICK ADD handlers
   // ════════════════════════════════════════════════════════════════
   const startAiScan = useCallback(() => {
-    openScanner(async (code) => {
+    openScanner((code) => {
       if (!code) return
-      setAiScan({ code, status: 'checking', product: null, storeName: null })
-
-      // Barcode lookup
-      let result = { code, status: 'new', product: null, storeName: null }
-      try {
-        const res = await productsAPI.checkBarcode(code)
-        if (res.data.found)
-          result = { code, status: 'found', product: res.data.product, storeName: res.data.store_name }
-      } catch {}
-      if (result.status === 'new' && currentStore) {
-        try {
-          const lr = await productsAPI.list(currentStore.id, { search: code, limit: 20 })
-          const match = (Array.isArray(lr.data) ? lr.data : []).find(p => p.barcode === code)
-          if (match) result = { code, status: 'found', product: match, storeName: currentStore.name }
-        } catch {}
-      }
-      setAiScan(result)
-
-      const text = aiText.trim()
-      if (result.status === 'found' && text) {
-        // Merge price/qty from query text into found product, then open edit form
-        const prod = { ...result.product }
-        const tl = text.toLowerCase()
-        const pm = tl.match(/(\d+(?:[.,]\d+)?)\s*(?:р\b|руб|₽)/) || tl.match(/(?:цена)\s*:?\s*(\d+(?:[.,]\d+)?)/)
-        const ppm = tl.match(/(?:закуп[а-я]*|себест[а-я]*)\s*:?\s*(\d+(?:[.,]\d+)?)/)
-        const qm = tl.match(/(\d+(?:\.\d+)?)\s*(шт|кг|гр|г|л|мл|упак|пара|рулон|м)\b/)
-        if (pm) prod.price = parseFloat(pm[1].replace(',', '.'))
-        if (ppm) prod.purchase_price = parseFloat(ppm[1].replace(',', '.'))
-        if (qm) { prod.quantity = parseFloat(qm[1]); prod.unit = qm[2].toLowerCase() }
-        fillFormAndEdit(prod)
-      } else if (result.status === 'new' && text) {
-        // Not found → AI creates card from query text + scanned barcode
-        setAiPreviewLoading(true)
-        try {
-          const res = await productsAPI.parseText(`${text}\nШтрих-код: ${code}`)
-          const data = res.data || {}
-          if (!data.name) data.name = text
-          if (!data.barcode) data.barcode = code
-          const matches = await searchCatalogSmart(data.name, text)
-          if (matches.length > 0) {
-            const best = matches[0]
-            setAiPreview({
-              ...best, name: best.name || data.name,
-              barcode: data.barcode || best.barcode,
-              quantity: data.quantity ?? best.quantity ?? 0,
-              unit: data.unit || best.unit || 'шт',
-              category: data.category || best.category,
-              price: data.price ?? best.price,
-              purchase_price: data.purchase_price ?? best.purchase_price,
-              _source: 'catalog',
-            })
-          } else {
-            setAiPreview({ ...data, _source: 'ai' })
-          }
-        } catch { toast.error('Ошибка обработки ИИ') }
-        finally { setAiPreviewLoading(false) }
-      }
-      // No text → old modal behavior (found shows modal, new shows badge)
+      checkBarcodeGlobal(code, setAiScan)
     })
-  }, [openScanner, currentStore, aiText, fillFormAndEdit, searchCatalogSmart])
+  }, [openScanner, checkBarcodeGlobal])
 
   const handleQuickAdd = useCallback(async () => {
     if (!aiText.trim()) return toast.error('Напишите описание товара')
@@ -685,23 +628,28 @@ export default function AddProduct() {
   const handlePhotoBarcodeScan = useCallback(() => {
     openScanner(async (code) => {
       if (!code) return
+      // Check global catalog first before using photo-recognized data
       try {
         const res = await productsAPI.checkBarcode(code)
         if (res.data.found) {
-          // Found by QR → merge photo-recognized data into found product and open edit form
-          const prod = { ...res.data.product, ...photoProduct, barcode: code }
-          fillFormAndEdit(prod)
+          // Merge photo AI data with catalog data (catalog may have better structured fields)
+          const merged = { ...photoProduct, ...res.data.product, barcode: code }
+          setAiPreview(merged)
+          if (res.data.source === 'catalog' || res.data.source === 'global') {
+            enrichAndUpdate(merged, (updater) => {
+              setAiPreview(prev => prev ? (typeof updater === 'function' ? updater(prev) : updater) : prev)
+            }, code)
+          }
           setPhotoState(null)
           setPhotoProduct(null)
           return
         }
-      } catch {}
-      // Not found → AI card from photo data
+      } catch { /* fall through to photo data */ }
       setAiPreview({ ...photoProduct, barcode: code })
       setPhotoState(null)
       setPhotoProduct(null)
     })
-  }, [openScanner, photoProduct, fillFormAndEdit])
+  }, [openScanner, photoProduct, enrichAndUpdate])
 
   const skipPhotoBarcode = useCallback(() => {
     setAiPreview(photoProduct)
@@ -1060,7 +1008,7 @@ export default function AddProduct() {
                   Быстрое добавление
                 </p>
                 <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  1. Напишите запрос&nbsp;&nbsp;→&nbsp;&nbsp;2. Сканируйте QR
+                  Напишите коротко — ИИ создаст товар
                 </p>
               </div>
             </div>
@@ -1122,7 +1070,7 @@ export default function AddProduct() {
               {aiPreviewLoading ? 'ИИ распознаёт...' : loading ? 'Сохраняю...' : 'Найти и добавить товар'}
             </button>
             <p className="text-center text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              Нашли по QR — редактируем. Не нашли — ИИ создаст карточку
+              QR / штрих-код — необязательно, но улучшает точность
             </p>
           </div>
 
