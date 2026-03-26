@@ -15,7 +15,7 @@ from backend.database.connection import AsyncSessionLocal
 from backend.database.models import Integration, IntegrationStatus, ProductCache, Store, User
 from backend.core.security import decrypt_password
 
-SYNC_INTERVAL_MINUTES = 30
+SYNC_INTERVAL_SECONDS = 30
 STOCK_CHECK_INTERVAL_HOURS = 6
 LOW_STOCK_THRESHOLD = 5.0
 _TG_API = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
@@ -104,17 +104,17 @@ async def _check_and_notify():
 
 
 async def auto_sync_loop():
-    """Background loop — sync products+stock from 1C every SYNC_INTERVAL_MINUTES."""
-    logger.info(f"Auto-sync loop started (interval={SYNC_INTERVAL_MINUTES} min)")
-    # First run after 1 min to let server fully start
-    await asyncio.sleep(60)
+    """Background loop — sync products+stock from 1C every SYNC_INTERVAL_SECONDS."""
+    logger.info(f"Auto-sync loop started (interval={SYNC_INTERVAL_SECONDS}s)")
+    # First run after 30 s to let server fully start
+    await asyncio.sleep(30)
     while True:
         logger.info("Running auto 1C sync...")
         try:
             await _auto_sync_all()
         except Exception as e:
             logger.error(f"auto_sync_loop error: {e}")
-        await asyncio.sleep(SYNC_INTERVAL_MINUTES * 60)
+        await asyncio.sleep(SYNC_INTERVAL_SECONDS)
 
 
 async def stock_alert_loop():

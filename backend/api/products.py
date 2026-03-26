@@ -689,6 +689,76 @@ async def update_product(
     return result
 
 
+@router.post("/detail/{product_id}/pull-from-1c")
+async def pull_product_from_onec(
+    product_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pull latest prices, barcode, stock for ONE product from 1C → update DB immediately."""
+    from backend.integrations.onec_integration import OneCClient
+    from backend.core.security import decrypt_password
+
+    result_db = await db.execute(select(ProductCache).where(ProductCache.id == product_id))
+    product = result_db.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    await _check_store_access(product.store_id, current_user, db)
+
+    integ_result = await db.execute(
+        select(Integration).where(
+            Integration.store_id == product.store_id,
+            Integration.status == IntegrationStatus.active,
+        )
+    )
+    integration = integ_result.scalars().first()
+    if not integration:
+        raise HTTPException(status_code=400, detail="Нет активной интеграции с 1С")
+
+    client = OneCClient(
+        url=integration.onec_url,
+        username=integration.onec_username,
+        password=decrypt_password(integration.onec_password_encrypted),
+    )
+
+    onec_id = (product.onec_id or "").strip("{}")
+    if not onec_id:
+        raise HTTPException(status_code=400, detail="Товар не привязан к 1С (нет onec_id)")
+
+    updated = {}
+
+    # ── Prices ──
+    retail_map, purchase_map = await client._classify_all_prices()
+    if onec_id in retail_map and retail_map[onec_id]:
+        product.price = retail_map[onec_id]
+        updated["price"] = retail_map[onec_id]
+    if onec_id in purchase_map and purchase_map[onec_id]:
+        product.purchase_price = purchase_map[onec_id]
+        updated["purchase_price"] = purchase_map[onec_id]
+
+    # ── Barcode ──
+    barcodes = await client.get_barcodes()
+    bc = barcodes.get(onec_id) or barcodes.get("{" + onec_id + "}")
+    if bc:
+        product.barcode = bc
+        updated["barcode"] = bc
+
+    # ── Stock ──
+    ok_q, balances = await client.get_stock_balances()
+    if ok_q and balances:
+        for bal in balances:
+            if str(bal.get("onec_id", "")).strip("{}") == onec_id:
+                product.quantity = float(bal.get("quantity", 0) or 0)
+                updated["quantity"] = product.quantity
+                break
+
+    from datetime import datetime, timezone
+    product.synced_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {"updated": updated, "product": _serialize_product(product)}
+
+
 @router.post("/detail/{product_id}/sync-to-onec")
 async def sync_product_to_onec(
     product_id: UUID,

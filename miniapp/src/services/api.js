@@ -92,6 +92,7 @@ export const productsAPI = {
     })
   },
   syncToOnec: (id) => api.post(`/products/detail/${id}/sync-to-onec`),
+  pullFromOnec: (id) => api.post(`/products/detail/${id}/pull-from-1c`),
   bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),
   importCSV: (storeId, file) => {
     const fd = new FormData()

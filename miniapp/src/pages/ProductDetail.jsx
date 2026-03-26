@@ -48,6 +48,7 @@ export default function ProductDetail() {
   const [scannerCb, setScannerCb] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
+  const [pulling, setPulling] = useState(false)
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm()
 
@@ -94,6 +95,25 @@ export default function ProductDetail() {
   }
 
   const openScanner = () => setScannerCb({ fn: (code) => { if (code) setValue('barcode', code) } })
+
+  const pullFromOnec = async () => {
+    setPulling(true)
+    try {
+      const res = await productsAPI.pullFromOnec(id)
+      setProduct(res.data.product)
+      const u = res.data.updated
+      const parts = []
+      if (u.price != null) parts.push(`цена: ${u.price} ₽`)
+      if (u.purchase_price != null) parts.push(`закупочная: ${u.purchase_price} ₽`)
+      if (u.quantity != null) parts.push(`остаток: ${u.quantity}`)
+      if (u.barcode) parts.push(`штрихкод: ${u.barcode}`)
+      toast.success(parts.length ? `Обновлено из 1С: ${parts.join(', ')}` : 'Данные актуальны')
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка получения данных из 1С')
+    } finally {
+      setPulling(false)
+    }
+  }
 
   const syncToOnec = async () => {
     setSyncing(true)
@@ -217,20 +237,35 @@ export default function ProductDetail() {
             </div>
           </div>
 
-          {/* 1C Sync */}
-          <button
-            className="flex items-center justify-center gap-2 py-3 rounded-2xl active:opacity-70 transition-opacity"
-            style={{ background: 'var(--tg-theme-secondary-bg-color)', border: '1px solid rgba(128,128,128,0.15)' }}
-            onClick={syncToOnec}
-            disabled={syncing}
-          >
-            {syncing
-              ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-              : <span>🔄</span>}
-            <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>
-              {syncing ? 'Отправка в 1С...' : 'Отправить в 1С (штрихкод + цена)'}
-            </span>
-          </button>
+          {/* 1C buttons */}
+          <div className="flex gap-2">
+            <button
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl active:opacity-70 transition-opacity"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)', border: '1px solid rgba(128,128,128,0.15)' }}
+              onClick={pullFromOnec}
+              disabled={pulling || syncing}
+            >
+              {pulling
+                ? <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                : <span>⬇️</span>}
+              <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-button-color)' }}>
+                {pulling ? 'Загрузка...' : 'Из 1С'}
+              </span>
+            </button>
+            <button
+              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl active:opacity-70 transition-opacity"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)', border: '1px solid rgba(128,128,128,0.15)' }}
+              onClick={syncToOnec}
+              disabled={syncing || pulling}
+            >
+              {syncing
+                ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                : <span>⬆️</span>}
+              <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>
+                {syncing ? 'Отправка...' : 'В 1С'}
+              </span>
+            </button>
+          </div>
 
           {syncResult && (
             <div className="rounded-2xl p-3 flex flex-col gap-2 text-xs"
