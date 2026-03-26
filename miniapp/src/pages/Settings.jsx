@@ -157,6 +157,7 @@ export default function Settings() {
       onec_url: int.onec_url,
       onec_username: int.onec_username || '',
       onec_password: '',
+      use_accounting: int.use_accounting ?? false,
     })
   }
 
@@ -169,6 +170,7 @@ export default function Settings() {
         onec_username: data.onec_username,
         ...(data.onec_password ? { onec_password: data.onec_password } : {}),
         name: data.name || '1C Integration',
+        use_accounting: data.use_accounting ?? false,
       })
       toast.success('Интеграция обновлена!')
       setEditingIntegration(null)
@@ -606,6 +608,21 @@ export default function Settings() {
                       <input className="input-field" placeholder="Имя пользователя *" {...editForm.register('onec_username', { required: true })} />
                       <input className="input-field" type="password" placeholder="Новый пароль (оставьте пустым чтобы не менять)" {...editForm.register('onec_password')} />
                       <input className="input-field" placeholder="Название интеграции" {...editForm.register('name')} />
+                      <div className="flex items-center justify-between px-1">
+                        <div>
+                          <p className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>Бухгалтерские проводки</p>
+                          <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Вкл — нужен опубликованный план счетов</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="w-11 h-6 rounded-full transition-all relative flex-shrink-0"
+                          style={{ background: editForm.watch('use_accounting') ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.3)' }}
+                          onClick={() => editForm.setValue('use_accounting', !editForm.watch('use_accounting'))}
+                        >
+                          <span className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all"
+                            style={{ left: editForm.watch('use_accounting') ? 'calc(100% - 22px)' : '2px' }} />
+                        </button>
+                      </div>
                       <div className="flex gap-2">
                         <button type="button" className="btn-secondary flex-1" onClick={() => setEditingIntegration(null)}>Отмена</button>
                         <button type="submit" className="btn-primary flex-1" disabled={loading}>{loading ? '...' : 'Сохранить'}</button>
@@ -637,6 +654,28 @@ export default function Settings() {
                         {int.status === 'active' ? 'Активна' : int.status === 'error' ? 'Ошибка' : 'Не активна'}
                       </span>
                     </div>
+                  </div>
+                  {/* use_accounting row */}
+                  <div className="flex items-center justify-between px-1 py-1 rounded-xl"
+                    style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                    <div className="flex flex-col">
+                      <p className="text-xs font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>Проводки при оприходовании</p>
+                      <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        {int.use_accounting ? 'С бухгалтерскими проводками (требует план счетов)' : 'Без проводок — только складской учёт'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="w-11 h-6 rounded-full transition-all relative flex-shrink-0 ml-2"
+                      style={{ background: int.use_accounting ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.3)' }}
+                      onClick={async () => {
+                        await storesAPI.updateIntegration(currentStore.id, int.id, { use_accounting: !int.use_accounting })
+                        await loadStoreDetail(currentStore.id)
+                      }}
+                    >
+                      <span className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all"
+                        style={{ left: int.use_accounting ? 'calc(100% - 22px)' : '2px' }} />
+                    </button>
                   </div>
                   <div className="grid grid-cols-3 gap-1.5">
                     <button
