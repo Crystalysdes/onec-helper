@@ -727,19 +727,32 @@ class OneCClient:
             return self._cached_doc_accounts
 
         # ── Source 2: AccountingRegister — read GUIDs from existing transactions ─
-        for acc_reg in ("AccountingRegister_ЖурналПроводок", "AccountingRegister_Хозрасчетный"):
-            ok, data = await self._request(
-                "GET",
-                f"odata/standard.odata/{acc_reg}"
-                f"?$format=json&$top=5&$select=СчетДт_Key,СчетКт_Key"
-            )
-            if ok and isinstance(data, dict) and data.get("value"):
-                for item in data["value"]:
-                    debit = _valid(item.get("СчетДт_Key"))
-                    if debit:
-                        credit = _valid(item.get("СчетКт_Key"))
-                        logger.info(f"1C stock accounts from {acc_reg}: debit={debit}")
-                        return debit, credit
+        for acc_reg in (
+            "AccountingRegister_Управленческий",   # УНФ management accounting (confirmed published)
+            "AccountingRegister_Хозрасчетный",     # КА/БУХ
+            "AccountingRegister_ЖурналПроводок",   # УНФ older name
+        ):
+            # First try with $select; if empty try without to discover field names
+            for sel in ("?$format=json&$top=3&$select=СчетДт_Key,СчетКт_Key",
+                        "?$format=json&$top=1"):
+                ok, data = await self._request(
+                    "GET", f"odata/standard.odata/{acc_reg}{sel}"
+                )
+                if not ok or not isinstance(data, dict) or not data.get("value"):
+                    break  # register not published or empty — skip
+                item = data["value"][0]
+                if sel.endswith("$top=1"):
+                    logger.info(f"1C {acc_reg} sample fields: {list(item.keys())}")
+                # Try known debit field names
+                debit = next((_valid(item.get(f)) for f in DEBIT_FIELDS
+                              if _valid(item.get(f))), None)
+                if debit:
+                    credit = next((_valid(item.get(f)) for f in CREDIT_FIELDS
+                                   if _valid(item.get(f))), None)
+                    logger.info(f"1C stock accounts from {acc_reg}: debit={debit} credit={credit}")
+                    return debit, credit
+                if sel.endswith("$top=1"):
+                    break  # already tried all fields, no debit found
 
         # ── Source 3: ChartOfAccounts — no filter, match by code prefix ────────
         all_charts = (discovered_charts or []) + [
@@ -807,22 +820,43 @@ class OneCClient:
         wh_key = await self._get_warehouse_key()
         summa = round(float(quantity) * float(price or 0), 2)
 
-        # ── 0. Direct InformationRegister_ОстаткиТоваров write ──
-        # This is the same register that get_stock_balances reads from in УНФ.
-        # It’s a plain information register — no document or debit account needed.
-        info_reg_candidates = [
-            {"Period": period, "Номенклатура_Key": onec_id, "Количество": float(quantity)},
-            {"Period": period, "Номенклатура_Key": onec_id, "Количество": float(quantity), "СтруктурнаяЕдиница_Key": wh_key or _zero},
-        ]
-        for ir_payload in info_reg_candidates:
-            ok_ir, resp_ir = await self._request(
-                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров", json=ir_payload
-            )
-            if ok_ir:
-                logger.info(f"1C stock set (InformationRegister_ОстаткиТоваров): {onec_id} qty={quantity}")
-                return True
-            err = str((resp_ir or {}).get("error", ""))[:200]
-            logger.debug(f"1C InformationRegister_ОстаткиТоваров POST failed: {err}")
+        # ── 0. Direct InformationRegister_ОстаткиТоваров write (PUT on existing record) ──
+        # This register is confirmed published in OData. Try to GET existing record
+        # to discover key dimensions, then PUT with updated quantity.
+        ok_ir_get, ir_existing = await self._request(
+            "GET",
+            f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+            f"?$format=json&$filter=Номенклатура_Key eq guid'{onec_id}'&$top=1"
+        )
+        if ok_ir_get and isinstance(ir_existing, dict) and ir_existing.get("value"):
+            rec = ir_existing["value"][0]
+            logger.info(f"1C InformationRegister_ОстаткиТоваров existing fields: {list(rec.keys())}")
+            # Build PUT key from all non-value dimension fields
+            key_parts = []
+            for k, v in rec.items():
+                if k in ("Количество", "Стоимость", "odata.metadata", "odata.type"):
+                    continue
+                if k.endswith("@odata.type"):
+                    continue
+                if k == "Period" or k == "period":
+                    key_parts.append(f"Period=datetime'{v[:19]}'")
+                elif k.endswith("_Key"):
+                    key_parts.append(f"{k}=guid'{str(v).strip('{}')}' ")
+                else:
+                    key_parts.append(f"{k}='{v}'")
+            if key_parts:
+                url_key = ",".join(p.strip() for p in key_parts)
+                ok_put, resp_put = await self._request(
+                    "PUT",
+                    f"odata/standard.odata/InformationRegister_ОстаткиТоваров({url_key})",
+                    json={"Количество": float(quantity)}
+                )
+                if ok_put:
+                    logger.info(f"1C stock set via PUT InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
+                    return True
+                logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
+        else:
+            logger.debug(f"1C InformationRegister_ОстаткиТоваров: no existing record for {onec_id}")
 
         # ── 1. Direct AccumulationRegister write (no document, no account required) ──
         # Try both English (RecordType) and Russian (ВидДвижения) field name conventions
