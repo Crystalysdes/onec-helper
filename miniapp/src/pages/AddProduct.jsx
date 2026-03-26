@@ -586,25 +586,25 @@ export default function AddProduct() {
       const data = res.data
       const r = data.recognized || data
 
-      // Barcode found locally (fast path) — go straight to catalog lookup
+      // Barcode found directly in photo — check DB
       if (data.source === 'barcode' && r?.barcode) {
-        setPhotoState(null)
-        checkBarcodeGlobal(r.barcode, setAiScan)
-        setMethod('ai')
+        checkBarcodeGlobal(r.barcode, (scan) => {
+          if (scan.status === 'found') {
+            setAiScan(scan)
+            setPhotoState(null)
+          } else if (scan.status === 'new') {
+            // Barcode captured from photo, go straight to manual
+            suppressSearch.current = true
+            setValue('barcode', r.barcode)
+            setPhotoState(null)
+            setMethod('manual')
+          }
+        })
         return
       }
 
       if (r?.name) {
-        // Search global catalog with smart multi-word fallback
-        const matches = await searchCatalogSmart(r.name)
-        if (matches.length > 0) {
-          const best = matches[0]
-          setAiPreview({ ...r, ...best, name: best.name || r.name })
-          setPhotoState(null)
-          setPhotoProduct(null)
-          return
-        }
-
+        // Store photo data, always require barcode scan (no catalog search)
         setPhotoProduct(r)
         setPhotoState('scan')
       } else {
@@ -615,39 +615,53 @@ export default function AddProduct() {
       setPhotoState(null)
       toast.error('Ошибка распознавания')
     }
-  }, [currentStore, checkBarcodeGlobal])
+  }, [currentStore, checkBarcodeGlobal, setValue])
 
   const handlePhotoBarcodeScan = useCallback(() => {
-    openScanner(async (code) => {
+    openScanner((code) => {
       if (!code) return
-      // Check global catalog first before using photo-recognized data
-      try {
-        const res = await productsAPI.checkBarcode(code)
-        if (res.data.found) {
-          // Merge photo AI data with catalog data (catalog may have better structured fields)
-          const merged = { ...photoProduct, ...res.data.product, barcode: code }
-          setAiPreview(merged)
-          if (res.data.source === 'catalog' || res.data.source === 'global') {
-            enrichAndUpdate(merged, (updater) => {
-              setAiPreview(prev => prev ? (typeof updater === 'function' ? updater(prev) : updater) : prev)
-            }, code)
-          }
+      checkBarcodeGlobal(code, (scan) => {
+        if (scan.status === 'found') {
+          // Existing product — show edit modal
+          setAiScan(scan)
           setPhotoState(null)
           setPhotoProduct(null)
-          return
+        } else if (scan.status === 'new') {
+          // New barcode — fill form from photo data + barcode → manual for review
+          const d = photoProduct || {}
+          suppressSearch.current = true
+          setValue('name', d.name || '')
+          if (d.price != null) setValue('price', d.price)
+          setValue('barcode', code)
+          setValue('article', d.article || '')
+          setValue('category', d.category || '')
+          setValue('unit', d.unit || 'шт')
+          setValue('quantity', d.quantity ?? 0)
+          setValue('description', d.description || '')
+          setPhotoState(null)
+          setPhotoProduct(null)
+          setMethod('manual')
         }
-      } catch { /* fall through to photo data */ }
-      setAiPreview({ ...photoProduct, barcode: code })
-      setPhotoState(null)
-      setPhotoProduct(null)
+      })
     })
-  }, [openScanner, photoProduct, enrichAndUpdate])
+  }, [openScanner, photoProduct, checkBarcodeGlobal, setValue])
 
   const skipPhotoBarcode = useCallback(() => {
-    setAiPreview(photoProduct)
+    // Create without barcode — fill form from photo data only → manual for review
+    const d = photoProduct || {}
+    suppressSearch.current = true
+    setValue('name', d.name || '')
+    if (d.price != null) setValue('price', d.price)
+    setValue('barcode', d.barcode || '')
+    setValue('article', d.article || '')
+    setValue('category', d.category || '')
+    setValue('unit', d.unit || 'шт')
+    setValue('quantity', d.quantity ?? 0)
+    setValue('description', d.description || '')
     setPhotoState(null)
     setPhotoProduct(null)
-  }, [photoProduct])
+    setMethod('manual')
+  }, [photoProduct, setValue])
 
   // ════════════════════════════════════════════════════════════════
   //  MANUAL FORM submit
@@ -1215,14 +1229,14 @@ export default function AddProduct() {
                 </div>
               </div>
               <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                Отсканируйте штрих-код / QR-код товара, чтобы добавить его к карточке
+                Штрихкод определяет товар — если уже есть, предложим редактировать
               </p>
               <button className="btn-primary flex items-center justify-center gap-2" onClick={handlePhotoBarcodeScan}>
                 <ScanLine size={15} />
                 Сканировать штрих-код
               </button>
               <button className="btn-secondary text-sm" onClick={skipPhotoBarcode}>
-                Пропустить (без штрих-кода)
+                Создать без штрих-кода
               </button>
               <button className="btn-secondary text-sm flex items-center justify-center gap-2"
                 onClick={() => { setPhotoState(null); setPhotoProduct(null); setTimeout(() => photoRef.current?.click(), 100) }}>
