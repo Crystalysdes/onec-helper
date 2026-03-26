@@ -679,15 +679,18 @@ class OneCClient:
         logger.warning("1C _get_stock_accounts: no account found — Post will likely fail")
         return None, None
 
-    async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0) -> bool:
+    async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0,
+                         use_accounting: bool = True) -> bool:
         """Post initial stock quantity to 1C.
 
+        use_accounting=True  → try with debit/credit accounts first, fallback to no-accounting
+        use_accounting=False → skip accounting journal entirely (ФормироватьПроводки=false)
+
         Strategy (first success wins):
-        1. Direct write to AccumulationRegister (no document, no account needed)
-        2. Document_ОприходованиеЗапасов + Запасы tabular (Розница 3.0)
-           with СчетДебета_Key fetched from chart of accounts (41.02/41.01/41)
-        3. Document_ОприходованиеТоваров + Товары tabular (УТ/КА/УНФ)
-        4. Document_ПоступлениеТоваровУслуг fallback
+        1. Direct write to AccumulationRegister (Запасы / ТоварыНаСкладах / ТоварыОрг)
+        2. Document_ОприходованиеЗапасов with / without accounting
+        3. Document_ОприходованиеТоваров / Document_ПоступлениеТоваровУслуг fallback
+        Unposted documents are kept as drafts (not deleted) so user can post manually.
         """
         if not quantity or quantity <= 0:
             return False
@@ -712,7 +715,11 @@ class OneCClient:
         if org_key:
             base_reg["Организация_Key"] = org_key
 
-        for acc_reg in ("AccumulationRegister_ТоварыНаСкладах", "AccumulationRegister_ТоварыОрганизаций"):
+        for acc_reg in (
+            "AccumulationRegister_Запасы",              # 1С:УНФ
+            "AccumulationRegister_ТоварыНаСкладах",  # УТ/Розница
+            "AccumulationRegister_ТоварыОрганизаций", # КА
+        ):
             for rec_payload in [
                 {"Period": period, "RecordType": "Receipt", **base_reg},
                 {"Period": period, "ВидДвижения": "Приход", **base_reg},
@@ -746,7 +753,7 @@ class OneCClient:
                     r[f] = credit_key or _zero
             return r
 
-        # Flags that tell 1C to skip bookkeeping journal (only stock movement matters)
+        # Flags that tell 1C to skip bookkeeping journal (only stock movements matter)
         NO_ACCOUNTING = {
             "ФормироватьПроводки": False,
             "ОтражатьВБухгалтерскомУчете": False,
@@ -754,52 +761,58 @@ class OneCClient:
         }
 
         doc_variants = [
-            # (doc_type, tab_section, need_account)
-            ("Document_ОприходованиеЗапасов",   "Запасы", True),   # УНФ / Розница 3.0
-            ("Document_ОприходованиеТоваров",    "Товары", False),  # УТ/КА
-            ("Document_ПоступлениеТоваровУслуг", "Товары", False),  # КА fallback
+            # (doc_type, tab_section)
+            ("Document_ОприходованиеЗапасов",   "Запасы"),  # УНФ / Розница 3.0
+            ("Document_ОприходованиеТоваров",    "Товары"),  # УТ/КА
+            ("Document_ПоступлениеТоваровУслуг", "Товары"),  # КА fallback
         ]
-        for doc_type, tab_name, need_acc in doc_variants:
+        # Attempt order: with accounting first (if use_accounting), then without
+        acct_attempts = ([False, True] if use_accounting else [True])
 
-            def _build_doc(no_accounting: bool) -> dict:
+        for doc_type, tab_name in doc_variants:
+
+            def _build_doc(no_accounting: bool, _tab=tab_name) -> dict:
                 d: dict = {
                     "Date": period,
                     "Комментарий": "Авто из 1С Хелпер",
-                    tab_name: [_make_row(need_acc and not no_accounting)],
+                    _tab: [_make_row(not no_accounting)],
                 }
                 if org_key:
                     d["Организация_Key"] = org_key
                 if wh_key:
                     d["Склад_Key"] = wh_key
-                if need_acc and debit_key and not no_accounting:
+                if not no_accounting and debit_key:
                     d["СчетДт_Key"] = debit_key
                     d["СчетКт_Key"] = credit_key or _zero
                 if no_accounting:
                     d.update(NO_ACCOUNTING)
                 return d
 
-            for attempt_no_accounting in (False, True):
-                doc = _build_doc(attempt_no_accounting)
+            doc_created = False
+            for no_acc in acct_attempts:
+                doc = _build_doc(no_acc)
                 ok, resp = await self._request(
                     "POST", f"odata/standard.odata/{doc_type}", json=doc
                 )
                 if not (ok and isinstance(resp, dict) and resp.get("Ref_Key")):
-                    if not attempt_no_accounting:
-                        logger.warning(f"1C stock create failed ({doc_type}): {resp}")
-                    break  # document type not available — skip both attempts
+                    logger.warning(f"1C stock create failed ({doc_type}): {resp}")
+                    break  # doc type not available — skip remaining attempts for this type
 
+                doc_created = True
                 ref_key = str(resp["Ref_Key"]).strip("{}")
                 ok2, resp2 = await self._request(
                     "POST",
                     f"odata/standard.odata/{doc_type}(guid'{ref_key}')/Post"
                 )
                 if ok2:
-                    suffix = " (без проводок)" if attempt_no_accounting else ""
+                    suffix = " (без проводок)" if no_acc else ""
                     logger.info(f"1C stock posted ({doc_type}){suffix}: {onec_id} qty={quantity}")
                     return True
-                logger.warning(f"1C stock Post failed ({doc_type}, no_acc={attempt_no_accounting}): {resp2}")
-                # Delete the unposted document to keep journal clean
-                await self._request("DELETE", f"odata/standard.odata/{doc_type}(guid'{ref_key}')")
+                logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
+                # Leave unposted document as draft so user can post manually in 1C UI
+                logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — post manually")
+            if doc_created:
+                break  # doc was created (even if unposted) — don’t try other doc types
 
         logger.warning(f"1C set_stock: all attempts failed for {onec_id} qty={quantity}")
         return False

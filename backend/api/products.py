@@ -151,6 +151,7 @@ async def _push_barcode_and_prices(
     onec_id: str, barcode: Optional[str], price: Optional[float],
     purchase_price: Optional[float], name: str, article: Optional[str],
     quantity: Optional[float] = None,
+    use_accounting: bool = True,
     delay: int = 5,
 ):
     """Push barcode + prices + stock quantity to 1C after a delay so the entity is fully settled."""
@@ -184,8 +185,9 @@ async def _push_barcode_and_prices(
         if purchase_price and purchase_price > 0:
             await client.set_price(clean_id, float(purchase_price), price_type_name="закуп")
         if quantity and quantity > 0:
-            st_ok = await client.set_stock(clean_id, float(quantity), float(price or 0))
-            logger.info(f"[1C P2] set_stock ok={st_ok} qty={quantity}")
+            st_ok = await client.set_stock(clean_id, float(quantity), float(price or 0),
+                                           use_accounting=use_accounting)
+            logger.info(f"[1C P2] set_stock ok={st_ok} qty={quantity} use_accounting={use_accounting}")
         logger.info(f"[1C P2] DONE for '{name}' barcode={barcode} qty={quantity} onec_id={clean_id}")
     except Exception as e:
         from loguru import logger as _log
@@ -555,6 +557,7 @@ async def create_product(
 
             # ── Phase 2: barcode + prices after 5s delay (entity must settle in 1C first) ──
             if product.onec_id:
+                _settings = integration.settings or {}
                 _aio.ensure_future(_push_barcode_and_prices(
                     onec_url=integration.onec_url,
                     onec_username=integration.onec_username,
@@ -566,6 +569,7 @@ async def create_product(
                     name=product.name,
                     article=product.article,
                     quantity=product.quantity,
+                    use_accounting=bool(_settings.get("use_accounting", True)),
                     delay=5,
                 ))
                 _log.info(f"[1C P2] '{product.name}' barcode push scheduled in 5s (onec_id={product.onec_id})")

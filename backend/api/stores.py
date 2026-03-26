@@ -32,6 +32,7 @@ class IntegrationCreate(BaseModel):
     onec_username: str
     onec_password: str
     name: Optional[str] = "1C Integration"
+    use_accounting: bool = True   # False = skip bookkeeping journal (ФормироватьПроводки=false)
 
 
 class IntegrationUpdate(BaseModel):
@@ -39,6 +40,7 @@ class IntegrationUpdate(BaseModel):
     onec_username: Optional[str] = None
     onec_password: Optional[str] = None
     name: Optional[str] = None
+    use_accounting: Optional[bool] = None
 
 
 @router.get("/")
@@ -106,6 +108,7 @@ async def get_store(
             {
                 "id": str(i.id),
                 "name": i.name,
+                "use_accounting": (i.settings or {}).get("use_accounting", True),
                 "onec_url": i.onec_url,
                 "onec_username": i.onec_username,
                 "status": i.status,
@@ -177,6 +180,7 @@ async def create_integration(
         onec_username=payload.onec_username,
         onec_password_encrypted=encrypt_password(payload.onec_password),
         status=IntegrationStatus.inactive,
+        settings={"use_accounting": payload.use_accounting},
     )
     db.add(integration)
     await db.flush()
@@ -222,8 +226,16 @@ async def update_integration(
         integration.onec_password_encrypted = encrypt_password(payload.onec_password)
     if payload.name is not None:
         integration.name = payload.name
+    if payload.use_accounting is not None:
+        s = dict(integration.settings or {})
+        s["use_accounting"] = payload.use_accounting
+        integration.settings = s
 
-    return {"id": str(integration.id), "name": integration.name}
+    return {
+        "id": str(integration.id),
+        "name": integration.name,
+        "use_accounting": (integration.settings or {}).get("use_accounting", True),
+    }
 
 
 @router.post("/{store_id}/integrations/{integration_id}/test")
