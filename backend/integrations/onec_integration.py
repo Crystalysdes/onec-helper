@@ -583,14 +583,13 @@ class OneCClient:
                 return self._warehouse_key_cache
         return None
 
-    async def _get_goods_account_key(self) -> str | None:
-        """Return GUID of the goods account (41.02 → 41.01 → 41) from chart of accounts.
-        Required by Document_ОприходованиеЗапасов in Розница 3.0 (СчетДебета_Key).
-        """
-        if hasattr(self, "_goods_account_cache") and self._goods_account_cache:
-            return self._goods_account_cache
+    async def _get_account_key(self, codes: list[str], cache_attr: str) -> str | None:
+        """Generic: find a 1C account by trying multiple codes across chart-of-accounts entities."""
+        cached = getattr(self, cache_attr, None)
+        if cached:
+            return cached
         for chart in ("ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"):
-            for code in ("41.02", "41.01", "41"):
+            for code in codes:
                 ok, data = await self._request(
                     "GET",
                     f"odata/standard.odata/{chart}"
@@ -599,10 +598,18 @@ class OneCClient:
                 if ok and isinstance(data, dict) and data.get("value"):
                     key = str(data["value"][0].get("Ref_Key", "")).strip("{}")
                     if key and key != "00000000-0000-0000-0000-000000000000":
-                        self._goods_account_cache = key
-                        logger.info(f"1C goods account ({chart} {code}): {key}")
+                        setattr(self, cache_attr, key)
+                        logger.info(f"1C account {codes[0]} ({chart}): {key}")
                         return key
         return None
+
+    async def _get_goods_account_key(self) -> str | None:
+        """Account 41.02/41.01/41 — debit side for stock receipt."""
+        return await self._get_account_key(["41.02", "41.01", "41"], "_goods_account_cache")
+
+    async def _get_income_account_key(self) -> str | None:
+        """Account 91.01/91/94 — credit side for surplus stock posting."""
+        return await self._get_account_key(["91.01", "91", "94"], "_income_account_cache")
 
     async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0) -> bool:
         """Post initial stock quantity to 1C.
@@ -626,31 +633,33 @@ class OneCClient:
         summa = round(float(quantity) * float(price or 0), 2)
 
         # ── 1. Direct AccumulationRegister write (no document, no account required) ──
-        for acc_reg in (
-            "AccumulationRegister_ТоварыНаСкладах",
-            "AccumulationRegister_ТоварыОрганизаций",
-        ):
-            reg_payload: dict = {
-                "Period": period,
-                "RecordType": "Receipt",
-                "Номенклатура_Key": onec_id,
-                "Количество": float(quantity),
-                "Характеристика_Key": _zero,
-            }
-            if wh_key:
-                reg_payload["Склад_Key"] = wh_key
-            if org_key:
-                reg_payload["Организация_Key"] = org_key
-            ok, resp = await self._request(
-                "POST", f"odata/standard.odata/{acc_reg}", json=reg_payload
-            )
-            if ok:
-                logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
-                return True
-            logger.warning(f"1C stock direct {acc_reg} failed: {resp}")
+        # Try both English (RecordType) and Russian (ВидДвижения) field name conventions
+        base_reg = {
+            "Номенклатура_Key": onec_id,
+            "Количество": float(quantity),
+            "Характеристика_Key": _zero,
+        }
+        if wh_key:
+            base_reg["Склад_Key"] = wh_key
+        if org_key:
+            base_reg["Организация_Key"] = org_key
+
+        for acc_reg in ("AccumulationRegister_ТоварыНаСкладах", "AccumulationRegister_ТоварыОрганизаций"):
+            for rec_payload in [
+                {"Period": period, "RecordType": "Receipt", **base_reg},
+                {"Period": period, "ВидДвижения": "Приход", **base_reg},
+            ]:
+                ok, resp = await self._request(
+                    "POST", f"odata/standard.odata/{acc_reg}", json=rec_payload
+                )
+                if ok:
+                    logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
+                    return True
+            logger.warning(f"1C stock direct {acc_reg} failed")
 
         # ── 2-4. Document-based approaches ──
-        account_key = await self._get_goods_account_key()
+        debit_key = await self._get_goods_account_key()   # 41.02 / 41.01 / 41
+        credit_key = await self._get_income_account_key() # 91.01 / 91 / 94
 
         def _make_row(with_account: bool) -> dict:
             r: dict = {
@@ -661,16 +670,20 @@ class OneCClient:
                 "Сумма": summa,
                 "Характеристика_Key": _zero,
             }
-            if with_account and account_key:
-                r["СчетДебета_Key"] = account_key
-                r["СчетУчета_Key"] = account_key
+            if with_account:
+                # All possible debit account field name variants in 1C OData
+                for f in ("СчетДт_Key", "СчетУчета_Key", "СчетДебета_Key"):
+                    r[f] = debit_key or _zero
+                # Credit account
+                for f in ("СчетКт_Key", "СчетКредита_Key"):
+                    r[f] = credit_key or _zero
             return r
 
         doc_variants = [
             # (doc_type, tab_section, need_account)
-            ("Document_ОприходованиеЗапасов",    "Запасы",  True),   # Розница 3.0
-            ("Document_ОприходованиеТоваров",     "Товары",  False),  # УТ/КА/УНФ
-            ("Document_ПоступлениеТоваровУслуг",  "Товары",  False),  # КА fallback
+            ("Document_ОприходованиеЗапасов",   "Запасы", True),   # Розница 3.0
+            ("Document_ОприходованиеТоваров",    "Товары", False),  # УТ/КА/УНФ
+            ("Document_ПоступлениеТоваровУслуг", "Товары", False),  # КА fallback
         ]
         for doc_type, tab_name, need_acc in doc_variants:
             doc: dict = {
@@ -682,6 +695,10 @@ class OneCClient:
                 doc["Организация_Key"] = org_key
             if wh_key:
                 doc["Склад_Key"] = wh_key
+            if need_acc and debit_key:
+                # Also set at header level in case 1C uses header-level accounts
+                doc["СчетДт_Key"] = debit_key
+                doc["СчетКт_Key"] = credit_key or _zero
             ok, resp = await self._request(
                 "POST", f"odata/standard.odata/{doc_type}", json=doc
             )
@@ -695,6 +712,11 @@ class OneCClient:
                     logger.info(f"1C stock posted ({doc_type}): {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type}): {resp2}")
+                # Document created but posting failed — delete it to keep journal clean
+                await self._request(
+                    "DELETE",
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
+                )
             else:
                 logger.warning(f"1C stock create failed ({doc_type}): {resp}")
 
