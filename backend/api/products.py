@@ -158,7 +158,9 @@ async def _push_barcode_and_prices(
     from backend.core.security import decrypt_password
     from loguru import logger
 
+    logger.info(f"[1C P2] sleeping {delay}s before barcode push for '{name}' (onec_id={onec_id}, barcode={barcode})")
     await asyncio.sleep(delay)
+    logger.info(f"[1C P2] woke up, pushing barcode for '{name}'")
     try:
         client = OneCClient(onec_url, onec_username, decrypt_password(onec_password_enc))
         clean_id = str(onec_id).strip("{}")
@@ -171,17 +173,19 @@ async def _push_barcode_and_prices(
         snap.article = article
         snap.category = None
 
-        await client.update_product(clean_id, snap)
+        upd_ok, upd_data = await client.update_product(clean_id, snap)
+        logger.info(f"[1C P2] update_product ok={upd_ok}")
         if barcode and str(barcode).strip():
-            await client.create_barcode(clean_id, str(barcode).strip())
+            bc_ok = await client.create_barcode(clean_id, str(barcode).strip())
+            logger.info(f"[1C P2] create_barcode ok={bc_ok} barcode={barcode}")
         if price and price > 0:
             await client.set_price(clean_id, float(price), price_type_name="розн")
         if purchase_price and purchase_price > 0:
             await client.set_price(clean_id, float(purchase_price), price_type_name="закуп")
-        logger.info(f"[1C] barcode+prices pushed for '{name}' (onec_id={clean_id}, barcode={barcode})")
+        logger.info(f"[1C P2] DONE for '{name}' barcode={barcode} onec_id={clean_id}")
     except Exception as e:
         from loguru import logger as _log
-        _log.error(f"[1C] barcode push error for '{name}': {e}")
+        _log.error(f"[1C P2] EXCEPTION for '{name}': {e}", exc_info=True)
 
 
 class _ProductSnapshot:
@@ -528,15 +532,22 @@ async def create_product(
                 username=integration.onec_username,
                 password=decrypt_password(integration.onec_password_encrypted),
             )
+            _log.info(f"[1C P1] creating product '{product.name}' barcode={product.barcode}")
             ok, data = await client.create_product(product)
+            _log.info(f"[1C P1] create_product ok={ok} data_keys={list(data.keys()) if isinstance(data, dict) else data}")
             if ok and data and data.get("Ref_Key"):
                 product.onec_id = str(data["Ref_Key"]).strip("{}")
                 await db.commit()
+                _log.info(f"[1C P1] onec_id saved: {product.onec_id}")
             elif ok and not product.onec_id:
+                _log.warning(f"[1C P1] no Ref_Key in response, trying find_by_name")
                 found = await client.find_product_by_name(product.name)
+                _log.info(f"[1C P1] find_by_name result: {found}")
                 if found:
                     product.onec_id = found
                     await db.commit()
+            else:
+                _log.error(f"[1C P1] create_product FAILED: ok={ok} data={data}")
 
             # ── Phase 2: barcode + prices after 5s delay (entity must settle in 1C first) ──
             if product.onec_id:
@@ -552,10 +563,12 @@ async def create_product(
                     article=product.article,
                     delay=5,
                 ))
-                _log.info(f"[1C] '{product.name}' created in 1C, barcode push scheduled in 5s")
+                _log.info(f"[1C P2] '{product.name}' barcode push scheduled in 5s (onec_id={product.onec_id})")
+            else:
+                _log.error(f"[1C P1] no onec_id — barcode push skipped for '{product.name}'")
     except Exception as _e:
         from loguru import logger as _log
-        _log.error(f"[1C create] error for '{product.name}': {_e}")
+        _log.error(f"[1C create] EXCEPTION for '{product.name}': {_e}", exc_info=True)
 
     return result
 
