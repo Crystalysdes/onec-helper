@@ -1036,6 +1036,16 @@ class OneCClient:
                     suffix = " (без проводок)" if no_acc else ""
                     logger.info(f"1C stock posted ({doc_type}){suffix}: {onec_id} qty={quantity}")
                     return True
+                # 1C sometimes returns HTTP 500 even when the document was actually posted.
+                # Verify by reading back the document state.
+                ok_v, doc_v = await self._request(
+                    "GET",
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
+                    f"?$format=json&$select=Проведен"
+                )
+                if ok_v and isinstance(doc_v, dict) and doc_v.get("Проведен"):
+                    logger.info(f"1C stock posted (verified after 500) ({doc_type}): {onec_id} qty={quantity}")
+                    return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
                 logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — post manually")
                 break  # one draft per doc_type is enough
