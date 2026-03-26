@@ -936,19 +936,14 @@ class OneCClient:
 
         doc_variants = [
             # (doc_type, tab_section, extra_fields)
-            # ВводОстатков first — uses счет 00 automatically, no debit account required
-            ("Document_ВводОстатков",            "Запасы", {}),
-            ("Document_ВводОстатков",            "Товары", {}),
-            # ОприходованиеЗапасов with ВидОперации=НачальныеОстатки — may skip accounting
-            ("Document_ОприходованиеЗапасов",   "Запасы", {"ВидОперации": "НачальныеОстатки"}),
             ("Document_ОприходованиеЗапасов",   "Запасы", {}),  # УНФ / Розница 3.0
+            ("Document_ВводОстатков",            "Запасы", {}),  # УНФ opening balances — uses счет 00
+            ("Document_ВводОстатков",            "Товары", {}),  # alt tab name
             ("Document_ОприходованиеТоваров",    "Товары", {}),  # УТ/КА
             ("Document_ПоступлениеТоваровУслуг", "Товары", {}),  # КА fallback
         ]
-        # Always try with _zero accounts first (no_acc=False) — row gets СчетДт_Key=_zero
-        # which may trigger 1С ОбработкаЗаполнения to auto-fill the account.
-        # Then fall back to no-accounting attempt.
-        acct_attempts = [False, True]
+        # Respect use_accounting setting: with accounts first if enabled, then without
+        acct_attempts = ([False, True] if use_accounting else [True])
 
         for doc_type, tab_name, extra_fields in doc_variants:
 
