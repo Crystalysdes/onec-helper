@@ -780,6 +780,23 @@ class OneCClient:
         wh_key = await self._get_warehouse_key()
         summa = round(float(quantity) * float(price or 0), 2)
 
+        # ── 0. Direct InformationRegister_ОстаткиТоваров write ──
+        # This is the same register that get_stock_balances reads from in УНФ.
+        # It’s a plain information register — no document or debit account needed.
+        info_reg_candidates = [
+            {"Period": period, "Номенклатура_Key": onec_id, "Количество": float(quantity)},
+            {"Period": period, "Номенклатура_Key": onec_id, "Количество": float(quantity), "СтруктурнаяЕдиница_Key": wh_key or _zero},
+        ]
+        for ir_payload in info_reg_candidates:
+            ok_ir, resp_ir = await self._request(
+                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров", json=ir_payload
+            )
+            if ok_ir:
+                logger.info(f"1C stock set (InformationRegister_ОстаткиТоваров): {onec_id} qty={quantity}")
+                return True
+            err = str((resp_ir or {}).get("error", ""))[:200]
+            logger.debug(f"1C InformationRegister_ОстаткиТоваров POST failed: {err}")
+
         # ── 1. Direct AccumulationRegister write (no document, no account required) ──
         # Try both English (RecordType) and Russian (ВидДвижения) field name conventions
         base_reg = {
@@ -881,20 +898,22 @@ class OneCClient:
         }
 
         doc_variants = [
-            # (doc_type, tab_section)
+            # (doc_type, tab_section, extra_fields)
             # ВводОстатков first — uses счет 00 automatically, no debit account required
-            ("Document_ВводОстатков",            "Запасы"),  # УНФ opening balances
-            ("Document_ВводОстатков",            "Товары"),  # alt tab name
-            ("Document_ОприходованиеЗапасов",   "Запасы"),  # УНФ / Розница 3.0
-            ("Document_ОприходованиеТоваров",    "Товары"),  # УТ/КА
-            ("Document_ПоступлениеТоваровУслуг", "Товары"),  # КА fallback
+            ("Document_ВводОстатков",            "Запасы", {}),
+            ("Document_ВводОстатков",            "Товары", {}),
+            # ОприходованиеЗапасов with ВидОперации=НачальныеОстатки — may skip accounting
+            ("Document_ОприходованиеЗапасов",   "Запасы", {"ВидОперации": "НачальныеОстатки"}),
+            ("Document_ОприходованиеЗапасов",   "Запасы", {}),  # УНФ / Розница 3.0
+            ("Document_ОприходованиеТоваров",    "Товары", {}),  # УТ/КА
+            ("Document_ПоступлениеТоваровУслуг", "Товары", {}),  # КА fallback
         ]
         # Attempt order: with accounting first (if use_accounting), then without
         acct_attempts = ([False, True] if use_accounting else [True])
 
-        for doc_type, tab_name in doc_variants:
+        for doc_type, tab_name, extra_fields in doc_variants:
 
-            def _build_doc(no_accounting: bool, _tab=tab_name) -> dict:
+            def _build_doc(no_accounting: bool, _tab=tab_name, _extra=extra_fields) -> dict:
                 d: dict = {
                     "Date": period,
                     "Комментарий": "Авто из 1С Хелпер",
@@ -910,6 +929,7 @@ class OneCClient:
                     d["СчетКт_Key"] = credit_key or _zero
                 if no_accounting:
                     d.update(NO_ACCOUNTING)
+                d.update(_extra)
                 return d
 
             doc_created = False
