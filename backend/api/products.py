@@ -214,6 +214,9 @@ async def _push_to_onec_bg(
                     found_id = await client.find_product_by_name(snap.name)
                     if found_id:
                         snap.onec_id = found_id
+                # For a newly created product, PATCH it immediately (sets Штрихкод + settles entity)
+                if success and snap.onec_id:
+                    success, data = await client.update_product(snap.onec_id, snap)
 
             if success and snap.onec_id:
                 clean_id = snap.onec_id.strip("{}")

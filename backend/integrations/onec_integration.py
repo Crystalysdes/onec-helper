@@ -436,9 +436,6 @@ class OneCClient:
             "Description": product.name,
             "Артикул": product.article or "",
         }
-        barcode = getattr(product, "barcode", None)
-        if barcode and str(barcode).strip():
-            payload["Штрихкод"] = str(barcode).strip()
         category = getattr(product, "category", None)
         if category:
             parent_key = await self.get_or_create_category(category)
