@@ -1043,7 +1043,9 @@ class OneCClient:
                     f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
                     f"?$format=json&$select=Проведен"
                 )
-                if ok_v and isinstance(doc_v, dict) and doc_v.get("Проведен"):
+                проведен = doc_v.get("Проведен") if isinstance(doc_v, dict) else None
+                logger.info(f"1C verify GET: ok={ok_v} Проведен={проведен} raw={str(doc_v)[:120]}")
+                if ok_v and проведен:
                     logger.info(f"1C stock posted (verified after 500) ({doc_type}): {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
