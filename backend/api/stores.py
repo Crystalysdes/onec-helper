@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, not_
 
 from backend.database.connection import get_db, AsyncSessionLocal
 from backend.database.models import User, Store, Integration, IntegrationStatus, ProductCache
@@ -325,6 +325,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         product.name = name
                         product.article = p1c.get("article") or product.article
                         product.synced_at = datetime.now(timezone.utc)
+                        product.is_active = True
                         total_updated += 1
                     else:
                         product = ProductCache(
@@ -382,7 +383,24 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
 
             await db.flush()
 
-            # ── Step 5: push products to global catalog ──
+            # ── Step 5: deactivate products removed in 1C (DeletionMark) ──
+            synced_ids = set(onec_id_to_product.keys())
+            if synced_ids:
+                to_deactivate = (await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.store_id == store_id,
+                        ProductCache.onec_id.isnot(None),
+                        not_(ProductCache.onec_id.in_(synced_ids)),
+                        ProductCache.is_active == True,
+                    )
+                )).scalars().all()
+                for p in to_deactivate:
+                    p.is_active = False
+                if to_deactivate:
+                    logger.info(f"1C sync: deactivated {len(to_deactivate)} removed products")
+                await db.flush()
+
+            # ── Step 6: push products to global catalog ──
             for product in onec_id_to_product.values():
                 if product.barcode:
                     await _upsert_global_product(db, product)
