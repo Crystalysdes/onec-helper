@@ -842,7 +842,7 @@ class OneCClient:
             f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
             f"?$format=json&$filter=Номенклатура_Key eq guid'{onec_id}'&$top=1"
         )
-        ir_rec = (ir_existing or {}).get("value", [{}])[0] if (ok_ir_get and ir_existing) else {}
+        ir_rec = ((ir_existing or {}).get("value") or [{}])[0] if (ok_ir_get and ir_existing) else {}
 
         def _build_ir_payload(template: dict) -> dict:
             """Build IR payload using template fields (no nav-links, no _Type), override qty."""
