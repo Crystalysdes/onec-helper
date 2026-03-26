@@ -582,16 +582,18 @@ class OneCClient:
         owner_type = "StandardODATA.Catalog_Номенклатура"
 
         # ── 1. PATCH Catalog_Номенклатура with direct Штрихкод field (реальное поле на сущности)
+        patch_ok = False
         ok, resp = await self._request(
             "PATCH", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
             json={"Штрихкод": barcode}
         )
         if ok:
             logger.info(f"1C barcode set (PATCH Catalog/Штрихкод): {barcode} → {onec_id}")
-            return True
-        logger.warning(f"1C barcode PATCH Catalog/Штрихкод failed: {resp}")
+            patch_ok = True
+        else:
+            logger.warning(f"1C barcode PATCH Catalog/Штрихкод failed: {resp}")
 
-        # ── 2. POST InformationRegister with all 5 dimension keys in body
+        # ── 2. ALWAYS also POST to InformationRegister so barcode appears in Штрихкоды tab
         unit_key = _zero
         ok_u, prod = await self._request(
             "GET", f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')?$format=json"
@@ -606,10 +608,8 @@ class OneCClient:
         if ok:
             logger.info(f"1C barcode set (POST InformationRegister): {barcode} → {onec_id}")
             return True
-        # 400 code "15" = record already exists in register (barcode may belong to another product)
-        # PATCH to Catalog_Номенклатура.Штрихкод already succeeded above, so barcode is set
         if isinstance(resp, dict) and resp.get("status") == 400:
-            logger.info(f"1C barcode register already has {barcode} (another product) — Catalog PATCH was OK")
+            logger.info(f"1C barcode register already has {barcode} — treating as OK")
             return True
         logger.warning(f"1C barcode POST InformationRegister failed: {resp}")
         put_key = (f"Номенклатура_Key=guid'{onec_id}',"
