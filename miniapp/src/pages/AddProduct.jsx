@@ -450,80 +450,15 @@ export default function AddProduct() {
     } finally { setLoading(false) }
   }, [currentStore, navigate])
 
-  const fillFormAndEdit = useCallback((product) => {
-    suppressSearch.current = true
-    setValue('name', product.name || '')
-    setValue('price', product.price ?? '')
-    setValue('purchase_price', product.purchase_price ?? '')
-    setValue('barcode', product.barcode || '')
-    setValue('article', product.article || '')
-    setValue('description', product.description || '')
-    setValue('unit', product.unit || 'шт')
-    setValue('quantity', product.quantity ?? 0)
-    setValue('category', product.category || '')
-    setEditingProductId(product.id || null)
-    setNameSuggestions([])
-    setManualDuplicate(null)
-    setAiScan(null)
-    setBarScan(null)
-    setMethod('manual')
-  }, [setValue])
-
-  // ── Parse price/qty/category hints from free text ─────────────
-  const parseQueryHints = useCallback((text) => {
-    const t = text.toLowerCase()
-    const hints = {}
-    const priceM = t.match(/(цен[аы]?|price)[:\s]*([\d]+(?:[.,]\d+)?)/)
-    const price2M = t.match(/([\d]+(?:[.,]\d+)?)\s*р(?:уб)?(?:\.|\b)/)
-    const purchM = t.match(/(закуп|себест)[:\s]*([\d]+(?:[.,]\d+)?)/)
-    const qtyM = t.match(/(\d+(?:\.\d+)?)\s*(шт|кг|гр|г|л|мл|упак|пара|рулон|м)\b/)
-    if (priceM) hints.price = parseFloat(priceM[2].replace(',', '.'))
-    else if (price2M) hints.price = parseFloat(price2M[1].replace(',', '.'))
-    if (purchM) hints.purchase_price = parseFloat(purchM[2].replace(',', '.'))
-    if (qtyM) { hints.quantity = parseFloat(qtyM[1]); hints.unit = qtyM[2] === 'гр' ? 'г' : qtyM[2] }
-    const catMap = { 'напитк': 'Напитки', 'молоч': 'Молочные продукты', 'выпеч': 'Выпечка', 'хоз': 'Хозтовары', 'бака': 'Бакалея', 'снек': 'Снеки', 'мяс': 'Мясо', 'конд': 'Кондитерские', 'алк': 'Алкоголь', 'косм': 'Косметика' }
-    const catEntry = Object.entries(catMap).find(([k]) => t.includes(k))
-    if (catEntry) hints.category = catEntry[1]
-    return hints
-  }, [])
-
   // ════════════════════════════════════════════════════════════════
   //  QUICK ADD handlers
   // ════════════════════════════════════════════════════════════════
   const startAiScan = useCallback(() => {
-    openScanner(async (code) => {
+    openScanner((code) => {
       if (!code) return
-      const hints = parseQueryHints(aiText)
-      // Check barcode in DB
-      let found = null
-      try {
-        const res = await productsAPI.checkBarcode(code)
-        if (res.data.found) found = res.data.product
-      } catch {}
-      if (!found && currentStore) {
-        try {
-          const lr = await productsAPI.list(currentStore.id, { search: code, limit: 20 })
-          found = (Array.isArray(lr.data) ? lr.data : []).find(p => p.barcode === code) || null
-        } catch {}
-      }
-      if (found) {
-        // Found → go to edit form, merge query hints
-        fillFormAndEdit({ ...found, ...hints, barcode: code })
-        return
-      }
-      // Not found → AI parse query → edit form
-      setAiPreviewLoading(true)
-      try {
-        const parts = [aiText.trim()]
-        if (code) parts.push(`Штрих-код: ${code}`)
-        const res = await productsAPI.parseText(parts.join('\n'))
-        const data = { ...res.data, ...hints, barcode: code }
-        if (!data.name) data.name = aiText.trim()
-        fillFormAndEdit({ ...data, id: null })
-      } catch { toast.error('Ошибка ИИ') }
-      finally { setAiPreviewLoading(false) }
+      checkBarcodeGlobal(code, setAiScan)
     })
-  }, [openScanner, parseQueryHints, aiText, currentStore, fillFormAndEdit])
+  }, [openScanner, checkBarcodeGlobal])
 
   const handleQuickAdd = useCallback(async () => {
     if (!aiText.trim()) return toast.error('Напишите описание товара')
@@ -693,23 +628,34 @@ export default function AddProduct() {
   const handlePhotoBarcodeScan = useCallback(() => {
     openScanner(async (code) => {
       if (!code) return
-      let found = null
+      // Check global catalog first before using photo-recognized data
       try {
         const res = await productsAPI.checkBarcode(code)
-        if (res.data.found) found = res.data.product
-      } catch {}
+        if (res.data.found) {
+          // Merge photo AI data with catalog data (catalog may have better structured fields)
+          const merged = { ...photoProduct, ...res.data.product, barcode: code }
+          setAiPreview(merged)
+          if (res.data.source === 'catalog' || res.data.source === 'global') {
+            enrichAndUpdate(merged, (updater) => {
+              setAiPreview(prev => prev ? (typeof updater === 'function' ? updater(prev) : updater) : prev)
+            }, code)
+          }
+          setPhotoState(null)
+          setPhotoProduct(null)
+          return
+        }
+      } catch { /* fall through to photo data */ }
+      setAiPreview({ ...photoProduct, barcode: code })
       setPhotoState(null)
       setPhotoProduct(null)
-      const base = found ? { ...photoProduct, ...found, barcode: code } : { ...photoProduct, barcode: code }
-      fillFormAndEdit({ ...base, id: found?.id || null })
     })
-  }, [openScanner, photoProduct, fillFormAndEdit])
+  }, [openScanner, photoProduct, enrichAndUpdate])
 
   const skipPhotoBarcode = useCallback(() => {
+    setAiPreview(photoProduct)
     setPhotoState(null)
     setPhotoProduct(null)
-    fillFormAndEdit({ ...photoProduct, id: null })
-  }, [photoProduct, fillFormAndEdit])
+  }, [photoProduct])
 
   // ════════════════════════════════════════════════════════════════
   //  MANUAL FORM submit
@@ -755,6 +701,30 @@ export default function AddProduct() {
       toast.error(e.response?.data?.detail || 'Ошибка')
     } finally { setLoading(false) }
   }, [currentStore, editingProductId, reset, navigate])
+
+  const fillFormAndEdit = useCallback((product) => {
+    suppressSearch.current = true
+    setValue('name', product.name || '')
+    setValue('price', product.price ?? '')
+    setValue('purchase_price', product.purchase_price ?? '')
+    setValue('barcode', product.barcode || '')
+    setValue('article', product.article || '')
+    setValue('description', product.description || '')
+    setEditingProductId(product.id)
+    setNameSuggestions([])
+    setManualDuplicate(null)
+    setAiScan(null)
+    setBarScan(null)
+    // Parse aiText for quantity/unit/category if user typed them
+    const textLower = (aiText || '').toLowerCase()
+    const qtyMatch = textLower.match(/(\d+(?:\.\d+)?)\s*(шт|кг|гр|л|мл|упак|пара|рулон|м)\b/)
+    setValue('unit', qtyMatch ? qtyMatch[2] : (product.unit || 'шт'))
+    setValue('quantity', qtyMatch ? parseFloat(qtyMatch[1]) : (product.quantity ?? 0))
+    const catMap = { 'напитк': 'Напитки', 'молоч': 'Молочные продукты', 'выпеч': 'Выпечка', 'хоз': 'Хозтовары', 'бака': 'Бакалея', 'снек': 'Снеки', 'мяс': 'Мясо', 'конд': 'Кондитерские', 'алк': 'Алкоголь', 'косм': 'Косметика' }
+    const catFromText = Object.entries(catMap).find(([k]) => textLower.includes(k))
+    setValue('category', catFromText ? catFromText[1] : (product.category || ''))
+    setMethod('manual')
+  }, [setValue, aiText])
 
   const scanForForm = useCallback(() => {
     openScanner(async (code) => {
@@ -1049,25 +1019,59 @@ export default function AddProduct() {
               value={aiText}
               onChange={(e) => setAiText(e.target.value)} />
 
-            {/* Primary CTA: scan barcode */}
-            <button className="btn-primary flex items-center justify-center gap-2"
-              onClick={startAiScan}
-              disabled={aiPreviewLoading || !aiText.trim()}>
-              {aiPreviewLoading
-                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                : <ScanLine size={16} />}
-              {aiPreviewLoading ? 'ИИ распознаёт...' : 'Сканировать штрих-код'}
-            </button>
+            {/* QR scan button — shows captured code or "Сканировать" */}
+            <div className="flex gap-2">
+              <button type="button"
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium active:scale-95 transition-all"
+                style={{
+                  background: aiScan?.status === 'new'
+                    ? 'rgba(34,197,94,0.12)'
+                    : 'var(--tg-theme-bg-color)',
+                  border: aiScan?.status === 'new' ? '1.5px solid #22c55e' : 'none',
+                }}
+                onClick={startAiScan}
+                disabled={aiScan?.status === 'checking'}>
 
-            {/* Fallback: without barcode */}
-            <button className="btn-secondary flex items-center justify-center gap-2 text-sm"
+                {aiScan?.status === 'checking' && (
+                  <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                )}
+                {aiScan?.status === 'new' && <Check size={14} color="#22c55e" />}
+                {(!aiScan || aiScan.status === 'found') && (
+                  <ScanLine size={15} style={{ color: 'var(--tg-theme-button-color)' }} />
+                )}
+
+                <span style={{
+                  color: aiScan?.status === 'new' ? '#22c55e' : 'var(--tg-theme-text-color)',
+                  fontFamily: aiScan?.code ? 'monospace' : 'inherit',
+                }}>
+                  {aiScan?.status === 'checking' ? 'Проверяю...'
+                    : aiScan?.code ? aiScan.code
+                    : 'Сканировать QR / штрих-код'}
+                </span>
+              </button>
+
+              {aiScan?.code && (
+                <button type="button"
+                  className="w-9 rounded-xl flex items-center justify-center flex-shrink-0 active:opacity-60"
+                  style={{ background: 'var(--tg-theme-bg-color)' }}
+                  onClick={() => setAiScan(null)}>
+                  <X size={14} style={{ color: 'var(--tg-theme-hint-color)' }} />
+                </button>
+              )}
+            </div>
+
+            {/* Add button — active when text is entered */}
+            <button className="btn-primary flex items-center justify-center gap-2"
               onClick={handleQuickAdd}
               disabled={loading || aiPreviewLoading || !aiText.trim()}>
-              {loading
-                ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                : <Sparkles size={15} />}
-              {loading ? 'Сохраняю...' : 'Без штрих-кода (только ИИ)'}
+              {(loading || aiPreviewLoading)
+                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                : <Sparkles size={16} />}
+              {aiPreviewLoading ? 'ИИ распознаёт...' : loading ? 'Сохраняю...' : 'Найти и добавить товар'}
             </button>
+            <p className="text-center text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+              QR / штрих-код — необязательно, но улучшает точность
+            </p>
           </div>
 
         </div>

@@ -185,6 +185,11 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
                 if success and data and data.get("Ref_Key"):
                     # Strip curly braces that some 1C versions include in GUIDs
                     product.onec_id = str(data["Ref_Key"]).strip("{}")
+                elif success and not product.onec_id:
+                    # 1C returned 2xx but no body with Ref_Key — search by name
+                    found_id = await client.find_product_by_name(product.name)
+                    if found_id:
+                        product.onec_id = found_id
 
             if success and product.onec_id:
                 clean_id = product.onec_id.strip("{}")

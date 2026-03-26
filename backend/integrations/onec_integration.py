@@ -416,6 +416,20 @@ class OneCClient:
         logger.warning(f"1C category create failed for '{category_name}': {data}")
         return None
 
+    async def find_product_by_name(self, name: str) -> Optional[str]:
+        """Search 1C Catalog_Номенклатура by Description, return Ref_Key GUID or None."""
+        import urllib.parse
+        q = urllib.parse.quote(name.replace("'", "''"))
+        ok, data = await self._request(
+            "GET",
+            f"odata/standard.odata/Catalog_Номенклатура?$format=json&$filter=Description eq '{q}'&$select=Ref_Key&$top=1"
+        )
+        if ok and isinstance(data, dict):
+            items = data.get("value", [])
+            if items:
+                return str(items[0].get("Ref_Key", "")).strip("{}")
+        return None
+
     async def create_product(self, product) -> Tuple[bool, Optional[dict]]:
         """Create a new product (nomenclature) in 1C."""
         payload = {
