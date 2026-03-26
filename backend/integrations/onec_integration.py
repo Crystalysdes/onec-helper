@@ -732,14 +732,16 @@ class OneCClient:
             "AccountingRegister_Хозрасчетный",     # КА/БУХ
             "AccountingRegister_ЖурналПроводок",   # УНФ older name
         ):
-            # First try with $select; if empty try without to discover field names
+            # First try with $select; if empty/no debit try without $select
             for sel in ("?$format=json&$top=3&$select=СчетДт_Key,СчетКт_Key",
                         "?$format=json&$top=1"):
                 ok, data = await self._request(
                     "GET", f"odata/standard.odata/{acc_reg}{sel}"
                 )
-                if not ok or not isinstance(data, dict) or not data.get("value"):
-                    break  # register not published or empty — skip
+                if not ok or not isinstance(data, dict):
+                    break  # register not published — skip
+                if not data.get("value"):
+                    continue  # empty result — try other sel variant
                 item = data["value"][0]
                 if sel.endswith("$top=1"):
                     logger.info(f"1C {acc_reg} sample fields: {list(item.keys())}")
@@ -820,43 +822,73 @@ class OneCClient:
         wh_key = await self._get_warehouse_key()
         summa = round(float(quantity) * float(price or 0), 2)
 
-        # ── 0. Direct InformationRegister_ОстаткиТоваров write (PUT on existing record) ──
-        # This register is confirmed published in OData. Try to GET existing record
-        # to discover key dimensions, then PUT with updated quantity.
+        # ── 0. Direct InformationRegister_ОстаткиТоваров write ──
+        # Confirmed published in OData. Try PUT on existing record or POST new one.
+        if not getattr(self, "_ir_stock_schema", None):
+            # Learn schema from any existing record in this register
+            ok_s, schema_data = await self._request(
+                "GET", "odata/standard.odata/InformationRegister_ОстаткиТоваров?$format=json&$top=1"
+            )
+            if ok_s and isinstance(schema_data, dict) and schema_data.get("value"):
+                self._ir_stock_schema = schema_data["value"][0]
+                logger.info(f"1C InformationRegister_ОстаткиТоваров schema: {list(self._ir_stock_schema.keys())}")
+            else:
+                self._ir_stock_schema = {}
+        schema = getattr(self, "_ir_stock_schema", {})
+
+        # Try GET specific product record (for PUT), fall back to POST
         ok_ir_get, ir_existing = await self._request(
             "GET",
             f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
             f"?$format=json&$filter=Номенклатура_Key eq guid'{onec_id}'&$top=1"
         )
-        if ok_ir_get and isinstance(ir_existing, dict) and ir_existing.get("value"):
-            rec = ir_existing["value"][0]
-            logger.info(f"1C InformationRegister_ОстаткиТоваров existing fields: {list(rec.keys())}")
-            # Build PUT key from all non-value dimension fields
+        ir_rec = (ir_existing or {}).get("value", [{}])[0] if (ok_ir_get and ir_existing) else {}
+
+        def _build_ir_payload(template: dict) -> dict:
+            """Build IR payload using template/schema field names, overriding quantity."""
+            payload = {}
+            for k, v in template.items():
+                if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or k.endswith("@odata.type"):
+                    continue
+                payload[k] = v
+            payload["Номенклатура_Key"] = onec_id
+            payload["Количество"] = float(quantity)
+            payload["Стоимость"] = summa
+            return payload
+
+        if ir_rec:  # existing record → build PUT URL + PUT
             key_parts = []
-            for k, v in rec.items():
-                if k in ("Количество", "Стоимость", "odata.metadata", "odata.type"):
+            for k, v in ir_rec.items():
+                if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or k.endswith("@odata.type"):
                     continue
-                if k.endswith("@odata.type"):
-                    continue
-                if k == "Period" or k == "period":
-                    key_parts.append(f"Period=datetime'{v[:19]}'")
+                if k.lower() == "period":
+                    key_parts.append(f"Period=datetime'{str(v)[:19]}'")
                 elif k.endswith("_Key"):
                     key_parts.append(f"{k}=guid'{str(v).strip('{}')}' ")
                 else:
                     key_parts.append(f"{k}='{v}'")
             if key_parts:
-                url_key = ",".join(p.strip() for p in key_parts)
                 ok_put, resp_put = await self._request(
                     "PUT",
-                    f"odata/standard.odata/InformationRegister_ОстаткиТоваров({url_key})",
-                    json={"Количество": float(quantity)}
+                    f"odata/standard.odata/InformationRegister_ОстаткиТоваров({','.join(p.strip() for p in key_parts)})",
+                    json={k: v for k, v in _build_ir_payload(ir_rec).items()}
                 )
                 if ok_put:
                     logger.info(f"1C stock set via PUT InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
-        else:
-            logger.debug(f"1C InformationRegister_ОстаткиТоваров: no existing record for {onec_id}")
+
+        # No existing record OR PUT failed → try POST (create new record)
+        ir_template = ir_rec or schema
+        if ir_template:
+            ok_post, resp_post = await self._request(
+                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
+                json=_build_ir_payload(ir_template)
+            )
+            if ok_post:
+                logger.info(f"1C stock set via POST InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
+                return True
+            logger.warning(f"1C InformationRegister_ОстаткиТоваров POST failed: {str(resp_post)[:200]}")
 
         # ── 1. Direct AccumulationRegister write (no document, no account required) ──
         # Try both English (RecordType) and Russian (ВидДвижения) field name conventions
@@ -916,10 +948,15 @@ class OneCClient:
 
         register_candidates = [
             # УНФ-specific registers (warehouse = СтруктурнаяЕдиница_Key)
-            ("AccumulationRegister_ЗапасыНаСкладах", {"Period": period, "RecordType": "Receipt", **base_unf}),
-            ("AccumulationRegister_ЗапасыНаСкладах", {"Period": period, "ВидДвижения": "Приход", **base_unf}),
-            ("AccumulationRegister_Запасы",          {"Period": period, "RecordType": "Receipt", **base_unf}),
-            ("AccumulationRegister_Запасы",          {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            # Try both main endpoint and _RecordType endpoint
+            ("AccumulationRegister_ЗапасыНаСкладах",           {"Period": period, "RecordType": "Receipt", **base_unf}),
+            ("AccumulationRegister_ЗапасыНаСкладах",           {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            ("AccumulationRegister_ЗапасыНаСкладах_RecordType",  {"Period": period, "RecordType": "Receipt", **base_unf}),
+            ("AccumulationRegister_ЗапасыНаСкладах_RecordType",  {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            ("AccumulationRegister_Запасы",                    {"Period": period, "RecordType": "Receipt", **base_unf}),
+            ("AccumulationRegister_Запасы",                    {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            ("AccumulationRegister_Запасы_RecordType",         {"Period": period, "RecordType": "Receipt", **base_unf}),
+            ("AccumulationRegister_Запасы_RecordType",         {"Period": period, "ВидДвижения": "Приход", **base_unf}),
             # УТ/КА registers (warehouse = Склад_Key)
             ("AccumulationRegister_ТоварыНаСкладах", {"Period": period, "RecordType": "Receipt", **base_std}),
             ("AccumulationRegister_ТоварыОрганизаций",{"Period": period, "RecordType": "Receipt", **base_std}),
