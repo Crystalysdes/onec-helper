@@ -665,6 +665,33 @@ class OneCClient:
                         logger.info(f"1C stock accounts from {reg}: debit={debit} credit={credit}")
                         return debit, credit
 
+        # ── Source 1.2: Try all published InformationRegisters for account fields ─
+        pub_info = getattr(self, "_published_info_registers", None)
+        if pub_info is None:
+            ok0, root = await self._request("GET", "odata/standard.odata/?$format=json")
+            if ok0 and isinstance(root, dict):
+                all_n = {e.get("name", "") for e in root.get("value", [])}
+                pub_info = {n for n in all_n if n.startswith("InformationRegister_")}
+                self._published_info_registers = pub_info
+                logger.info(f"1C published InformationRegisters: {sorted(pub_info)}")
+            else:
+                pub_info = set()
+        for ir_name in sorted(pub_info):
+            if not any(kw in ir_name for kw in ("Счет", "Учет", "Account")):
+                continue
+            ok, data = await self._request(
+                "GET", f"odata/standard.odata/{ir_name}?$format=json&$top=2"
+            )
+            if not ok or not isinstance(data, dict) or not data.get("value"):
+                continue
+            item = data["value"][0]
+            logger.info(f"1C IR {ir_name} fields: {list(item.keys())}")
+            debit = next((_valid(item.get(f)) for f in DEBIT_FIELDS if _valid(item.get(f))), None)
+            if debit:
+                credit = next((_valid(item.get(f)) for f in CREDIT_FIELDS if _valid(item.get(f))), None)
+                logger.info(f"1C stock accounts from {ir_name}: debit={debit} credit={credit}")
+                return debit, credit
+
         # ── Source 1.5: Read accounts from existing POSTED documents ─────────
         if not getattr(self, "_cached_doc_accounts", None):
             self._cached_doc_accounts = None
@@ -838,9 +865,19 @@ class OneCClient:
                 self._published_acc_registers = {
                     n for n in all_names if n.startswith("AccumulationRegister_")
                 }
+                self._published_info_registers = {
+                    n for n in all_names if n.startswith("InformationRegister_")
+                }
+                self._published_acc_registers2 = {
+                    n for n in all_names if n.startswith("AccountingRegister_")
+                }
                 logger.info(f"1C published AccumulationRegisters: {sorted(self._published_acc_registers)}")
+                logger.info(f"1C published InformationRegisters: {sorted(self._published_info_registers)}")
+                logger.info(f"1C published AccountingRegisters: {sorted(self._published_acc_registers2)}")
             else:
                 self._published_acc_registers = set()
+                self._published_info_registers = set()
+                self._published_acc_registers2 = set()
         pub_regs = getattr(self, "_published_acc_registers", set())
 
         register_candidates = [
@@ -972,6 +1009,9 @@ class OneCClient:
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
                 logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — post manually")
+                break  # one draft per doc_type is enough
+            if doc_created:
+                break  # stop trying other doc types after first draft
 
         logger.warning(f"1C set_stock: all attempts failed for {onec_id} qty={quantity}")
         return False
