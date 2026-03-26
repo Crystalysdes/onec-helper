@@ -915,18 +915,7 @@ class OneCClient:
                     ir_ok = True
                     # Don't return yet — also try document posting for full 1C AR update
                 else:
-                    # Retry with DataLoadMode (bypasses ОбменДанными checks)
-                    ok_put2, resp_put2 = await self._request(
-                        "PUT",
-                        f"odata/standard.odata/InformationRegister_ОстаткиТоваров({','.join(p.strip() for p in key_parts)})",
-                        extra_headers={"1C_OData-DataLoadMode": "true"},
-                        json={k: v for k, v in _build_ir_payload(ir_rec).items()}
-                    )
-                    if ok_put2:
-                        logger.info(f"1C stock set via PUT+DataLoad InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
-                        ir_ok = True
-                    else:
-                        logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put2)[:200]}")
+                    logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
 
         # No existing record OR PUT failed → try POST (create new record)
         ir_template = ir_rec or schema
@@ -936,7 +925,6 @@ class OneCClient:
             try:
                 ok_post, resp_post = await self._request(
                     "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
-                    extra_headers={"1C_OData-DataLoadMode": "true"},
                     json=ir_payload
                 )
                 logger.info(f"1C InformationRegister_ОстаткиТоваров POST result: ok={ok_post} resp={str(resp_post)[:150]}")
@@ -1026,7 +1014,6 @@ class OneCClient:
                 continue
             ok, resp = await self._request(
                 "POST", f"odata/standard.odata/{acc_reg}",
-                extra_headers={"1C_OData-DataLoadMode": "true"},
                 json=rec_payload
             )
             if ok:
@@ -1067,8 +1054,12 @@ class OneCClient:
 
         doc_variants = [
             # (doc_type, tab_section, extra_fields)
+            # Inventory adjustment — may not require accounting accounts
+            ("Document_КорректировкаЗапасов",       "Запасы", {}),
+            ("Document_ИнвентаризацияТоваров",     "Товары", {}),  # inventory count
+            # Standard receipt
             ("Document_ОприходованиеЗапасов",   "Запасы", {}),
-            ("Document_ОприходованиеЗапасов",   "Запасы", {"ВидОперации": "НачальныеОстатки"}),  # initial balances op
+            ("Document_ОприходованиеЗапасов",   "Запасы", {"ВидОперации": "НачальныеОстатки"}),
             ("Document_ВводОстатков",            "Запасы", {}),
             ("Document_ВводОстатков",            "Товары", {}),
             ("Document_ОприходованиеТоваров",    "Товары", {}),
