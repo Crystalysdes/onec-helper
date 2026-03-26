@@ -692,7 +692,40 @@ class OneCClient:
                 logger.info(f"1C stock accounts from {ir_name}: debit={debit} credit={credit}")
                 return debit, credit
 
-        # ── Source 1.5: Read accounts from existing POSTED documents ─────────
+        # ── Source 0.5: Tabular section row entities (accessed without $expand) ───────
+        for doc_tab in (
+            "Document_ОприходованиеЗапасов_Запасы",
+            "Document_ОприходованиеТоваров_Товары",
+            "Document_ПоступлениеТоваровУслуг_Товары",
+        ):
+            ok, data = await self._request(
+                "GET", f"odata/standard.odata/{doc_tab}?$format=json&$top=3"
+            )
+            if not ok or not isinstance(data, dict) or not data.get("value"):
+                continue
+            item = data["value"][0]
+            logger.info(f"1C {doc_tab} row fields: {list(item.keys())}")
+            debit = next((_valid(item.get(f)) for f in DEBIT_FIELDS if _valid(item.get(f))), None)
+            if debit:
+                credit = next((_valid(item.get(f)) for f in CREDIT_FIELDS if _valid(item.get(f))), None)
+                logger.info(f"1C stock accounts from {doc_tab}: debit={debit} credit={credit}")
+                return debit, credit
+
+        # ── Source 0.6: InformationRegister_СуммыДокументов (regulated accounting sums) ──
+        ok_sd, data_sd = await self._request(
+            "GET",
+            "odata/standard.odata/InformationRegister_СуммыДокументовРегламентированныйУчет?$format=json&$top=2"
+        )
+        if ok_sd and isinstance(data_sd, dict) and data_sd.get("value"):
+            item_sd = data_sd["value"][0]
+            logger.info(f"1C СуммыДокументов fields: {list(item_sd.keys())}")
+            debit = next((_valid(item_sd.get(f)) for f in DEBIT_FIELDS if _valid(item_sd.get(f))), None)
+            if debit:
+                credit = next((_valid(item_sd.get(f)) for f in CREDIT_FIELDS if _valid(item_sd.get(f))), None)
+                logger.info(f"1C stock accounts from СуммыДокументов: debit={debit} credit={credit}")
+                return debit, credit
+
+        # ── Source 1.5: Read accounts from existing POSTED documents ─────────────────
         if not getattr(self, "_cached_doc_accounts", None):
             self._cached_doc_accounts = None
             for doc_type, tab in (
@@ -821,6 +854,7 @@ class OneCClient:
         org_key = await self._get_org_key()
         wh_key = await self._get_warehouse_key()
         summa = round(float(quantity) * float(price or 0), 2)
+        ir_ok = False  # tracks if InformationRegister write succeeded (partial success)
 
         # ── 0. Direct InformationRegister_ОстаткиТоваров write ──
         # Confirmed published in OData. Try PUT on existing record or POST new one.
@@ -878,8 +912,10 @@ class OneCClient:
                 )
                 if ok_put:
                     logger.info(f"1C stock set via PUT InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
-                    return True
-                logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
+                    ir_ok = True
+                    # Don't return yet — also try document posting for full 1C AR update
+                else:
+                    logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
 
         # No existing record OR PUT failed → try POST (create new record)
         ir_template = ir_rec or schema
@@ -894,7 +930,8 @@ class OneCClient:
                 logger.info(f"1C InformationRegister_ОстаткиТоваров POST result: ok={ok_post} resp={str(resp_post)[:150]}")
                 if ok_post:
                     logger.info(f"1C stock set via POST InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
-                    return True
+                    ir_ok = True
+                    # Don't return yet — also try document posting for full 1C AR update
             except Exception as _e:
                 logger.warning(f"1C InformationRegister_ОстаткиТоваров POST exception: {_e}")
 
@@ -1015,11 +1052,12 @@ class OneCClient:
 
         doc_variants = [
             # (doc_type, tab_section, extra_fields)
-            ("Document_ОприходованиеЗапасов",   "Запасы", {}),  # УНФ / Розница 3.0
-            ("Document_ВводОстатков",            "Запасы", {}),  # УНФ opening balances — uses счет 00
-            ("Document_ВводОстатков",            "Товары", {}),  # alt tab name
-            ("Document_ОприходованиеТоваров",    "Товары", {}),  # УТ/КА
-            ("Document_ПоступлениеТоваровУслуг", "Товары", {}),  # КА fallback
+            ("Document_ОприходованиеЗапасов",   "Запасы", {}),
+            ("Document_ОприходованиеЗапасов",   "Запасы", {"ВидОперации": "НачальныеОстатки"}),  # initial balances op
+            ("Document_ВводОстатков",            "Запасы", {}),
+            ("Document_ВводОстатков",            "Товары", {}),
+            ("Document_ОприходованиеТоваров",    "Товары", {}),
+            ("Document_ПоступлениеТоваровУслуг", "Товары", {}),
         ]
         # Respect use_accounting setting: with accounts first if enabled, then without
         acct_attempts = ([False, True] if use_accounting else [True])
@@ -1099,6 +1137,9 @@ class OneCClient:
             if doc_created:
                 break  # stop trying other doc types after first draft
 
+        if ir_ok:
+            logger.warning(f"1C set_stock: document post failed but IR updated for {onec_id} — bot display ok, 1С AR not updated (write-off may fail in 1С)")
+            return True
         logger.warning(f"1C set_stock: all attempts failed for {onec_id} qty={quantity}")
         return False
 
