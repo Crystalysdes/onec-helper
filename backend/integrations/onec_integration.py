@@ -573,7 +573,7 @@ class OneCClient:
         """Return GUID of the first warehouse (Склад) from 1C."""
         if hasattr(self, "_warehouse_key_cache") and self._warehouse_key_cache:
             return self._warehouse_key_cache
-        for catalog in ("Catalog_Склады", "Catalog_МестаХранения"):
+        for catalog in ("Catalog_СтруктурныеЕдиницы", "Catalog_Склады", "Catalog_МестаХранения"):
             ok, data = await self._request(
                 "GET", f"odata/standard.odata/{catalog}?$format=json&$top=1&$filter=IsFolder eq false"
             )
@@ -751,30 +751,41 @@ class OneCClient:
         base_reg = {
             "Номенклатура_Key": onec_id,
             "Количество": float(quantity),
-            "Стоимость": summa,          # cost — required resource in some registers
+            "Стоимость": summa,
             "Характеристика_Key": _zero,
         }
+        # УНФ-specific: warehouse field name differs per register
+        base_unf = {**base_reg}
         if wh_key:
-            base_reg["Склад_Key"] = wh_key
+            base_unf["СтруктурнаяЕдиница_Key"] = wh_key  # ЗапасыНаСкладах uses this
         if org_key:
-            base_reg["Организация_Key"] = org_key
+            base_unf["Организация_Key"] = org_key
 
-        for acc_reg in (
-            "AccumulationRegister_Запасы",              # 1С:УНФ
-            "AccumulationRegister_ТоварыНаСкладах",     # УТ/Розница
-            "AccumulationRegister_ТоварыОрганизаций",   # КА
-        ):
-            for rec_payload in [
-                {"Period": period, "RecordType": "Receipt", **base_reg},
-                {"Period": period, "ВидДвижения": "Приход", **base_reg},
-            ]:
-                ok, resp = await self._request(
-                    "POST", f"odata/standard.odata/{acc_reg}", json=rec_payload
-                )
-                if ok:
-                    logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
-                    return True
-            logger.warning(f"1C stock direct {acc_reg} failed: {resp}")
+        base_std = {**base_reg}
+        if wh_key:
+            base_std["Склад_Key"] = wh_key                # УТ/КА registers use Склад_Key
+        if org_key:
+            base_std["Организация_Key"] = org_key
+
+        register_attempts = [
+            # (register_name, payload)
+            ("AccumulationRegister_ЗапасыНаСкладах", {"Period": period, "RecordType": "Receipt", **base_unf}),
+            ("AccumulationRegister_ЗапасыНаСкладах", {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            ("AccumulationRegister_Запасы",          {"Period": period, "RecordType": "Receipt", **base_unf}),
+            ("AccumulationRegister_Запасы",          {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            ("AccumulationRegister_ТоварыНаСкладах", {"Period": period, "RecordType": "Receipt", **base_std}),
+            ("AccumulationRegister_ТоварыОрганизаций",{"Period": period, "RecordType": "Receipt", **base_std}),
+        ]
+        last_reg_resp: dict = {}
+        for acc_reg, rec_payload in register_attempts:
+            ok, resp = await self._request(
+                "POST", f"odata/standard.odata/{acc_reg}", json=rec_payload
+            )
+            if ok:
+                logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
+                return True
+            last_reg_resp = resp or {}
+        logger.warning(f"1C stock direct register write failed: {last_reg_resp}")
 
         # ── 2-4. Document-based approaches ──
         debit_key, credit_key = await self._get_stock_accounts(onec_id)
@@ -827,6 +838,7 @@ class OneCClient:
                     d["Организация_Key"] = org_key
                 if wh_key:
                     d["Склад_Key"] = wh_key
+                    d["СтруктурнаяЕдиница_Key"] = wh_key  # УНФ field name
                 if not no_accounting and debit_key:
                     d["СчетДт_Key"] = debit_key
                     d["СчетКт_Key"] = credit_key or _zero
