@@ -8,7 +8,7 @@ import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, update as sa_update
 
 from backend.database.connection import get_db
 from backend.database.models import User, Store, ProductCache, Integration, IntegrationStatus, Log, LogLevel, GlobalProduct
@@ -146,15 +146,46 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
     return store
 
 
-async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, product_onec_id: str | None, product_article: str | None):
-    """Push a product to 1C in the background. Uses its own DB session."""
-    import asyncio as _asyncio
+class _ProductSnapshot:
+    """Lightweight product data carrier for background 1C push (no DB re-fetch needed)."""
+    def __init__(self, id, name, barcode, price, purchase_price, onec_id, article, category, unit, description):
+        self.id = id
+        self.name = name
+        self.barcode = barcode
+        self.price = price
+        self.purchase_price = purchase_price
+        self.onec_id = onec_id
+        self.article = article
+        self.category = category
+        self.unit = unit
+        self.description = description
+
+
+async def _push_to_onec_bg(
+    store_id: UUID,
+    product_id: UUID,
+    name: str,
+    barcode: Optional[str],
+    price: Optional[float],
+    purchase_price: Optional[float],
+    onec_id: Optional[str],
+    article: Optional[str],
+    category: Optional[str],
+    unit: Optional[str],
+    description: Optional[str],
+):
+    """Push a product to 1C in the background. Data passed directly — no DB re-fetch."""
     from backend.integrations.onec_integration import OneCClient
     from backend.core.security import decrypt_password
     from backend.database.connection import AsyncSessionLocal
     from loguru import logger
 
-    await _asyncio.sleep(1)  # ensure main request session has committed
+    snap = _ProductSnapshot(
+        id=product_id, name=name, barcode=barcode, price=price,
+        purchase_price=purchase_price, onec_id=onec_id, article=article,
+        category=category, unit=unit, description=description,
+    )
+
     async with AsyncSessionLocal() as db:
         try:
             result = await db.execute(
@@ -167,54 +198,44 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
             if not integration:
                 return
 
-            # Re-fetch product from DB so we can update it
-            p_result = await db.execute(
-                select(ProductCache).where(ProductCache.id == product_id)
-            )
-            product = p_result.scalar_one_or_none()
-            if not product:
-                return
-
             client = OneCClient(
                 url=integration.onec_url,
                 username=integration.onec_username,
                 password=decrypt_password(integration.onec_password_encrypted),
             )
-            if product.onec_id:
-                success, data = await client.update_product(product.onec_id, product)
-            else:
-                success, data = await client.create_product(product)
-                if success and data and data.get("Ref_Key"):
-                    # Strip curly braces that some 1C versions include in GUIDs
-                    product.onec_id = str(data["Ref_Key"]).strip("{}")
-                elif success and not product.onec_id:
-                    # 1C returned 2xx but no body with Ref_Key — search by name
-                    found_id = await client.find_product_by_name(product.name)
-                    if found_id:
-                        product.onec_id = found_id
-                if success and product.onec_id:
-                    # Save onec_id to DB and pause so 1C can fully persist the new entity
-                    product.synced_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    await _asyncio.sleep(1)
 
-            if success and product.onec_id:
-                clean_id = product.onec_id.strip("{}")
-                # Push barcode on BOTH create and update
-                if product.barcode and product.barcode.strip():
-                    await client.create_barcode(clean_id, product.barcode.strip())
-                # Push prices to 1C
-                if product.price is not None and product.price > 0:
-                    await client.set_price(clean_id, float(product.price), price_type_name="розн")
-                if product.purchase_price is not None and product.purchase_price > 0:
-                    await client.set_price(clean_id, float(product.purchase_price), price_type_name="закуп")
-                product.synced_at = datetime.now(timezone.utc)
+            if snap.onec_id:
+                success, data = await client.update_product(snap.onec_id, snap)
+            else:
+                success, data = await client.create_product(snap)
+                if success and data and data.get("Ref_Key"):
+                    snap.onec_id = str(data["Ref_Key"]).strip("{}")
+                elif success and not snap.onec_id:
+                    found_id = await client.find_product_by_name(snap.name)
+                    if found_id:
+                        snap.onec_id = found_id
+
+            if success and snap.onec_id:
+                clean_id = snap.onec_id.strip("{}")
+                # Push barcode (already in create/update payload, also via register)
+                if snap.barcode and snap.barcode.strip():
+                    await client.create_barcode(clean_id, snap.barcode.strip())
+                if snap.price is not None and snap.price > 0:
+                    await client.set_price(clean_id, float(snap.price), price_type_name="розн")
+                if snap.purchase_price is not None and snap.purchase_price > 0:
+                    await client.set_price(clean_id, float(snap.purchase_price), price_type_name="закуп")
+                # Save onec_id + synced_at back to DB
+                await db.execute(
+                    sa_update(ProductCache)
+                    .where(ProductCache.id == product_id)
+                    .values(onec_id=snap.onec_id, synced_at=datetime.now(timezone.utc))
+                )
                 await db.commit()
-                logger.info(f"Product '{product.name}' synced to 1C (onec_id={clean_id})")
+                logger.info(f"[1C bg] '{snap.name}' synced (onec_id={clean_id}, barcode={snap.barcode})")
             elif not success:
-                logger.warning(f"1C push failed for '{product.name}': {data}")
+                logger.warning(f"[1C bg] push failed for '{snap.name}': {data}")
         except Exception as e:
-            logger.error(f"_push_to_onec_bg error: {e}")
+            logger.error(f"[1C bg] error for '{name}': {e}")
 
 
 @router.get("/check-barcode")
@@ -448,7 +469,9 @@ async def create_product(
     await db.commit()
     result = _serialize_product(product)
     background_tasks.add_task(
-        _push_to_onec_bg, store_id, product.id, product.name, product.onec_id, product.article
+        _push_to_onec_bg, store_id, product.id,
+        product.name, product.barcode, product.price, product.purchase_price,
+        product.onec_id, product.article, product.category, product.unit, product.description
     )
     return result
 
@@ -643,7 +666,11 @@ async def quick_add_product(
     await _upsert_global_product(db, product)
     # 1C push runs in background — does not block response
     import asyncio
-    asyncio.ensure_future(_push_to_onec_bg(UUID(store_id), product.id, product.name, product.onec_id, product.article))
+    asyncio.ensure_future(_push_to_onec_bg(
+        UUID(store_id), product.id,
+        product.name, product.barcode, product.price, product.purchase_price,
+        product.onec_id, product.article, product.category, product.unit, product.description
+    ))
     return result
 
 
@@ -697,7 +724,9 @@ async def update_product(
     result = _serialize_product(product)
     await db.commit()
     background_tasks.add_task(
-        _push_to_onec_bg, product.store_id, product.id, product.name, product.onec_id, product.article
+        _push_to_onec_bg, product.store_id, product.id,
+        product.name, product.barcode, product.price, product.purchase_price,
+        product.onec_id, product.article, product.category, product.unit, product.description
     )
     return result
 
