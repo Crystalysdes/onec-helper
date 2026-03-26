@@ -768,6 +768,12 @@ class OneCClient:
                 )
                 price_results.append({"register": f"Document (guid'{ref_key[:8]}...')/Post",
                                       "ok": ok_p, "resp": str(resp_p)[:400]})
+                if ok_p:
+                    await self._request(
+                        "PATCH",
+                        f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{ref_key}')",
+                        json={"ПометкаУдаления": True}
+                    )
 
         return {
             "onec_id": onec_id,
