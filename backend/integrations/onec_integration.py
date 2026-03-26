@@ -614,51 +614,66 @@ class OneCClient:
     async def _get_stock_accounts(self, onec_id: str) -> tuple[str | None, str | None]:
         """Return (debit_key, credit_key) for stock receipt posting.
 
-        Strategy:
-        1. InformationRegister_СчетаУчетаНоменклатуры — per-product account settings
-           (look for this specific product, then any product as a template)
-        2. ChartOfAccounts — broad fetch, filter by code prefix in memory
-        Returns (None, None) if nothing found.
+        Sources tried in order:
+        1. InformationRegister_СчетаУчетаНоменклатуры (per-product settings)
+        2. AccountingRegister_ЖурналПроводок (GUIDs from existing transactions)
+        3. ChartOfAccounts — broad fetch, match by code prefix, fallback to first account
         """
         _zero = "00000000-0000-0000-0000-000000000000"
 
-        def _pick(item: dict, fields: list[str]) -> str | None:
-            for f in fields:
-                v = str(item.get(f) or "").strip("{}")
-                if v and v != _zero:
-                    return v
-            return None
+        def _valid(v) -> str | None:
+            s = str(v or "").strip("{}")
+            return s if (s and s != _zero) else None
 
         DEBIT_FIELDS  = ["СчетДт_Key", "СчетУчетаДебет_Key", "СчетУчетаТовары_Key",
                          "СчетУчетаДоходов_Key", "СчетУчета_Key"]
         CREDIT_FIELDS = ["СчетКт_Key", "СчетУчетаКредит_Key", "СчетУчетаРасходов_Key"]
 
-        # ── Source 1: InformationRegister_СчетаУчетаНоменклатуры ──────────────
+        # ── Source 1: InformationRegister_СчетаУчетаНоменклатуры ─────────────
         for reg in ("InformationRegister_СчетаУчетаНоменклатуры",
                     "InformationRegister_СчетаУчетаНоменклатурыПоОрганизациям"):
-            for url_suffix in (
+            for suffix in (
                 f"?$format=json&$top=1&$filter=Номенклатура_Key eq guid'{onec_id}'",
-                "?$format=json&$top=1",   # any product → use as template
+                "?$format=json&$top=1",
             ):
-                ok, data = await self._request("GET", f"odata/standard.odata/{reg}{url_suffix}")
+                ok, data = await self._request("GET", f"odata/standard.odata/{reg}{suffix}")
                 if ok and isinstance(data, dict) and data.get("value"):
                     item = data["value"][0]
-                    debit  = _pick(item, DEBIT_FIELDS)
-                    credit = _pick(item, CREDIT_FIELDS)
+                    logger.info(f"1C acct reg {reg} fields: {list(item.keys())}")
+                    debit  = next((_valid(item.get(f)) for f in DEBIT_FIELDS
+                                   if _valid(item.get(f))), None)
+                    credit = next((_valid(item.get(f)) for f in CREDIT_FIELDS
+                                   if _valid(item.get(f))), None)
                     if debit:
                         logger.info(f"1C stock accounts from {reg}: debit={debit} credit={credit}")
                         return debit, credit
 
-        # ── Source 2: Chart of accounts — broad fetch, match by code prefix ──
+        # ── Source 2: AccountingRegister — read GUIDs from existing transactions ─
+        for acc_reg in ("AccountingRegister_ЖурналПроводок", "AccountingRegister_Хозрасчетный"):
+            ok, data = await self._request(
+                "GET",
+                f"odata/standard.odata/{acc_reg}"
+                f"?$format=json&$top=5&$select=СчетДт_Key,СчетКт_Key"
+            )
+            if ok and isinstance(data, dict) and data.get("value"):
+                for item in data["value"]:
+                    debit = _valid(item.get("СчетДт_Key"))
+                    if debit:
+                        credit = _valid(item.get("СчетКт_Key"))
+                        logger.info(f"1C stock accounts from {acc_reg}: debit={debit}")
+                        return debit, credit
+
+        # ── Source 3: ChartOfAccounts — no filter, match by code prefix ────────
         for chart in ("ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"):
             ok, data = await self._request(
                 "GET",
-                f"odata/standard.odata/{chart}?$format=json&$top=200"
-                f"&$select=Ref_Key,Code&$filter=IsFolder eq false"
+                f"odata/standard.odata/{chart}?$format=json&$top=200&$select=Ref_Key,Code"
             )
             if not ok or not isinstance(data, dict):
                 continue
             all_acc = data.get("value", [])
+            logger.info(f"1C {chart}: {len(all_acc)} accounts; "
+                        f"sample={[str(a.get('Code','')) for a in all_acc[:8]]}")
             if not all_acc:
                 continue
 
@@ -670,13 +685,21 @@ class OneCClient:
                         return str(m["Ref_Key"]).strip("{}")
                 return None
 
-            debit  = _find(["41.02", "41.01", "41.2", "41"])
-            credit = _find(["91.01", "91.1", "91", "94"])
+            debit  = _find(["41.02", "41.01", "41.2", "41", "10.01", "10"])
+            credit = _find(["91.01", "91.1", "91", "94", "99"])
             if debit:
                 logger.info(f"1C stock accounts from {chart}: debit={debit} credit={credit}")
                 return debit, credit
 
-        logger.warning("1C _get_stock_accounts: no account found — Post will likely fail")
+            # Last resort: use the very first non-zero account in the chart
+            for a in all_acc:
+                key = _valid(a.get("Ref_Key"))
+                if key:
+                    logger.warning(f"1C stock account: using first available "
+                                   f"code={a.get('Code')} key={key}")
+                    return key, None
+
+        logger.warning("1C _get_stock_accounts: no account found in any source")
         return None, None
 
     async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0,
