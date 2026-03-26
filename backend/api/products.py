@@ -196,7 +196,7 @@ async def _push_barcode_and_prices(
 
 class _ProductSnapshot:
     """Lightweight product data carrier for background 1C push (no DB re-fetch needed)."""
-    def __init__(self, id, name, barcode, price, purchase_price, onec_id, article, category, unit, description):
+    def __init__(self, id, name, barcode, price, purchase_price, onec_id, article, category, unit, description, quantity=None):
         self.id = id
         self.name = name
         self.barcode = barcode
@@ -207,6 +207,7 @@ class _ProductSnapshot:
         self.category = category
         self.unit = unit
         self.description = description
+        self.quantity = quantity
 
 
 async def _push_to_onec_bg(
@@ -221,6 +222,7 @@ async def _push_to_onec_bg(
     category: Optional[str],
     unit: Optional[str],
     description: Optional[str],
+    quantity: Optional[float] = None,
 ):
     """Push a product to 1C in the background. Data passed directly — no DB re-fetch."""
     from backend.integrations.onec_integration import OneCClient
@@ -231,7 +233,7 @@ async def _push_to_onec_bg(
     snap = _ProductSnapshot(
         id=product_id, name=name, barcode=barcode, price=price,
         purchase_price=purchase_price, onec_id=onec_id, article=article,
-        category=category, unit=unit, description=description,
+        category=category, unit=unit, description=description, quantity=quantity,
     )
 
     async with AsyncSessionLocal() as db:
@@ -275,6 +277,10 @@ async def _push_to_onec_bg(
                     await client.set_price(clean_id, float(snap.price), price_type_name="розн")
                 if snap.purchase_price is not None and snap.purchase_price > 0:
                     await client.set_price(clean_id, float(snap.purchase_price), price_type_name="закуп")
+                if snap.quantity is not None and snap.quantity >= 0:
+                    use_accounting = bool(integration.settings.get("use_accounting", False)) if integration.settings else False
+                    st_ok = await client.set_stock(clean_id, float(snap.quantity), float(snap.price or 0), use_accounting=use_accounting)
+                    logger.info(f"[1C bg] set_stock ok={st_ok} qty={snap.quantity}")
                 # Save onec_id + synced_at back to DB
                 await db.execute(
                     sa_update(ProductCache)
@@ -829,10 +835,12 @@ async def update_product(
     await _upsert_global_product(db, product)
     result = _serialize_product(product)
     await db.commit()
+    quantity_changed = payload.model_dump(exclude_none=True).get("quantity") is not None
     background_tasks.add_task(
         _push_to_onec_bg, product.store_id, product.id,
         product.name, product.barcode, product.price, product.purchase_price,
-        product.onec_id, product.article, product.category, product.unit, product.description
+        product.onec_id, product.article, product.category, product.unit, product.description,
+        product.quantity if quantity_changed else None,
     )
     return result
 
