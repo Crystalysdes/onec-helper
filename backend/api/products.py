@@ -256,6 +256,8 @@ async def _push_to_onec_bg(
 
             if snap.onec_id:
                 success, data = await client.update_product(snap.onec_id, snap)
+                if not success:
+                    logger.warning(f"[1C bg] update_product failed for '{snap.name}': {data}")
             else:
                 success, data = await client.create_product(snap)
                 if success and data and data.get("Ref_Key"):
@@ -266,19 +268,20 @@ async def _push_to_onec_bg(
                         snap.onec_id = found_id
                 # For a newly created product, PATCH it immediately (sets Штрихкод + settles entity)
                 if success and snap.onec_id:
-                    success, data = await client.update_product(snap.onec_id, snap)
+                    await client.update_product(snap.onec_id, snap)
 
-            if success and snap.onec_id:
+            # Push barcode / prices / stock independently — even if update_product failed
+            # (product already exists in 1C with known onec_id, only stock/prices need updating)
+            if snap.onec_id:
                 clean_id = snap.onec_id.strip("{}")
-                # Push barcode (already in create/update payload, also via register)
+                use_accounting = bool(integration.settings.get("use_accounting", False)) if integration.settings else False
                 if snap.barcode and snap.barcode.strip():
                     await client.create_barcode(clean_id, snap.barcode.strip())
                 if snap.price is not None and snap.price > 0:
                     await client.set_price(clean_id, float(snap.price), price_type_name="розн")
                 if snap.purchase_price is not None and snap.purchase_price > 0:
                     await client.set_price(clean_id, float(snap.purchase_price), price_type_name="закуп")
-                if snap.quantity is not None and snap.quantity >= 0:
-                    use_accounting = bool(integration.settings.get("use_accounting", False)) if integration.settings else False
+                if snap.quantity is not None and snap.quantity > 0:
                     st_ok = await client.set_stock(clean_id, float(snap.quantity), float(snap.price or 0), use_accounting=use_accounting)
                     logger.info(f"[1C bg] set_stock ok={st_ok} qty={snap.quantity}")
                 # Save onec_id + synced_at back to DB
@@ -289,8 +292,8 @@ async def _push_to_onec_bg(
                 )
                 await db.commit()
                 logger.info(f"[1C bg] '{snap.name}' synced (onec_id={clean_id}, barcode={snap.barcode})")
-            elif not success:
-                logger.warning(f"[1C bg] push failed for '{snap.name}': {data}")
+            else:
+                logger.warning(f"[1C bg] no onec_id resolved for '{snap.name}' — skipped")
         except Exception as e:
             logger.error(f"[1C bg] error for '{name}': {e}")
 
