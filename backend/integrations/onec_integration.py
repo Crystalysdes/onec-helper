@@ -767,6 +767,18 @@ class OneCClient:
         if org_key:
             base_std["Организация_Key"] = org_key
 
+        # GET a sample record to learn actual field names (once per client instance)
+        if not getattr(self, "_reg_fields_logged", False):
+            self._reg_fields_logged = True
+            for _reg in ("AccumulationRegister_ЗапасыНаСкладах", "AccumulationRegister_Запасы"):
+                ok_g, gs = await self._request(
+                    "GET", f"odata/standard.odata/{_reg}?$format=json&$top=1"
+                )
+                if ok_g and isinstance(gs, dict) and gs.get("value"):
+                    logger.info(f"1C {_reg} sample fields: {list(gs['value'][0].keys())}")
+                    break
+                logger.info(f"1C {_reg} GET: ok={ok_g} data={str(gs)[:120]}")
+
         # Discover published AccumulationRegister entities once per client instance
         if not getattr(self, "_published_acc_registers", None):
             ok0, root = await self._request("GET", "odata/standard.odata/?$format=json")
@@ -802,7 +814,7 @@ class OneCClient:
                 logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
                 return True
             err_code = (resp or {}).get("status", "?")
-            err_msg  = str((resp or {}).get("error", ""))[:120]
+            err_msg  = str((resp or {}).get("error", ""))[:500]
             logger.warning(f"1C {acc_reg} POST failed [{err_code}]: {err_msg}")
         logger.warning("1C stock: all direct register writes failed — falling back to document")
 
