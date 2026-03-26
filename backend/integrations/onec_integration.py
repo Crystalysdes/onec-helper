@@ -615,6 +615,7 @@ class OneCClient:
         """Return (debit_key, credit_key) for stock receipt posting.
 
         Sources tried in order:
+        0. Root OData endpoint — discover any published ChartOfAccounts entity names
         1. InformationRegister_СчетаУчетаНоменклатуры (per-product settings)
         2. AccountingRegister_ЖурналПроводок (GUIDs from existing transactions)
         3. ChartOfAccounts — broad fetch, match by code prefix, fallback to first account
@@ -628,6 +629,22 @@ class OneCClient:
         DEBIT_FIELDS  = ["СчетДт_Key", "СчетУчетаДебет_Key", "СчетУчетаТовары_Key",
                          "СчетУчетаДоходов_Key", "СчетУчета_Key"]
         CREDIT_FIELDS = ["СчетКт_Key", "СчетУчетаКредит_Key", "СчетУчетаРасходов_Key"]
+
+        # ── Source 0: Discover published ChartOfAccounts from root OData endpoint ──
+        if not getattr(self, "_discovered_charts", None):
+            ok0, root = await self._request("GET", "odata/standard.odata/?$format=json")
+            if ok0 and isinstance(root, dict):
+                names = [e.get("name", "") for e in root.get("value", [])]
+                self._discovered_charts = [
+                    n for n in names
+                    if n.startswith("ChartOfAccounts_") or "ПланСчетов" in n
+                ]
+                if self._discovered_charts:
+                    logger.info(f"1C discovered chart entities: {self._discovered_charts}")
+                else:
+                    logger.warning("1C: no ChartOfAccounts entities published in OData")
+                    self._discovered_charts = []
+        discovered_charts = getattr(self, "_discovered_charts", [])
 
         # ── Source 1: InformationRegister_СчетаУчетаНоменклатуры ─────────────
         for reg in ("InformationRegister_СчетаУчетаНоменклатуры",
@@ -664,7 +681,10 @@ class OneCClient:
                         return debit, credit
 
         # ── Source 3: ChartOfAccounts — no filter, match by code prefix ────────
-        for chart in ("ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"):
+        all_charts = (discovered_charts or []) + [
+            "ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"
+        ]
+        for chart in list(dict.fromkeys(all_charts)):
             ok, data = await self._request(
                 "GET",
                 f"odata/standard.odata/{chart}?$format=json&$top=200&$select=Ref_Key,Code"
@@ -826,6 +846,28 @@ class OneCClient:
 
                 doc_created = True
                 ref_key = str(resp["Ref_Key"]).strip("{}")
+
+                # ── GET back the created doc — 1С may auto-fill accounts via ОбработкаЗаполнения ──
+                ok_g, doc_data = await self._request(
+                    "GET",
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
+                    f"?$format=json&$expand={tab_name}"
+                )
+                if ok_g and isinstance(doc_data, dict):
+                    rows = doc_data.get(tab_name, [])
+                    hdr_acct_fields = [k for k in doc_data if "Счет" in k or "Провод" in k]
+                    row_acct_fields = [k for k in (rows[0] if rows else {}) if "Счет" in k]
+                    logger.info(f"1C {doc_type} header acct fields: {hdr_acct_fields}; "
+                                f"row acct fields: {row_acct_fields}")
+                    # Check if 1С auto-filled a valid account in the row
+                    if rows:
+                        for af in ("СчетДт_Key", "СчетУчета_Key", "СчетДебета_Key"):
+                            auto_v = str(rows[0].get(af, "")).strip("{}")
+                            if auto_v and auto_v != _zero and not debit_key:
+                                debit_key = auto_v
+                                logger.info(f"1C auto-filled {af}={debit_key} in {doc_type} row")
+                                break
+
                 ok2, resp2 = await self._request(
                     "POST",
                     f"odata/standard.odata/{doc_type}(guid'{ref_key}')/Post"
@@ -835,7 +877,6 @@ class OneCClient:
                     logger.info(f"1C stock posted ({doc_type}){suffix}: {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
-                # Leave unposted document as draft so user can post manually in 1C UI
                 logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — post manually")
             if doc_created:
                 break  # doc was created (even if unposted) — don’t try other doc types
