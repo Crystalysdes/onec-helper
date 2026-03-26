@@ -665,6 +665,39 @@ class OneCClient:
                         logger.info(f"1C stock accounts from {reg}: debit={debit} credit={credit}")
                         return debit, credit
 
+        # ── Source 1.5: Read accounts from existing POSTED documents ─────────
+        if not getattr(self, "_cached_doc_accounts", None):
+            for doc_type, tab in (
+                ("Document_ОприходованиеЗапасов", "Запасы"),
+                ("Document_ОприходованиеТоваров", "Товары"),
+                ("Document_ПоступлениеТоваровУслуг", "Товары"),
+            ):
+                ok, data = await self._request(
+                    "GET",
+                    f"odata/standard.odata/{doc_type}"
+                    f"?$format=json&$top=3&$filter=Проведен eq true&$expand={tab}"
+                )
+                if not ok or not isinstance(data, dict):
+                    continue
+                for doc in data.get("value", []):
+                    rows = doc.get(tab, [])
+                    for row in rows:
+                        row_debit = next((_valid(row.get(f)) for f in DEBIT_FIELDS
+                                          if _valid(row.get(f))), None)
+                        if row_debit:
+                            row_credit = next((_valid(row.get(f)) for f in CREDIT_FIELDS
+                                               if _valid(row.get(f))), None)
+                            self._cached_doc_accounts = (row_debit, row_credit)
+                            logger.info(f"1C stock accounts from existing {doc_type} row: "
+                                        f"debit={row_debit} credit={row_credit}")
+                            break
+                    if self._cached_doc_accounts:
+                        break
+                if self._cached_doc_accounts:
+                    break
+        if self._cached_doc_accounts:
+            return self._cached_doc_accounts
+
         # ── Source 2: AccountingRegister — read GUIDs from existing transactions ─
         for acc_reg in ("AccountingRegister_ЖурналПроводок", "AccountingRegister_Хозрасчетный"):
             ok, data = await self._request(
