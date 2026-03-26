@@ -845,15 +845,18 @@ class OneCClient:
         ir_rec = (ir_existing or {}).get("value", [{}])[0] if (ok_ir_get and ir_existing) else {}
 
         def _build_ir_payload(template: dict) -> dict:
-            """Build IR payload using template/schema field names, overriding quantity."""
+            """Build IR payload using template fields (no nav-links, no _Type), override qty."""
             payload = {}
             for k, v in template.items():
-                if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or k.endswith("@odata.type"):
+                # Skip: value fields, odata meta, navigation links, type hints
+                if "@" in k or k.endswith("_Type"):
+                    continue
+                if k in ("Количество", "Резерв", "Стоимость",
+                         "odata.metadata", "odata.type", "odata.etag"):
                     continue
                 payload[k] = v
             payload["Номенклатура_Key"] = onec_id
             payload["Количество"] = float(quantity)
-            payload["Стоимость"] = summa
             return payload
 
         if ir_rec:  # existing record → build PUT URL + PUT
@@ -881,14 +884,19 @@ class OneCClient:
         # No existing record OR PUT failed → try POST (create new record)
         ir_template = ir_rec or schema
         if ir_template:
-            ok_post, resp_post = await self._request(
-                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
-                json=_build_ir_payload(ir_template)
-            )
-            if ok_post:
-                logger.info(f"1C stock set via POST InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
-                return True
-            logger.warning(f"1C InformationRegister_ОстаткиТоваров POST failed: {str(resp_post)[:200]}")
+            ir_payload = _build_ir_payload(ir_template)
+            logger.info(f"1C InformationRegister_ОстаткиТоваров POST payload keys: {list(ir_payload.keys())}")
+            try:
+                ok_post, resp_post = await self._request(
+                    "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
+                    json=ir_payload
+                )
+                logger.info(f"1C InformationRegister_ОстаткиТоваров POST result: ok={ok_post} resp={str(resp_post)[:150]}")
+                if ok_post:
+                    logger.info(f"1C stock set via POST InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
+                    return True
+            except Exception as _e:
+                logger.warning(f"1C InformationRegister_ОстаткиТоваров POST exception: {_e}")
 
         # ── 1. Direct AccumulationRegister write (no document, no account required) ──
         # Try both English (RecordType) and Russian (ВидДвижения) field name conventions
