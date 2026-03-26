@@ -438,6 +438,7 @@ async def create_product(
         meta={"product_id": str(product.id)},
     )
     db.add(log)
+    await db.commit()
     result = _serialize_product(product)
     background_tasks.add_task(
         _push_to_onec_bg, store_id, product.id, product.name, product.onec_id, product.article
