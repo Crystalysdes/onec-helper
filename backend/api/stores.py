@@ -400,6 +400,21 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                     logger.info(f"1C sync: deactivated {len(to_deactivate)} removed products")
                 await db.flush()
 
+                # Remove from global catalog barcodes no longer active in ANY store
+                dead_barcodes = [p.barcode for p in to_deactivate if p.barcode]
+                if dead_barcodes:
+                    from sqlalchemy import text as _text
+                    await db.execute(_text("""
+                        DELETE FROM global_products
+                        WHERE barcode = ANY(:bcs)
+                        AND NOT EXISTS (
+                            SELECT 1 FROM products_cache
+                            WHERE barcode = global_products.barcode
+                              AND is_active = true
+                        )
+                    """), {"bcs": dead_barcodes})
+                    logger.info(f"1C sync: cleaned up to {len(dead_barcodes)} orphaned global_products entries")
+
             # ── Step 6: push products to global catalog ──
             for product in onec_id_to_product.values():
                 if product.barcode:

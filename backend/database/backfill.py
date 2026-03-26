@@ -22,7 +22,7 @@ async def backfill_global_products() -> None:
             rows = (await db.execute(text(
                 "SELECT barcode, name, price, purchase_price, article, category, unit, description "
                 "FROM products_cache "
-                "WHERE barcode IS NOT NULL AND barcode != ''"
+                "WHERE barcode IS NOT NULL AND barcode != '' AND is_active = true"
             ))).fetchall()
 
             if not rows:
