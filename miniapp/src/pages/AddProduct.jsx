@@ -463,41 +463,33 @@ export default function AddProduct() {
   const handleQuickAdd = useCallback(async () => {
     if (!aiText.trim()) return toast.error('Напишите описание товара')
     if (!currentStore) return toast.error('Выберите магазин')
+    if (!aiScan?.code || aiScan.status !== 'new') return toast.error('Отсканируйте штрихкод товара')
     setAiPreviewLoading(true)
     try {
-      // 1. AI parses free text
-      const parts = [aiText.trim()]
-      if (aiScan?.code) parts.push(`Штрих-код: ${aiScan.code}`)
+      const parts = [aiText.trim(), `Штрих-код: ${aiScan.code}`]
       const res = await productsAPI.parseText(parts.join('\n'))
       const data = res.data || {}
       if (!data.name) data.name = aiText.trim()
-      if (aiScan?.code && !data.barcode) data.barcode = aiScan.code
+      data.barcode = aiScan.code
 
-      // 2. Search global catalog with smart multi-word fallback
-      const matches = await searchCatalogSmart(data.name, aiText.trim())
-      if (matches.length > 0) {
-        const best = matches[0]
-        // User-typed values (quantity, unit, category) take priority over catalog defaults
-        setAiPreview({
-          ...best,
-          name: best.name || data.name,
-          barcode: data.barcode || best.barcode,
-          quantity: data.quantity ?? best.quantity ?? 0,
-          unit: data.unit || best.unit || 'шт',
-          category: data.category || best.category,
-          price: data.price ?? best.price,
-          purchase_price: data.purchase_price ?? best.purchase_price,
-          _source: 'catalog',
-        })
-        return
-      }
+      suppressSearch.current = true
+      setValue('name', data.name || '')
+      if (data.price != null) setValue('price', data.price)
+      if (data.purchase_price != null) setValue('purchase_price', data.purchase_price)
+      setValue('barcode', data.barcode || '')
+      setValue('article', data.article || '')
+      setValue('category', data.category || '')
+      setValue('unit', data.unit || 'шт')
+      setValue('quantity', data.quantity ?? 0)
+      setValue('description', data.description || '')
 
-      // 3. Not found in catalog — show AI preview with option to scan barcode
-      setAiPreview({ ...data, _source: 'ai', _notInCatalog: true })
+      setAiText('')
+      setAiScan(null)
+      setMethod('manual')
     } catch {
       toast.error('Ошибка обработки ИИ')
     } finally { setAiPreviewLoading(false) }
-  }, [aiText, aiScan, currentStore])
+  }, [aiText, aiScan, currentStore, setValue])
 
   const confirmAiPreview = useCallback(async () => {
     if (!aiPreview || !currentStore) return
@@ -1008,72 +1000,59 @@ export default function AddProduct() {
                   Быстрое добавление
                 </p>
                 <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  Напишите коротко — ИИ создаст товар
+                  Опишите товар — ИИ заполнит карточку
                 </p>
               </div>
             </div>
 
             {/* Text input */}
             <textarea className="input-field resize-none" rows={3}
-              placeholder={"Примеры:\n• Молоко 3.2% 1л Простоквашино, цена 89р, закуп 65р\n• Хлеб белый нарезной 450г, категория выпечка"}
+              placeholder={"Опишите товар своими словами:\n• сок яблочный 1л, 10 шт, цена 89р\n• хлеб белый нарезной 450г, закуп 35р"}
               value={aiText}
               onChange={(e) => setAiText(e.target.value)} />
 
-            {/* QR scan button — shows captured code or "Сканировать" */}
-            <div className="flex gap-2">
+            {/* Step 2: scan barcode */}
+            {!aiScan || aiScan.status === 'checking' ? (
               <button type="button"
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium active:scale-95 transition-all"
-                style={{
-                  background: aiScan?.status === 'new'
-                    ? 'rgba(34,197,94,0.12)'
-                    : 'var(--tg-theme-bg-color)',
-                  border: aiScan?.status === 'new' ? '1.5px solid #22c55e' : 'none',
-                }}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold active:scale-95 transition-all"
+                style={{ background: 'var(--tg-theme-button-color)', color: 'white', opacity: aiScan?.status === 'checking' ? 0.7 : 1 }}
                 onClick={startAiScan}
                 disabled={aiScan?.status === 'checking'}>
-
-                {aiScan?.status === 'checking' && (
-                  <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                )}
-                {aiScan?.status === 'new' && <Check size={14} color="#22c55e" />}
-                {(!aiScan || aiScan.status === 'found') && (
-                  <ScanLine size={15} style={{ color: 'var(--tg-theme-button-color)' }} />
-                )}
-
-                <span style={{
-                  color: aiScan?.status === 'new' ? '#22c55e' : 'var(--tg-theme-text-color)',
-                  fontFamily: aiScan?.code ? 'monospace' : 'inherit',
-                }}>
-                  {aiScan?.status === 'checking' ? 'Проверяю...'
-                    : aiScan?.code ? aiScan.code
-                    : 'Сканировать QR / штрих-код'}
-                </span>
+                {aiScan?.status === 'checking'
+                  ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  : <ScanLine size={16} />}
+                {aiScan?.status === 'checking' ? 'Проверяю штрихкод...' : 'Сканировать штрихкод'}
               </button>
-
-              {aiScan?.code && (
-                <button type="button"
-                  className="w-9 rounded-xl flex items-center justify-center flex-shrink-0 active:opacity-60"
-                  style={{ background: 'var(--tg-theme-bg-color)' }}
-                  onClick={() => setAiScan(null)}>
-                  <X size={14} style={{ color: 'var(--tg-theme-hint-color)' }} />
+            ) : aiScan.status === 'new' ? (
+              /* Barcode scanned — new product */
+              <>
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl"
+                  style={{ background: 'rgba(34,197,94,0.1)', border: '1.5px solid #22c55e' }}>
+                  <Check size={15} color="#22c55e" />
+                  <span className="flex-1 text-sm font-medium" style={{ color: '#16a34a', fontFamily: 'monospace' }}>
+                    {aiScan.code}
+                  </span>
+                  <button type="button" className="active:opacity-60" onClick={() => setAiScan(null)}>
+                    <X size={14} style={{ color: 'var(--tg-theme-hint-color)' }} />
+                  </button>
+                </div>
+                <button className="btn-primary flex items-center justify-center gap-2"
+                  onClick={handleQuickAdd}
+                  disabled={loading || aiPreviewLoading || !aiText.trim()}>
+                  {(loading || aiPreviewLoading)
+                    ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    : <Sparkles size={16} />}
+                  {aiPreviewLoading ? 'ИИ заполняет карточку...' : loading ? 'Создаю...' : 'Создать карточку товара'}
                 </button>
-              )}
-            </div>
+              </>
+            ) : null /* status==='found' is handled by the modal above */}
 
-            {/* Add button — active when text is entered */}
-            <button className="btn-primary flex items-center justify-center gap-2"
-              onClick={handleQuickAdd}
-              disabled={loading || aiPreviewLoading || !aiText.trim()}>
-              {(loading || aiPreviewLoading)
-                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                : <Sparkles size={16} />}
-              {aiPreviewLoading ? 'ИИ распознаёт...' : loading ? 'Сохраняю...' : 'Найти и добавить товар'}
-            </button>
             <p className="text-center text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              QR / штрих-код — необязательно, но улучшает точность
+              {aiScan?.status === 'new'
+                ? 'ИИ возьмёт ваше описание и заполнит все поля'
+                : 'Штрихкод определяет товар — опишите его выше и сканируйте'}
             </p>
           </div>
-
         </div>
       )}
 
