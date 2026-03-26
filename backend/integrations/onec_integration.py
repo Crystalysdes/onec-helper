@@ -25,10 +25,10 @@ class OneCClient:
         return {"Authorization": f"Basic {encoded}"}
 
     async def _request(
-        self, method: str, path: str, **kwargs
+        self, method: str, path: str, extra_headers: dict = None, **kwargs
     ) -> Tuple[bool, Optional[dict]]:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        headers = {**self._headers, **self._get_auth_header()}
+        headers = {**self._headers, **self._get_auth_header(), **(extra_headers or {})}
         try:
             async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
                 response = await client.request(
@@ -915,7 +915,18 @@ class OneCClient:
                     ir_ok = True
                     # Don't return yet — also try document posting for full 1C AR update
                 else:
-                    logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
+                    # Retry with DataLoadMode (bypasses ОбменДанными checks)
+                    ok_put2, resp_put2 = await self._request(
+                        "PUT",
+                        f"odata/standard.odata/InformationRegister_ОстаткиТоваров({','.join(p.strip() for p in key_parts)})",
+                        extra_headers={"1C_OData-DataLoadMode": "true"},
+                        json={k: v for k, v in _build_ir_payload(ir_rec).items()}
+                    )
+                    if ok_put2:
+                        logger.info(f"1C stock set via PUT+DataLoad InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
+                        ir_ok = True
+                    else:
+                        logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put2)[:200]}")
 
         # No existing record OR PUT failed → try POST (create new record)
         ir_template = ir_rec or schema
@@ -925,6 +936,7 @@ class OneCClient:
             try:
                 ok_post, resp_post = await self._request(
                     "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
+                    extra_headers={"1C_OData-DataLoadMode": "true"},
                     json=ir_payload
                 )
                 logger.info(f"1C InformationRegister_ОстаткиТоваров POST result: ok={ok_post} resp={str(resp_post)[:150]}")
@@ -1007,12 +1019,15 @@ class OneCClient:
             ("AccumulationRegister_ТоварыОрганизаций",{"Period": period, "RecordType": "Receipt", **base_std}),
         ]
         for acc_reg, rec_payload in register_candidates:
+
             # Skip registers not published in this 1С instance
             if pub_regs and acc_reg not in pub_regs:
                 logger.debug(f"1C skip unpublished {acc_reg}")
                 continue
             ok, resp = await self._request(
-                "POST", f"odata/standard.odata/{acc_reg}", json=rec_payload
+                "POST", f"odata/standard.odata/{acc_reg}",
+                extra_headers={"1C_OData-DataLoadMode": "true"},
+                json=rec_payload
             )
             if ok:
                 logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
