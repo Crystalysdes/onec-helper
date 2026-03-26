@@ -882,9 +882,10 @@ class OneCClient:
 
         doc_variants = [
             # (doc_type, tab_section)
-            ("Document_ОприходованиеЗапасов",   "Запасы"),  # УНФ / Розница 3.0
-            ("Document_ВводОстатков",            "Запасы"),  # УНФ opening balances — uses счет 00 automatically
+            # ВводОстатков first — uses счет 00 automatically, no debit account required
+            ("Document_ВводОстатков",            "Запасы"),  # УНФ opening balances
             ("Document_ВводОстатков",            "Товары"),  # alt tab name
+            ("Document_ОприходованиеЗапасов",   "Запасы"),  # УНФ / Розница 3.0
             ("Document_ОприходованиеТоваров",    "Товары"),  # УТ/КА
             ("Document_ПоступлениеТоваровУслуг", "Товары"),  # КА fallback
         ]
@@ -949,8 +950,6 @@ class OneCClient:
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
                 logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — post manually")
-            if doc_created:
-                break  # doc was created (even if unposted) — don’t try other doc types
 
         logger.warning(f"1C set_stock: all attempts failed for {onec_id} qty={quantity}")
         return False
