@@ -746,46 +746,60 @@ class OneCClient:
                     r[f] = credit_key or _zero
             return r
 
+        # Flags that tell 1C to skip bookkeeping journal (only stock movement matters)
+        NO_ACCOUNTING = {
+            "ФормироватьПроводки": False,
+            "ОтражатьВБухгалтерскомУчете": False,
+            "ОтражатьВНалоговомУчете": False,
+        }
+
         doc_variants = [
             # (doc_type, tab_section, need_account)
-            ("Document_ОприходованиеЗапасов",   "Запасы", True),   # Розница 3.0
-            ("Document_ОприходованиеТоваров",    "Товары", False),  # УТ/КА/УНФ
+            ("Document_ОприходованиеЗапасов",   "Запасы", True),   # УНФ / Розница 3.0
+            ("Document_ОприходованиеТоваров",    "Товары", False),  # УТ/КА
             ("Document_ПоступлениеТоваровУслуг", "Товары", False),  # КА fallback
         ]
         for doc_type, tab_name, need_acc in doc_variants:
-            doc: dict = {
-                "Date": period,
-                "Комментарий": "Авто из 1С Хелпер",
-                tab_name: [_make_row(need_acc)],
-            }
-            if org_key:
-                doc["Организация_Key"] = org_key
-            if wh_key:
-                doc["Склад_Key"] = wh_key
-            if need_acc and debit_key:
-                # Also set at header level in case 1C uses header-level accounts
-                doc["СчетДт_Key"] = debit_key
-                doc["СчетКт_Key"] = credit_key or _zero
-            ok, resp = await self._request(
-                "POST", f"odata/standard.odata/{doc_type}", json=doc
-            )
-            if ok and isinstance(resp, dict) and resp.get("Ref_Key"):
+
+            def _build_doc(no_accounting: bool) -> dict:
+                d: dict = {
+                    "Date": period,
+                    "Комментарий": "Авто из 1С Хелпер",
+                    tab_name: [_make_row(need_acc and not no_accounting)],
+                }
+                if org_key:
+                    d["Организация_Key"] = org_key
+                if wh_key:
+                    d["Склад_Key"] = wh_key
+                if need_acc and debit_key and not no_accounting:
+                    d["СчетДт_Key"] = debit_key
+                    d["СчетКт_Key"] = credit_key or _zero
+                if no_accounting:
+                    d.update(NO_ACCOUNTING)
+                return d
+
+            for attempt_no_accounting in (False, True):
+                doc = _build_doc(attempt_no_accounting)
+                ok, resp = await self._request(
+                    "POST", f"odata/standard.odata/{doc_type}", json=doc
+                )
+                if not (ok and isinstance(resp, dict) and resp.get("Ref_Key")):
+                    if not attempt_no_accounting:
+                        logger.warning(f"1C stock create failed ({doc_type}): {resp}")
+                    break  # document type not available — skip both attempts
+
                 ref_key = str(resp["Ref_Key"]).strip("{}")
                 ok2, resp2 = await self._request(
                     "POST",
                     f"odata/standard.odata/{doc_type}(guid'{ref_key}')/Post"
                 )
                 if ok2:
-                    logger.info(f"1C stock posted ({doc_type}): {onec_id} qty={quantity}")
+                    suffix = " (без проводок)" if attempt_no_accounting else ""
+                    logger.info(f"1C stock posted ({doc_type}){suffix}: {onec_id} qty={quantity}")
                     return True
-                logger.warning(f"1C stock Post failed ({doc_type}): {resp2}")
-                # Document created but posting failed — delete it to keep journal clean
-                await self._request(
-                    "DELETE",
-                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
-                )
-            else:
-                logger.warning(f"1C stock create failed ({doc_type}): {resp}")
+                logger.warning(f"1C stock Post failed ({doc_type}, no_acc={attempt_no_accounting}): {resp2}")
+                # Delete the unposted document to keep journal clean
+                await self._request("DELETE", f"odata/standard.odata/{doc_type}(guid'{ref_key}')")
 
         logger.warning(f"1C set_stock: all attempts failed for {onec_id} qty={quantity}")
         return False
