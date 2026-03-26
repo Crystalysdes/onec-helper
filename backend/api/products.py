@@ -148,11 +148,13 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
 
 async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, product_onec_id: str | None, product_article: str | None):
     """Push a product to 1C in the background. Uses its own DB session."""
+    import asyncio as _asyncio
     from backend.integrations.onec_integration import OneCClient
     from backend.core.security import decrypt_password
     from backend.database.connection import AsyncSessionLocal
     from loguru import logger
 
+    await _asyncio.sleep(1)  # ensure main request session has committed
     async with AsyncSessionLocal() as db:
         try:
             result = await db.execute(
@@ -190,6 +192,11 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
                     found_id = await client.find_product_by_name(product.name)
                     if found_id:
                         product.onec_id = found_id
+                if success and product.onec_id:
+                    # Save onec_id to DB and pause so 1C can fully persist the new entity
+                    product.synced_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _asyncio.sleep(1)
 
             if success and product.onec_id:
                 clean_id = product.onec_id.strip("{}")
