@@ -845,11 +845,11 @@ class OneCClient:
         ir_rec = ((ir_existing or {}).get("value") or [{}])[0] if (ok_ir_get and ir_existing) else {}
 
         def _build_ir_payload(template: dict) -> dict:
-            """Build IR payload using template fields (no nav-links, no _Type), override qty."""
+            """Build IR payload: keep _Type fields (needed for composite refs), drop nav-links."""
             payload = {}
             for k, v in template.items():
-                # Skip: value fields, odata meta, navigation links, type hints
-                if "@" in k or k.endswith("_Type"):
+                # Skip navigation link fields (contain @) and pure metadata
+                if "@" in k:
                     continue
                 if k in ("Количество", "Резерв", "Стоимость",
                          "odata.metadata", "odata.type", "odata.etag"):
