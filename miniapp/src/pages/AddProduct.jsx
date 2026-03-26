@@ -1102,11 +1102,11 @@ export default function AddProduct() {
                   : '📸 Сканировать QR / штрих-код'}
               </span>
               {aiScan?.code && (
-                <button type="button"
-                  className="ml-1 active:opacity-60"
+                <span
+                  className="ml-1 active:opacity-60 cursor-pointer"
                   onClick={(e) => { e.stopPropagation(); setAiScan(null) }}>
                   <X size={13} />
-                </button>
+                </span>
               )}
             </button>
 
