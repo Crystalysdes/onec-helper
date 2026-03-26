@@ -611,6 +611,74 @@ class OneCClient:
         """Account 91.01/91/94 — credit side for surplus stock posting."""
         return await self._get_account_key(["91.01", "91", "94"], "_income_account_cache")
 
+    async def _get_stock_accounts(self, onec_id: str) -> tuple[str | None, str | None]:
+        """Return (debit_key, credit_key) for stock receipt posting.
+
+        Strategy:
+        1. InformationRegister_СчетаУчетаНоменклатуры — per-product account settings
+           (look for this specific product, then any product as a template)
+        2. ChartOfAccounts — broad fetch, filter by code prefix in memory
+        Returns (None, None) if nothing found.
+        """
+        _zero = "00000000-0000-0000-0000-000000000000"
+
+        def _pick(item: dict, fields: list[str]) -> str | None:
+            for f in fields:
+                v = str(item.get(f) or "").strip("{}")
+                if v and v != _zero:
+                    return v
+            return None
+
+        DEBIT_FIELDS  = ["СчетДт_Key", "СчетУчетаДебет_Key", "СчетУчетаТовары_Key",
+                         "СчетУчетаДоходов_Key", "СчетУчета_Key"]
+        CREDIT_FIELDS = ["СчетКт_Key", "СчетУчетаКредит_Key", "СчетУчетаРасходов_Key"]
+
+        # ── Source 1: InformationRegister_СчетаУчетаНоменклатуры ──────────────
+        for reg in ("InformationRegister_СчетаУчетаНоменклатуры",
+                    "InformationRegister_СчетаУчетаНоменклатурыПоОрганизациям"):
+            for url_suffix in (
+                f"?$format=json&$top=1&$filter=Номенклатура_Key eq guid'{onec_id}'",
+                "?$format=json&$top=1",   # any product → use as template
+            ):
+                ok, data = await self._request("GET", f"odata/standard.odata/{reg}{url_suffix}")
+                if ok and isinstance(data, dict) and data.get("value"):
+                    item = data["value"][0]
+                    debit  = _pick(item, DEBIT_FIELDS)
+                    credit = _pick(item, CREDIT_FIELDS)
+                    if debit:
+                        logger.info(f"1C stock accounts from {reg}: debit={debit} credit={credit}")
+                        return debit, credit
+
+        # ── Source 2: Chart of accounts — broad fetch, match by code prefix ──
+        for chart in ("ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"):
+            ok, data = await self._request(
+                "GET",
+                f"odata/standard.odata/{chart}?$format=json&$top=200"
+                f"&$select=Ref_Key,Code&$filter=IsFolder eq false"
+            )
+            if not ok or not isinstance(data, dict):
+                continue
+            all_acc = data.get("value", [])
+            if not all_acc:
+                continue
+
+            def _find(prefixes: list[str]) -> str | None:
+                for pfx in prefixes:
+                    m = next((a for a in all_acc
+                              if str(a.get("Code", "")).startswith(pfx)), None)
+                    if m:
+                        return str(m["Ref_Key"]).strip("{}")
+                return None
+
+            debit  = _find(["41.02", "41.01", "41.2", "41"])
+            credit = _find(["91.01", "91.1", "91", "94"])
+            if debit:
+                logger.info(f"1C stock accounts from {chart}: debit={debit} credit={credit}")
+                return debit, credit
+
+        logger.warning("1C _get_stock_accounts: no account found — Post will likely fail")
+        return None, None
+
     async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0) -> bool:
         """Post initial stock quantity to 1C.
 
@@ -658,8 +726,7 @@ class OneCClient:
             logger.warning(f"1C stock direct {acc_reg} failed")
 
         # ── 2-4. Document-based approaches ──
-        debit_key = await self._get_goods_account_key()   # 41.02 / 41.01 / 41
-        credit_key = await self._get_income_account_key() # 91.01 / 91 / 94
+        debit_key, credit_key = await self._get_stock_accounts(onec_id)
 
         def _make_row(with_account: bool) -> dict:
             r: dict = {
