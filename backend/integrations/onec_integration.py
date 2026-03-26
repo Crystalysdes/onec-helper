@@ -589,6 +589,11 @@ class OneCClient:
         if ok:
             logger.info(f"1C barcode set (POST InformationRegister): {barcode} → {onec_id}")
             return True
+        # 400 code "15" = record already exists in register (barcode may belong to another product)
+        # PATCH to Catalog_Номенклатура.Штрихкод already succeeded above, so barcode is set
+        if isinstance(resp, dict) and resp.get("status") == 400:
+            logger.info(f"1C barcode register already has {barcode} (another product) — Catalog PATCH was OK")
+            return True
         logger.warning(f"1C barcode POST InformationRegister failed: {resp}")
         put_key = (f"Номенклатура_Key=guid'{onec_id}',"
                    f"Штрихкод='{barcode}',"

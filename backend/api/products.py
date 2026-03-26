@@ -195,7 +195,7 @@ async def _push_to_onec_bg(store_id: UUID, product_id: UUID, product_name: str, 
                 if product.price is not None and product.price > 0:
                     await client.set_price(clean_id, float(product.price), price_type_name="розн")
                 if product.purchase_price is not None and product.purchase_price > 0:
-                    await client.set_price(clean_id, float(product.purchase_price), price_type_name="учет")
+                    await client.set_price(clean_id, float(product.purchase_price), price_type_name="закуп")
                 product.synced_at = datetime.now(timezone.utc)
                 await db.commit()
                 logger.info(f"Product '{product.name}' synced to 1C (onec_id={clean_id})")
