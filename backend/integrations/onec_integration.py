@@ -583,11 +583,36 @@ class OneCClient:
                 return self._warehouse_key_cache
         return None
 
-    async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0) -> bool:
-        """Create a stock posting document in 1C to set the initial quantity.
+    async def _get_goods_account_key(self) -> str | None:
+        """Return GUID of the goods account (41.02 → 41.01 → 41) from chart of accounts.
+        Required by Document_ОприходованиеЗапасов in Розница 3.0 (СчетДебета_Key).
+        """
+        if hasattr(self, "_goods_account_cache") and self._goods_account_cache:
+            return self._goods_account_cache
+        for chart in ("ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"):
+            for code in ("41.02", "41.01", "41"):
+                ok, data = await self._request(
+                    "GET",
+                    f"odata/standard.odata/{chart}"
+                    f"?$format=json&$filter=Code eq '{code}'&$top=1&$select=Ref_Key,Code"
+                )
+                if ok and isinstance(data, dict) and data.get("value"):
+                    key = str(data["value"][0].get("Ref_Key", "")).strip("{}")
+                    if key and key != "00000000-0000-0000-0000-000000000000":
+                        self._goods_account_cache = key
+                        logger.info(f"1C goods account ({chart} {code}): {key}")
+                        return key
+        return None
 
-        Tries Document_ОприходованиеТоваров first (УТ/КА/УНФ/Розница),
-        then Document_ПоступлениеТоваровУслуг as fallback.
+    async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0) -> bool:
+        """Post initial stock quantity to 1C.
+
+        Strategy (first success wins):
+        1. Direct write to AccumulationRegister (no document, no account needed)
+        2. Document_ОприходованиеЗапасов + Запасы tabular (Розница 3.0)
+           with СчетДебета_Key fetched from chart of accounts (41.02/41.01/41)
+        3. Document_ОприходованиеТоваров + Товары tabular (УТ/КА/УНФ)
+        4. Document_ПоступлениеТоваровУслуг fallback
         """
         if not quantity or quantity <= 0:
             return False
@@ -599,25 +624,59 @@ class OneCClient:
         org_key = await self._get_org_key()
         wh_key = await self._get_warehouse_key()
         summa = round(float(quantity) * float(price or 0), 2)
-        row = {
-            "LineNumber": 1,
-            "Номенклатура_Key": onec_id,
-            "Количество": float(quantity),
-            "Цена": float(price or 0),
-            "Сумма": summa,
-            "Характеристика_Key": _zero,
-        }
 
-        doc_types = [
-            ("Document_ОприходованиеТоваров", "Товары"),
-            ("Document_ПоступлениеТоваровУслуг", "Товары"),
-            ("Document_ПересчетТоваров", "Товары"),
+        # ── 1. Direct AccumulationRegister write (no document, no account required) ──
+        for acc_reg in (
+            "AccumulationRegister_ТоварыНаСкладах",
+            "AccumulationRegister_ТоварыОрганизаций",
+        ):
+            reg_payload: dict = {
+                "Period": period,
+                "RecordType": "Receipt",
+                "Номенклатура_Key": onec_id,
+                "Количество": float(quantity),
+                "Характеристика_Key": _zero,
+            }
+            if wh_key:
+                reg_payload["Склад_Key"] = wh_key
+            if org_key:
+                reg_payload["Организация_Key"] = org_key
+            ok, resp = await self._request(
+                "POST", f"odata/standard.odata/{acc_reg}", json=reg_payload
+            )
+            if ok:
+                logger.info(f"1C stock set (direct {acc_reg}): {onec_id} qty={quantity}")
+                return True
+            logger.warning(f"1C stock direct {acc_reg} failed: {resp}")
+
+        # ── 2-4. Document-based approaches ──
+        account_key = await self._get_goods_account_key()
+
+        def _make_row(with_account: bool) -> dict:
+            r: dict = {
+                "LineNumber": 1,
+                "Номенклатура_Key": onec_id,
+                "Количество": float(quantity),
+                "Цена": float(price or 0),
+                "Сумма": summa,
+                "Характеристика_Key": _zero,
+            }
+            if with_account and account_key:
+                r["СчетДебета_Key"] = account_key
+                r["СчетУчета_Key"] = account_key
+            return r
+
+        doc_variants = [
+            # (doc_type, tab_section, need_account)
+            ("Document_ОприходованиеЗапасов",    "Запасы",  True),   # Розница 3.0
+            ("Document_ОприходованиеТоваров",     "Товары",  False),  # УТ/КА/УНФ
+            ("Document_ПоступлениеТоваровУслуг",  "Товары",  False),  # КА fallback
         ]
-        for doc_type, tab_name in doc_types:
+        for doc_type, tab_name, need_acc in doc_variants:
             doc: dict = {
                 "Date": period,
                 "Комментарий": "Авто из 1С Хелпер",
-                tab_name: [row],
+                tab_name: [_make_row(need_acc)],
             }
             if org_key:
                 doc["Организация_Key"] = org_key
