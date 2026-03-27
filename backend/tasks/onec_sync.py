@@ -4,6 +4,7 @@ Periodic tasks:
   2. stock_alert_loop — every 6 h: notify users about low-stock items via Telegram
 """
 import asyncio
+import re
 from uuid import UUID
 
 import httpx
@@ -14,6 +15,20 @@ from backend.config import settings
 from backend.database.connection import AsyncSessionLocal
 from backend.database.models import Integration, IntegrationStatus, ProductCache, Store, User
 from backend.core.security import decrypt_password
+
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+
+
+def _display_name(p: ProductCache) -> str:
+    """Return human-readable product name; fall back if name is empty or a raw UUID."""
+    name = (p.name or "").strip()
+    if name and not _UUID_RE.match(name):
+        return name
+    if p.article:
+        return f"Арт. {p.article}"
+    if p.onec_id:
+        return f"Товар {str(p.onec_id)[:8]}..."
+    return "Неизвестный товар"
 
 SYNC_INTERVAL_SECONDS = 300        # full product+price+barcode sync: every 5 min
 FAST_STOCK_INTERVAL_SECONDS = 60   # stock-only sync: every 60 s
@@ -88,7 +103,7 @@ async def _check_and_notify():
                     continue
 
                 lines = "\n".join(
-                    f"• <b>{p.name}</b>: {p.quantity or 0} {p.unit or 'шт'}"
+                    f"• <b>{_display_name(p)}</b>: {p.quantity or 0} {p.unit or 'шт'}"
                     for p in low_rows[:20]
                 )
                 text = (
