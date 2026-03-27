@@ -1140,13 +1140,19 @@ class OneCClient:
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
                 logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — trying RecordSet PUT")
 
-                # ── Per 1C OData spec: PUT RecordSet to register using draft as Recorder ──
-                # URL: AccumulationRegister_X(guid'recorder-key')  Body: Recorder_Key + RecordSet
+                # ── Per 1C OData spec: PATCH/PUT RecordSet using draft as Recorder ──
                 ar_written = False
                 for rs_reg in ("AccumulationRegister_ЗапасыНаСкладах",
                                "AccumulationRegister_Запасы"):
                     if pub_regs and rs_reg not in pub_regs:
                         continue
+                    # Diagnostic: GET the RecordSet to see actual Recorder field format
+                    ok_diag, diag = await self._request(
+                        "GET",
+                        f"odata/standard.odata/{rs_reg}(guid'{ref_key}')?$format=json"
+                    )
+                    logger.info(f"1C {rs_reg}(guid'{ref_key[:8]}') GET: ok={ok_diag} fields={list(diag.keys()) if isinstance(diag, dict) else str(diag)[:200]}")
+
                     rs_row: dict = {
                         "ВидДвижения": "Приход",
                         "Период": period,
@@ -1159,24 +1165,39 @@ class OneCClient:
                         rs_row["СтруктурнаяЕдиница_Key"] = wh_key
                     if org_key:
                         rs_row["Организация_Key"] = org_key
-                    # 'Recorder' is a composite type: use plain 'Recorder' (no _Key suffix)
-                    # plus 'Recorder_Type' — as seen in GET field names
-                    rs_body: dict = {
-                        "odata.type": f"StandardODATA.{rs_reg}",
-                        "Recorder": ref_key,
-                        "Recorder_Type": f"StandardODATA.{doc_type}",
-                        f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
-                        "RecordSet": [rs_row],
-                    }
-                    # Try PATCH first (per 1C docs), then PUT
+
                     ok_r, resp_r = False, {}
-                    for rs_method in ("PATCH", "PUT"):
-                        ok_r, resp_r = await self._request(
-                            rs_method,
-                            f"odata/standard.odata/{rs_reg}(guid'{ref_key}')",
-                            json=rs_body
-                        )
-                        logger.info(f"1C {rs_reg} RecordSet {rs_method}: ok={ok_r} resp={str(resp_r)[:300]}")
+                    # Attempt variants: no Recorder, @odata.bind, Recorder_Key+Type, Recorder+Type
+                    for rs_variant in (
+                        # 1. Minimal — Recorder identified by URL only
+                        {
+                            f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
+                            "RecordSet": [rs_row],
+                        },
+                        # 2. @odata.bind style
+                        {
+                            f"Recorder@odata.bind": f"{doc_type}(guid'{ref_key}')",
+                            f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
+                            "RecordSet": [rs_row],
+                        },
+                        # 3. _Key + _Type (official doc format)
+                        {
+                            "odata.type": f"StandardODATA.{rs_reg}_RowType",
+                            "Recorder_Key": ref_key,
+                            "Recorder_Type": f"StandardODATA.{doc_type}",
+                            f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
+                            "RecordSet": [rs_row],
+                        },
+                    ):
+                        for rs_method in ("PATCH", "PUT"):
+                            ok_r, resp_r = await self._request(
+                                rs_method,
+                                f"odata/standard.odata/{rs_reg}(guid'{ref_key}')",
+                                json=rs_variant
+                            )
+                            logger.info(f"1C {rs_reg} {rs_method} keys={list(rs_variant.keys())}: ok={ok_r} resp={str(resp_r)[:200]}")
+                            if ok_r:
+                                break
                         if ok_r:
                             break
                     if ok_r:
