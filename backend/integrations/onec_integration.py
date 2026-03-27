@@ -1138,7 +1138,47 @@ class OneCClient:
                     logger.info(f"1C stock posted (verified after 500) ({doc_type}): {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
-                logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — post manually")
+                logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — trying RecordSet PUT")
+
+                # ── Per 1C OData spec: PUT RecordSet to register using draft as Recorder ──
+                # URL: AccumulationRegister_X(guid'recorder-key')  Body: Recorder_Key + RecordSet
+                ar_written = False
+                for rs_reg in ("AccumulationRegister_ЗапасыНаСкладах",
+                               "AccumulationRegister_Запасы"):
+                    if pub_regs and rs_reg not in pub_regs:
+                        continue
+                    rs_row: dict = {
+                        "ВидДвижения": "Приход",
+                        "Период": period,
+                        "Recorder_Key": ref_key,
+                        "Recorder_Type": f"StandardODATA.{doc_type}",
+                        "Номенклатура_Key": onec_id,
+                        "Характеристика_Key": _zero,
+                        "Количество": float(quantity),
+                        "Стоимость": summa,
+                    }
+                    if wh_key:
+                        rs_row["СтруктурнаяЕдиница_Key"] = wh_key
+                    if org_key:
+                        rs_row["Организация_Key"] = org_key
+                    rs_body: dict = {
+                        "odata.type": f"StandardODATA.{rs_reg}",
+                        "Recorder_Key": ref_key,
+                        "Recorder_Type": f"StandardODATA.{doc_type}",
+                        f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
+                        "RecordSet": [rs_row],
+                    }
+                    ok_r, resp_r = await self._request(
+                        "PUT",
+                        f"odata/standard.odata/{rs_reg}(guid'{ref_key}')",
+                        json=rs_body
+                    )
+                    logger.info(f"1C {rs_reg} RecordSet PUT: ok={ok_r} resp={str(resp_r)[:300]}")
+                    if ok_r:
+                        logger.info(f"1C stock set via {rs_reg} RecordSet (doc={doc_type}): {onec_id} qty={quantity}")
+                        ar_written = True
+                if ar_written:
+                    return True
                 break  # one draft per doc_type is enough
             if doc_created:
                 break  # stop trying other doc types after first draft
