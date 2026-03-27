@@ -1150,8 +1150,6 @@ class OneCClient:
                     rs_row: dict = {
                         "ВидДвижения": "Приход",
                         "Период": period,
-                        "Recorder_Key": ref_key,
-                        "Recorder_Type": f"StandardODATA.{doc_type}",
                         "Номенклатура_Key": onec_id,
                         "Характеристика_Key": _zero,
                         "Количество": float(quantity),
@@ -1161,19 +1159,26 @@ class OneCClient:
                         rs_row["СтруктурнаяЕдиница_Key"] = wh_key
                     if org_key:
                         rs_row["Организация_Key"] = org_key
+                    # 'Recorder' is a composite type: use plain 'Recorder' (no _Key suffix)
+                    # plus 'Recorder_Type' — as seen in GET field names
                     rs_body: dict = {
                         "odata.type": f"StandardODATA.{rs_reg}",
-                        "Recorder_Key": ref_key,
+                        "Recorder": ref_key,
                         "Recorder_Type": f"StandardODATA.{doc_type}",
                         f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
                         "RecordSet": [rs_row],
                     }
-                    ok_r, resp_r = await self._request(
-                        "PUT",
-                        f"odata/standard.odata/{rs_reg}(guid'{ref_key}')",
-                        json=rs_body
-                    )
-                    logger.info(f"1C {rs_reg} RecordSet PUT: ok={ok_r} resp={str(resp_r)[:300]}")
+                    # Try PATCH first (per 1C docs), then PUT
+                    ok_r, resp_r = False, {}
+                    for rs_method in ("PATCH", "PUT"):
+                        ok_r, resp_r = await self._request(
+                            rs_method,
+                            f"odata/standard.odata/{rs_reg}(guid'{ref_key}')",
+                            json=rs_body
+                        )
+                        logger.info(f"1C {rs_reg} RecordSet {rs_method}: ok={ok_r} resp={str(resp_r)[:300]}")
+                        if ok_r:
+                            break
                     if ok_r:
                         logger.info(f"1C stock set via {rs_reg} RecordSet (doc={doc_type}): {onec_id} qty={quantity}")
                         ar_written = True
