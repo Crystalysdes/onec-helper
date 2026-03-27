@@ -1084,6 +1084,18 @@ class OneCClient:
         # ── 2-4. Document-based approaches ──
         debit_key, credit_key = await self._get_stock_accounts(onec_id)
 
+        # If the product has no СчетУчетаЗапасов_Key set, patch it so the posting handler
+        # can read the account from the product card (that's where 1C reads it from).
+        if debit_key and not getattr(self, f"_nom_patched_{onec_id}", False):
+            ok_p, resp_p = await self._request(
+                "PATCH",
+                f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')",
+                json={"СчетУчетаЗапасов_Key": debit_key}
+            )
+            logger.info(f"1C PATCH Номенклатура СчетУчетаЗапасов_Key={debit_key}: ok={ok_p} resp={str(resp_p)[:120]}")
+            if ok_p:
+                setattr(self, f"_nom_patched_{onec_id}", True)
+
         def _make_row(with_account: bool) -> dict:
             r: dict = {
                 "LineNumber": 1,
