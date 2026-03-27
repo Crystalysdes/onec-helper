@@ -630,6 +630,23 @@ class OneCClient:
                          "СчетУчетаДоходов_Key", "СчетУчета_Key"]
         CREDIT_FIELDS = ["СчетКт_Key", "СчетУчетаКредит_Key", "СчетУчетаРасходов_Key"]
 
+        # ── Source 0.0: Read accounting accounts directly from Catalog_Номенклатура ──
+        # The product catalog item has СчетУчетаЗапасов_Key — exactly the debit account needed
+        ok_n, nom = await self._request(
+            "GET",
+            f"odata/standard.odata/Catalog_Номенклатура(guid'{onec_id}')"
+            f"?$format=json&$select=СчетУчетаЗапасов_Key,СчетУчетаДоходов_Key,"
+            f"СчетУчетаНДСПоПриобретеннымЦенностям_Key,СчетУчетаЗатрат_Key"
+        )
+        if ok_n and isinstance(nom, dict):
+            d = _valid(nom.get("СчетУчетаЗапасов_Key"))
+            c = (_valid(nom.get("СчетУчетаДоходов_Key"))
+                 or _valid(nom.get("СчетУчетаНДСПоПриобретеннымЦенностям_Key"))
+                 or _valid(nom.get("СчетУчетаЗатрат_Key")))
+            logger.info(f"1C Catalog_Номенклатура accounts: debit={d} credit={c}")
+            if d:
+                return d, c
+
         # ── Source 0: Discover published ChartOfAccounts from root OData endpoint ──
         if not getattr(self, "_discovered_charts", None):
             ok0, root = await self._request("GET", "odata/standard.odata/?$format=json")
@@ -1129,82 +1146,18 @@ class OneCClient:
                 # Verify by reading back the document state.
                 ok_v, doc_v = await self._request(
                     "GET",
-                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')"
-                    f"?$format=json&$select=Проведен"
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')?$format=json"
                 )
                 проведен = doc_v.get("Проведен") if isinstance(doc_v, dict) else None
-                logger.info(f"1C verify GET: ok={ok_v} Проведен={проведен} raw={str(doc_v)[:120]}")
+                logger.info(f"1C verify GET: ok={ok_v} Проведен={проведен} keys={list(doc_v.keys())[:8] if isinstance(doc_v, dict) else '?'}")
                 if ok_v and проведен:
                     logger.info(f"1C stock posted (verified after 500) ({doc_type}): {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
                 logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — trying RecordSet PUT")
 
-                # ── Per 1C OData spec: PATCH/PUT RecordSet using draft as Recorder ──
-                ar_written = False
-                for rs_reg in ("AccumulationRegister_ЗапасыНаСкладах",
-                               "AccumulationRegister_Запасы"):
-                    if pub_regs and rs_reg not in pub_regs:
-                        continue
-                    # Diagnostic: GET the RecordSet to see actual Recorder field format
-                    ok_diag, diag = await self._request(
-                        "GET",
-                        f"odata/standard.odata/{rs_reg}(guid'{ref_key}')?$format=json"
-                    )
-                    logger.info(f"1C {rs_reg}(guid'{ref_key[:8]}') GET: ok={ok_diag} fields={list(diag.keys()) if isinstance(diag, dict) else str(diag)[:200]}")
-
-                    rs_row: dict = {
-                        "ВидДвижения": "Приход",
-                        "Период": period,
-                        "Номенклатура_Key": onec_id,
-                        "Характеристика_Key": _zero,
-                        "Количество": float(quantity),
-                        "Стоимость": summa,
-                    }
-                    if wh_key:
-                        rs_row["СтруктурнаяЕдиница_Key"] = wh_key
-                    if org_key:
-                        rs_row["Организация_Key"] = org_key
-
-                    ok_r, resp_r = False, {}
-                    # Attempt variants: no Recorder, @odata.bind, Recorder_Key+Type, Recorder+Type
-                    for rs_variant in (
-                        # 1. Minimal — Recorder identified by URL only
-                        {
-                            f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
-                            "RecordSet": [rs_row],
-                        },
-                        # 2. @odata.bind style
-                        {
-                            f"Recorder@odata.bind": f"{doc_type}(guid'{ref_key}')",
-                            f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
-                            "RecordSet": [rs_row],
-                        },
-                        # 3. _Key + _Type (official doc format)
-                        {
-                            "odata.type": f"StandardODATA.{rs_reg}_RowType",
-                            "Recorder_Key": ref_key,
-                            "Recorder_Type": f"StandardODATA.{doc_type}",
-                            f"RecordSet@odata.type": f"Collection(StandardODATA.{rs_reg}_RowType)",
-                            "RecordSet": [rs_row],
-                        },
-                    ):
-                        for rs_method in ("PATCH", "PUT"):
-                            ok_r, resp_r = await self._request(
-                                rs_method,
-                                f"odata/standard.odata/{rs_reg}(guid'{ref_key}')",
-                                json=rs_variant
-                            )
-                            logger.info(f"1C {rs_reg} {rs_method} keys={list(rs_variant.keys())}: ok={ok_r} resp={str(resp_r)[:200]}")
-                            if ok_r:
-                                break
-                        if ok_r:
-                            break
-                    if ok_r:
-                        logger.info(f"1C stock set via {rs_reg} RecordSet (doc={doc_type}): {onec_id} qty={quantity}")
-                        ar_written = True
-                if ar_written:
-                    return True
+                # Direct AR RecordSet write requires composite key URL format
+                # (not supported — Recorder is composite type, draft document is enough)
                 break  # one draft per doc_type is enough
             if doc_created:
                 break  # stop trying other doc types after first draft
