@@ -2,13 +2,24 @@ import axios from 'axios'
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
+// In-memory token — survives localStorage wipes (e.g. from 401 interceptor)
+let _memToken = localStorage.getItem('access_token') || null
+
+export function updateApiToken(token) {
+  _memToken = token || null
+  try {
+    if (token) localStorage.setItem('access_token', token)
+    else localStorage.removeItem('access_token')
+  } catch {}
+}
+
 const api = axios.create({
   baseURL: BASE_URL,
   timeout: 65000,
 })
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
+  const token = _memToken || localStorage.getItem('access_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -19,7 +30,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('access_token')
+      updateApiToken(null)
     }
     return Promise.reject(error)
   }

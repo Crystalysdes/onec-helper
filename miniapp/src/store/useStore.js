@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { updateApiToken } from '../services/api'
 
 const useStore = create((set, get) => ({
   user: null,
@@ -9,7 +10,7 @@ const useStore = create((set, get) => ({
 
   setUser: (user) => set({ user }),
   setToken: (token) => {
-    localStorage.setItem('access_token', token)
+    updateApiToken(token)
     set({ token })
   },
   setCurrentStore: (store) => {
@@ -20,7 +21,7 @@ const useStore = create((set, get) => ({
   setLoading: (isLoading) => set({ isLoading }),
 
   logout: () => {
-    localStorage.removeItem('access_token')
+    updateApiToken(null)
     localStorage.removeItem('current_store_id')
     set({ user: null, token: null, currentStore: null, stores: [] })
   },
