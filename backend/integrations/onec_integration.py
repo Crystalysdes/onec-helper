@@ -638,14 +638,54 @@ class OneCClient:
             f"?$format=json&$select=СчетУчетаЗапасов_Key,СчетУчетаДоходов_Key,"
             f"СчетУчетаНДСПоПриобретеннымЦенностям_Key,СчетУчетаЗатрат_Key"
         )
+        debit_from_nom, credit_from_nom = None, None
         if ok_n and isinstance(nom, dict):
-            d = _valid(nom.get("СчетУчетаЗапасов_Key"))
-            c = (_valid(nom.get("СчетУчетаДоходов_Key"))
-                 or _valid(nom.get("СчетУчетаНДСПоПриобретеннымЦенностям_Key"))
-                 or _valid(nom.get("СчетУчетаЗатрат_Key")))
-            logger.info(f"1C Catalog_Номенклатура accounts: debit={d} credit={c}")
-            if d:
-                return d, c
+            debit_from_nom = _valid(nom.get("СчетУчетаЗапасов_Key"))
+            credit_from_nom = (_valid(nom.get("СчетУчетаДоходов_Key"))
+                               or _valid(nom.get("СчетУчетаНДСПоПриобретеннымЦенностям_Key"))
+                               or _valid(nom.get("СчетУчетаЗатрат_Key")))
+            logger.info(f"1C Catalog_Номенклатура accounts: debit={debit_from_nom} credit={credit_from_nom}")
+            if debit_from_nom:
+                return debit_from_nom, credit_from_nom
+
+        # ── Source 0.1: Find any catalog item with СчетУчетаЗапасов_Key set ──
+        _zero_filter = "00000000-0000-0000-0000-000000000000"
+        if not getattr(self, "_global_debit_cache", None):
+            # Try InformationRegister_СчетаУчетаНоменклатуры first
+            ok_ir, ir_data = await self._request(
+                "GET",
+                "odata/standard.odata/InformationRegister_СчетаУчетаНоменклатуры"
+                "?$format=json&$top=1"
+            )
+            if ok_ir and isinstance(ir_data, dict) and ir_data.get("value"):
+                row = ir_data["value"][0]
+                logger.info(f"1C СчетаУчетаНоменклатуры fields: {list(row.keys())}")
+                for fld in ("СчетУчетаЗапасов_Key", "СчетДт_Key", "СчетУчетаТовары_Key", "СчетУчета_Key"):
+                    v = _valid(row.get(fld))
+                    if v:
+                        self._global_debit_cache = v
+                        logger.info(f"1C global debit from СчетаУчетаНоменклатуры.{fld}: {v}")
+                        break
+
+            if not getattr(self, "_global_debit_cache", None):
+                # Fall back: find any Catalog_Номенклатура with non-zero СчетУчетаЗапасов_Key
+                ok_any, any_data = await self._request(
+                    "GET",
+                    f"odata/standard.odata/Catalog_Номенклатура"
+                    f"?$format=json&$top=5&$select=СчетУчетаЗапасов_Key,СчетУчетаДоходов_Key"
+                    f"&$filter=IsFolder eq false"
+                )
+                if ok_any and isinstance(any_data, dict):
+                    for item in any_data.get("value", []):
+                        v = _valid(item.get("СчетУчетаЗапасов_Key"))
+                        if v:
+                            self._global_debit_cache = v
+                            logger.info(f"1C global debit from catalog scan: {v}")
+                            break
+
+        global_debit = getattr(self, "_global_debit_cache", None)
+        if global_debit:
+            return global_debit, credit_from_nom
 
         # ── Source 0: Discover published ChartOfAccounts from root OData endpoint ──
         if not getattr(self, "_discovered_charts", None):
