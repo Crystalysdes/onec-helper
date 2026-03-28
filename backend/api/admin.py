@@ -136,6 +136,37 @@ async def toggle_user(
     return {"id": str(user.id), "is_active": user.is_active}
 
 
+@router.get("/app-logs")
+async def get_app_logs(
+    token: str = "",
+    grep: str = "",
+    lines: int = 200,
+):
+    """Read raw loguru log file. Protected by LOGS_TOKEN (no JWT needed).
+    Query params:
+      token — must match settings.LOGS_TOKEN
+      grep  — optional substring filter (case-insensitive)
+      lines — last N lines to return (default 200, max 2000)
+    """
+    from backend.config import settings
+    from fastapi.responses import PlainTextResponse
+    if not settings.LOGS_TOKEN or token != settings.LOGS_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    lines = min(max(1, lines), 2000)
+    log_path = "/app/logs/app.log"
+    if not os.path.exists(log_path):
+        return PlainTextResponse("Log file not found yet.")
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            all_lines = f.readlines()
+        if grep:
+            all_lines = [l for l in all_lines if grep.lower() in l.lower()]
+        tail = all_lines[-lines:]
+        return PlainTextResponse("".join(tail))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/logs")
 async def get_all_logs(
     level: str = None,

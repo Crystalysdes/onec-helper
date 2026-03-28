@@ -51,6 +51,7 @@ services:
     volumes:
       - ./backend:/app/backend
       - uploads_data:/app/uploads
+      - logs_data:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -101,6 +102,7 @@ volumes:
   postgres_data:
   redis_data:
   uploads_data:
+  logs_data:
 
 networks:
   default:

@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     # Environment
     ENVIRONMENT: str = "production"
     LOG_LEVEL: str = "INFO"
+    LOGS_TOKEN: str = ""  # Secret token for /admin/app-logs endpoint (set in .env)
 
     class Config:
         env_file = ".env"

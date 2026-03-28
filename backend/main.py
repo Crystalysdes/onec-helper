@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,19 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from backend.config import settings
+
+# ── Persistent log file ───────────────────────────────────────────────────────
+_LOG_DIR = "/app/logs"
+os.makedirs(_LOG_DIR, exist_ok=True)
+logger.add(
+    f"{_LOG_DIR}/app.log",
+    rotation="50 MB",
+    retention="14 days",
+    compression="gz",
+    level="DEBUG",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{function}:{line} - {message}",
+    enqueue=True,
+)
 from backend.database.connection import init_db
 from backend.database.backfill import backfill_global_products
 from backend.api import api_router
