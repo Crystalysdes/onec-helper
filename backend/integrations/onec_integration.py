@@ -675,7 +675,7 @@ class OneCClient:
                 ok_any, any_data = await self._request(
                     "GET",
                     f"odata/standard.odata/Catalog_Номенклатура"
-                    f"?$format=json&$top=5&$select=СчетУчетаЗапасов_Key,СчетУчетаДоходов_Key"
+                    f"?$format=json&$top=50&$select=СчетУчетаЗапасов_Key,СчетУчетаДоходов_Key"
                     f"&$filter=IsFolder eq false"
                 )
                 if ok_any and isinstance(any_data, dict):
@@ -937,6 +937,16 @@ class OneCClient:
                     logger.warning(f"1C stock account: using first available "
                                    f"code={a.get('Code')} desc={str(a.get('Description',''))[:30]} key={key}")
                     return key, None
+
+        # ── Ultimate fallback: use credit account from product as debit ──────────
+        # ChartOfAccounts not published → borrow any known account GUID so the
+        # posting handler has something to write to AccountingRegister.
+        if credit_from_nom:
+            logger.warning(
+                f"1C _get_stock_accounts: using credit account as debit fallback "
+                f"(ChartOfAccounts unpublished): {credit_from_nom}"
+            )
+            return credit_from_nom, credit_from_nom
 
         logger.warning("1C _get_stock_accounts: no account found in any source")
         return None, None

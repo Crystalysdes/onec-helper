@@ -146,6 +146,28 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
     return store
 
 
+async def _mark_deleted_in_onec(
+    onec_url: str, onec_username: str, onec_password_enc: str,
+    onec_id: str, name: str,
+):
+    """Mark product as deleted in 1C (ПометкаУдаления=True on Catalog_Номенклатура)."""
+    from backend.integrations.onec_integration import OneCClient
+    from backend.core.security import decrypt_password
+    from loguru import logger
+    try:
+        client = OneCClient(onec_url, onec_username, decrypt_password(onec_password_enc))
+        clean_id = str(onec_id).strip("{}")
+        ok, resp = await client._request(
+            "PATCH",
+            f"odata/standard.odata/Catalog_Номенклатура(guid'{clean_id}')",
+            json={"ПометкаУдаления": True},
+        )
+        logger.info(f"[1C DEL] '{name}' onec_id={clean_id} ok={ok} resp={str(resp)[:120]}")
+    except Exception as e:
+        from loguru import logger as _log
+        _log.error(f"[1C DEL] EXCEPTION for '{name}': {e}", exc_info=True)
+
+
 async def _push_barcode_and_prices(
     onec_url: str, onec_username: str, onec_password_enc: str,
     onec_id: str, barcode: Optional[str], price: Optional[float],
@@ -1135,6 +1157,22 @@ async def delete_product(
     product.is_active = False
     await db.commit()
 
+    if product.onec_id:
+        integ_r = await db.execute(
+            select(Integration).where(Integration.store_id == product.store_id)
+            .order_by(Integration.status)
+        )
+        integration = integ_r.scalars().first()
+        if integration:
+            import asyncio as _aio
+            _aio.ensure_future(_mark_deleted_in_onec(
+                onec_url=integration.onec_url,
+                onec_username=integration.onec_username,
+                onec_password_enc=integration.onec_password_encrypted,
+                onec_id=product.onec_id,
+                name=product.name,
+            ))
+
 
 def _detect_col(headers: list, candidates: list) -> Optional[str]:
     """Find first matching column name (case-insensitive)."""
@@ -1307,7 +1345,29 @@ async def bulk_delete_products(
         )
     )
     rows = result.all()
+    store_integrations: dict = {}
     for product, _ in rows:
         product.is_active = False
     await db.commit()
+
+    import asyncio as _aio
+    for product, store in rows:
+        if not product.onec_id:
+            continue
+        sid = str(store.id)
+        if sid not in store_integrations:
+            integ_r = await db.execute(
+                select(Integration).where(Integration.store_id == store.id)
+                .order_by(Integration.status)
+            )
+            store_integrations[sid] = integ_r.scalars().first()
+        integration = store_integrations.get(sid)
+        if integration:
+            _aio.ensure_future(_mark_deleted_in_onec(
+                onec_url=integration.onec_url,
+                onec_username=integration.onec_username,
+                onec_password_enc=integration.onec_password_encrypted,
+                onec_id=product.onec_id,
+                name=product.name,
+            ))
     return {"deleted": len(rows)}
