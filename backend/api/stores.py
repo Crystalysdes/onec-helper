@@ -73,6 +73,7 @@ class IntegrationUpdate(BaseModel):
     onec_password: Optional[str] = None
     name: Optional[str] = None
     use_accounting: Optional[bool] = None
+    status: Optional[str] = None  # "active" | "inactive"
 
 
 @router.get("/")
@@ -262,12 +263,46 @@ async def update_integration(
         s = dict(integration.settings or {})
         s["use_accounting"] = payload.use_accounting
         integration.settings = s
+    if payload.status is not None:
+        try:
+            integration.status = IntegrationStatus(payload.status)
+        except ValueError:
+            pass
 
+    await db.commit()
+    await db.refresh(integration)
     return {
         "id": str(integration.id),
         "name": integration.name,
+        "status": integration.status.value if integration.status else "inactive",
         "use_accounting": (integration.settings or {}).get("use_accounting", True),
     }
+
+
+@router.delete("/{store_id}/integrations/{integration_id}", status_code=204)
+async def delete_integration(
+    store_id: UUID,
+    integration_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Store).where(Store.id == store_id, Store.owner_id == current_user.id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Магазин не найден")
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.id == integration_id, Integration.store_id == store_id
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if not integration:
+        raise HTTPException(status_code=404, detail="Интеграция не найдена")
+
+    await db.delete(integration)
+    await db.commit()
 
 
 @router.post("/{store_id}/integrations/{integration_id}/test")

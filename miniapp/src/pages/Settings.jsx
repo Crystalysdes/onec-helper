@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus, Store, Plug, Check, ChevronLeft, ChevronRight, TestTube2,
   CreditCard, RefreshCw, Users, Copy, CheckCircle2,
-  AlertCircle, Crown, Zap, ExternalLink, RotateCcw, Pencil,
+  AlertCircle, Crown, Zap, ExternalLink, RotateCcw, Pencil, Trash2,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
@@ -18,11 +18,11 @@ export default function Settings() {
   const [showStoreForm, setShowStoreForm] = useState(false)
   const [showIntegrationForm, setShowIntegrationForm] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [testLoading, setTestLoading] = useState(false)
-  const [testResult, setTestResult] = useState(null)
-  const [syncLoading, setSyncLoading] = useState(false)
-  const [diagnoseLoading, setDiagnoseLoading] = useState(false)
-  const [diagnoseResult, setDiagnoseResult] = useState(null)
+  const [testLoadingId, setTestLoadingId] = useState(null)
+  const [testResults, setTestResults] = useState({})
+  const [syncLoadingId, setSyncLoadingId] = useState(null)
+  const [diagnoseLoadingId, setDiagnoseLoadingId] = useState(null)
+  const [diagnoseResults, setDiagnoseResults] = useState({})
   const [storeDetail, setStoreDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -105,7 +105,8 @@ export default function Settings() {
   const selectStore = async (store) => {
     setCurrentStore(store)
     setStoreDetail(null)
-    setTestResult(null)
+    setTestResults({})
+    setDiagnoseResults({})
     loadStoreDetail(store.id)
     toast.success(`Выбран магазин: ${store.name}`)
   }
@@ -132,11 +133,11 @@ export default function Settings() {
   }
 
   const testIntegration = async (storeId, intId) => {
-    setTestLoading(true)
-    setTestResult(null)
+    setTestLoadingId(intId)
+    setTestResults(prev => { const n = { ...prev }; delete n[intId]; return n })
     try {
       const res = await storesAPI.testIntegration(storeId, intId)
-      setTestResult(res.data)
+      setTestResults(prev => ({ ...prev, [intId]: res.data }))
       if (res.data.success && !res.data.message?.includes('не опубликованы')) {
         toast.success('Подключение успешно!')
       } else if (!res.data.success) {
@@ -146,7 +147,7 @@ export default function Settings() {
     } catch (e) {
       toast.error('Ошибка тестирования')
     } finally {
-      setTestLoading(false)
+      setTestLoadingId(null)
     }
   }
 
@@ -183,27 +184,40 @@ export default function Settings() {
   }
 
   const syncIntegration = async (storeId, intId) => {
-    setSyncLoading(true)
+    setSyncLoadingId(intId)
     try {
       await storesAPI.syncIntegration(storeId, intId)
       toast.success('Импорт товаров из 1С запущен!')
     } catch {
       toast.error('Ошибка синхронизации')
     } finally {
-      setSyncLoading(false)
+      setSyncLoadingId(null)
     }
   }
 
   const diagnoseIntegration = async (storeId, intId) => {
-    setDiagnoseLoading(true)
-    setDiagnoseResult(null)
+    setDiagnoseLoadingId(intId)
+    setDiagnoseResults(prev => { const n = { ...prev }; delete n[intId]; return n })
     try {
       const res = await storesAPI.diagnoseIntegration(storeId, intId)
-      setDiagnoseResult(res.data)
+      setDiagnoseResults(prev => ({ ...prev, [intId]: res.data }))
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка диагностики')
     } finally {
-      setDiagnoseLoading(false)
+      setDiagnoseLoadingId(null)
+    }
+  }
+
+  const deleteIntegration = async (storeId, intId) => {
+    if (!window.confirm('Удалить эту интеграцию с 1С? Товары в боте останутся.')) return
+    try {
+      await storesAPI.deleteIntegration(storeId, intId)
+      toast.success('Интеграция удалена')
+      setTestResults(prev => { const n = { ...prev }; delete n[intId]; return n })
+      setDiagnoseResults(prev => { const n = { ...prev }; delete n[intId]; return n })
+      await loadStoreDetail(storeId)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка удаления')
     }
   }
 
@@ -642,7 +656,7 @@ export default function Settings() {
                         {int.onec_url}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <button
                         className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-60"
                         style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
@@ -650,9 +664,24 @@ export default function Settings() {
                       >
                         <Pencil size={13} style={{ color: 'var(--tg-theme-hint-color)' }} />
                       </button>
-                      <span className={`badge ${int.status === 'active' ? 'badge-green' : int.status === 'error' ? 'badge-red' : 'badge-yellow'}`}>
+                      <button
+                        className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-60"
+                        style={{ background: 'rgba(239,68,68,0.1)' }}
+                        onClick={() => deleteIntegration(currentStore.id, int.id)}
+                      >
+                        <Trash2 size={13} style={{ color: '#ef4444' }} />
+                      </button>
+                      <button
+                        className={`badge cursor-pointer active:opacity-70 ${int.status === 'active' ? 'badge-green' : int.status === 'error' ? 'badge-red' : 'badge-yellow'}`}
+                        title={int.status === 'active' ? 'Нажмите чтобы отключить' : 'Нажмите чтобы включить'}
+                        onClick={async () => {
+                          const next = int.status === 'active' ? 'inactive' : 'active'
+                          await storesAPI.toggleIntegrationStatus(currentStore.id, int.id, next)
+                          await loadStoreDetail(currentStore.id)
+                        }}
+                      >
                         {int.status === 'active' ? 'Активна' : int.status === 'error' ? 'Ошибка' : 'Не активна'}
-                      </span>
+                      </button>
                     </div>
                   </div>
                   {/* use_accounting row */}
@@ -681,10 +710,10 @@ export default function Settings() {
                     <button
                       className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70"
                       style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
-                      disabled={testLoading}
+                      disabled={testLoadingId === int.id}
                       onClick={() => testIntegration(currentStore.id, int.id)}
                     >
-                      {testLoading
+                      {testLoadingId === int.id
                         ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                         : <TestTube2 size={12} />}
                       Тест
@@ -692,10 +721,10 @@ export default function Settings() {
                     <button
                       className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70"
                       style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
-                      disabled={diagnoseLoading}
+                      disabled={diagnoseLoadingId === int.id}
                       onClick={() => diagnoseIntegration(currentStore.id, int.id)}
                     >
-                      {diagnoseLoading
+                      {diagnoseLoadingId === int.id
                         ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                         : <span>🔍</span>}
                       Диагностика
@@ -703,16 +732,18 @@ export default function Settings() {
                     <button
                       className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70 text-white"
                       style={{ background: 'var(--tg-theme-button-color)' }}
-                      disabled={syncLoading}
+                      disabled={syncLoadingId === int.id}
                       onClick={() => syncIntegration(currentStore.id, int.id)}
                     >
-                      {syncLoading
+                      {syncLoadingId === int.id
                         ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         : <RotateCcw size={12} />}
                       Импорт
                     </button>
                   </div>
-                  {diagnoseResult && (
+                  {diagnoseResults[int.id] && (() => {
+                    const diagnoseResult = diagnoseResults[int.id]
+                    return (
                     <div className="flex flex-col gap-2 p-3 rounded-xl text-xs" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
                       <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>🔍 Результат диагностики</p>
                       <div className="grid grid-cols-2 gap-1.5">
@@ -798,8 +829,10 @@ export default function Settings() {
                         </details>
                       )}
                     </div>
-                  )}
-                  {testResult && (() => {
+                    )
+                  })()}
+                  {testResults[int.id] && (() => {
+                    const testResult = testResults[int.id]
                     const needsSetup = testResult.success && testResult.message?.includes('не опубликованы')
                     const setupUrl = needsSetup ? getSetupUrl(int.onec_url) : null
                     return (

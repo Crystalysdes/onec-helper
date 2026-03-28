@@ -60,6 +60,10 @@ export const storesAPI = {
     api.get(`/stores/${storeId}/integrations/${intId}/stock`, { params: { low_stock_threshold: threshold } }),
   diagnoseIntegration: (storeId, intId) =>
     api.get(`/stores/${storeId}/integrations/${intId}/diagnose`),
+  deleteIntegration: (storeId, intId) =>
+    api.delete(`/stores/${storeId}/integrations/${intId}`),
+  toggleIntegrationStatus: (storeId, intId, status) =>
+    api.put(`/stores/${storeId}/integrations/${intId}`, { status }),
 }
 
 export const productsAPI = {
