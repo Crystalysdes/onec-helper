@@ -986,22 +986,24 @@ class OneCClient:
                 for k, v in ir_rec.items():
                     if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or "@" in k:
                         continue
-                    if k.lower() == "period":
-                        key_parts.append(f"Period=datetime'{str(v)[:19]}'")
+                    if k.lower() in ("period", "период"):
+                        key_parts.append(f"{k}=datetime'{str(v)[:19]}'")
                     elif k.endswith("_Key"):
                         key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
                     else:
                         key_parts.append(f"{k}='{v}'")
+                logger.debug(f"1C write-off IR key_parts: {key_parts}")
                 if key_parts:
                     put_payload = {k: v for k, v in ir_rec.items()
                                    if "@" not in k and k not in ("odata.metadata", "odata.type", "odata.etag")}
                     put_payload["Количество"] = float(new_absolute_qty)
-                    ok_put, _ = await self._request(
+                    ok_put, resp_put = await self._request(
                         "PUT",
                         f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
                         f"({','.join(p.strip() for p in key_parts)})",
                         json=put_payload,
                     )
+                    logger.debug(f"1C write-off IR PUT: ok={ok_put} resp={str(resp_put)[:100]}")
                     if ok_put:
                         logger.info(f"1C write-off via IR PUT: qty={new_absolute_qty} (was +{qty})")
                         return True
