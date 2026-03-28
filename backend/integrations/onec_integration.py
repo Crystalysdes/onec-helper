@@ -1042,7 +1042,48 @@ class OneCClient:
 
         import uuid as _uuid_mod
 
-        # ── 1a. КорректировкаЗапасов — sets absolute quantity (best for adjustments) ──
+        # ── 1a. ИнвентаризацияЗапасов — sets absolute quantity (inventory audit) ──
+        for inv_tab in ("ТоварыЗапасы", "Запасы", "Товары"):
+            new_ref = str(_uuid_mod.uuid4())
+            inv_row: dict = {
+                "LineNumber": "1",
+                "Номенклатура_Key": clean,
+                "КоличествоФакт": float(new_absolute_qty),
+                "Количество": float(new_absolute_qty),
+                "Характеристика_Key": _zero,
+            }
+            inv_hdr: dict = {
+                "Ref_Key": new_ref,
+                "Date": period,
+                "Комментарий": "Авто из 1С Хелпер",
+                inv_tab: [inv_row],
+            }
+            if org_key:
+                inv_hdr["Организация_Key"] = org_key
+            if wh_key:
+                inv_hdr["Склад_Key"] = wh_key
+                inv_hdr["СтруктурнаяЕдиница_Key"] = wh_key
+            inv_hdr.update(NO_ACCOUNTING)
+            ok_ic, resp_ic = await self._request(
+                "POST", "odata/standard.odata/Document_ИнвентаризацияЗапасов", json=inv_hdr
+            )
+            if not ok_ic:
+                logger.debug(f"1C Document_ИнвентаризацияЗапасов POST failed ({inv_tab}): {str(resp_ic)[:200]}")
+                if "не найдена" in str(resp_ic):
+                    break  # document type not published
+                continue
+            inv_ref = str((resp_ic or {}).get("Ref_Key", new_ref) if isinstance(resp_ic, dict) else new_ref).strip("{}")
+            ok_ip, resp_ip = await self._request(
+                "POST", f"odata/standard.odata/Document_ИнвентаризацияЗапасов(guid'{inv_ref}')/Post", json={}
+            )
+            if ok_ip:
+                logger.info(f"1C write-off via ИнвентаризацияЗапасов: {inv_ref} abs_qty={new_absolute_qty}")
+                return True
+            logger.debug(f"1C ИнвентаризацияЗапасов Post failed ({inv_tab}): {str(resp_ip)[:300]}")
+            await self._request("PATCH", f"odata/standard.odata/Document_ИнвентаризацияЗапасов(guid'{inv_ref}')",
+                                json={"ПометкаУдаления": True})
+
+        # ── 1b. КорректировкаЗапасов — sets absolute quantity (best for adjustments) ──
         for korr_tab in ("Запасы", "Товары"):
             new_ref = str(_uuid_mod.uuid4())
             korr_row: dict = {
