@@ -1040,9 +1040,49 @@ class OneCClient:
                 r["СчетКт_Key"] = credit_key or _zero
             return r
 
+        import uuid as _uuid_mod
+
+        # ── 1a. КорректировкаЗапасов — sets absolute quantity (best for adjustments) ──
+        for korr_tab in ("Запасы", "Товары"):
+            new_ref = str(_uuid_mod.uuid4())
+            korr_row: dict = {
+                "LineNumber": "1",
+                "Номенклатура_Key": clean,
+                "КоличествоФакт": float(new_absolute_qty),
+                "Количество": float(new_absolute_qty),
+                "Характеристика_Key": _zero,
+            }
+            korr_hdr: dict = {
+                "Ref_Key": new_ref,
+                "Date": period,
+                "Комментарий": "Авто из 1С Хелпер",
+                korr_tab: [korr_row],
+            }
+            if org_key:
+                korr_hdr["Организация_Key"] = org_key
+            if wh_key:
+                korr_hdr["Склад_Key"] = wh_key
+                korr_hdr["СтруктурнаяЕдиница_Key"] = wh_key
+            korr_hdr.update(NO_ACCOUNTING)
+            ok_kc, resp_kc = await self._request(
+                "POST", "odata/standard.odata/Document_КорректировкаЗапасов", json=korr_hdr
+            )
+            if not ok_kc:
+                logger.debug(f"1C Document_КорректировкаЗапасов POST failed ({korr_tab}): {str(resp_kc)[:200]}")
+                break
+            korr_ref = str((resp_kc or {}).get("Ref_Key", new_ref) if isinstance(resp_kc, dict) else new_ref).strip("{}")
+            ok_kp, resp_kp = await self._request(
+                "POST", f"odata/standard.odata/Document_КорректировкаЗапасов(guid'{korr_ref}')/Post", json={}
+            )
+            if ok_kp:
+                logger.info(f"1C write-off via КорректировкаЗапасов: {korr_ref} abs_qty={new_absolute_qty}")
+                return True
+            logger.debug(f"1C КорректировкаЗапасов Post failed: {str(resp_kp)[:300]}")
+            await self._request("PATCH", f"odata/standard.odata/Document_КорректировкаЗапасов(guid'{korr_ref}')",
+                                json={"ПометкаУдаления": True})
+
         for doc_name, tab_name in [("Document_СписаниеЗапасов", "Запасы"),
                                     ("Document_СписаниеТоваров", "Товары")]:
-            import uuid as _uuid_mod
             for no_acc in ([False, True] if debit_key else [True]):
                 new_ref = str(_uuid_mod.uuid4())
                 header: dict = {
@@ -1066,17 +1106,26 @@ class OneCClient:
                     "POST", f"odata/standard.odata/{doc_name}", json=header
                 )
                 if not ok_c:
-                    logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:200]}")
+                    logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:300]}")
                     break  # doc type not available
                 doc_ref_created = (resp_c or {}).get("Ref_Key", new_ref) if isinstance(resp_c, dict) else new_ref
                 clean_ref = str(doc_ref_created).strip("{}")
+
+                # GET back document — inspect auto-filled fields
+                ok_g, doc_data = await self._request(
+                    "GET", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')?$format=json"
+                )
+                if ok_g and isinstance(doc_data, dict):
+                    doc_fields = {k: v for k, v in doc_data.items() if "Счет" in k or "Статус" in k or "Вид" in k}
+                    logger.debug(f"1C {doc_name} auto-fields: {doc_fields}")
+
                 ok_p, resp_p = await self._request(
                     "POST", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')/Post", json={},
                 )
                 if ok_p:
                     logger.info(f"1C write-off posted ({doc_name}{'  без проводок' if no_acc else ''}): {clean_ref} qty={qty}")
                     return True
-                logger.warning(f"1C {doc_name} Post failed (no_acc={no_acc}): {str(resp_p)[:200]}")
+                logger.warning(f"1C {doc_name} Post failed (no_acc={no_acc}): {str(resp_p)[:400]}")
                 await self._request("PATCH", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')",
                                     json={"ПометкаУдаления": True})
 
