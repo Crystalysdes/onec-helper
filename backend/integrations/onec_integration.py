@@ -1037,13 +1037,18 @@ class OneCClient:
             ir_rows = ir_data.get("value", [])
             if ir_rows:
                 ir_rec = ir_rows[0]
+                _RESOURCE_FIELDS = {"Количество", "Стоимость", "Резерв", "odata.metadata", "odata.type", "odata.etag"}
+                import re as _re
+                _GUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
                 key_parts = []
                 for k, v in ir_rec.items():
-                    if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or "@" in k:
+                    if k in _RESOURCE_FIELDS or "@" in k or k.endswith("_Type"):
                         continue
                     if k.lower() in ("period", "период"):
                         key_parts.append(f"{k}=datetime'{str(v)[:19]}'")
                     elif k.endswith("_Key"):
+                        key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
+                    elif _GUID_RE.match(str(v).strip("{}")):
                         key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
                     else:
                         key_parts.append(f"{k}='{v}'")
@@ -1357,14 +1362,19 @@ class OneCClient:
             return payload
 
         if ir_rec:  # existing record → build PUT URL + PUT
+            import re as _re2
+            _IR_SKIP = {"Количество", "Стоимость", "Резерв", "odata.metadata", "odata.type", "odata.etag"}
+            _GUID_PAT = _re2.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', _re2.IGNORECASE)
             key_parts = []
             for k, v in ir_rec.items():
-                if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or k.endswith("@odata.type"):
+                if k in _IR_SKIP or "@" in k or k.endswith("_Type"):
                     continue
-                if k.lower() == "period":
-                    key_parts.append(f"Period=datetime'{str(v)[:19]}'")
+                if k.lower() in ("period", "период"):
+                    key_parts.append(f"{k}=datetime'{str(v)[:19]}'")
                 elif k.endswith("_Key"):
                     key_parts.append(f"{k}=guid'{str(v).strip('{}')}' ")
+                elif _GUID_PAT.match(str(v).strip("{}")):
+                    key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
                 else:
                     key_parts.append(f"{k}='{v}'")
             if key_parts:
