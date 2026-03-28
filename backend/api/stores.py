@@ -451,12 +451,16 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
             await db.flush()
 
             # ── Step 5: deactivate products removed in 1C (DeletionMark) ──
+            # Only touch products that were previously synced (synced_at IS NOT NULL).
+            # Products created manually (synced_at=NULL) are protected — their onec_id
+            # may not have propagated to 1C's OData listing yet.
             synced_ids = set(onec_id_to_product.keys())
             if synced_ids:
                 to_deactivate = (await db.execute(
                     select(ProductCache).where(
                         ProductCache.store_id == store_id,
                         ProductCache.onec_id.isnot(None),
+                        ProductCache.synced_at.isnot(None),
                         not_(ProductCache.onec_id.in_(synced_ids)),
                         ProductCache.is_active == True,
                     )

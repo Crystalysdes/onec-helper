@@ -90,11 +90,15 @@ export default function Settings() {
   const createStore = async (data) => {
     setLoading(true)
     try {
-      await storesAPI.create(data)
+      const res = await storesAPI.create(data)
       toast.success('Магазин создан!')
       storeForm.reset()
       setShowStoreForm(false)
       await loadStores()
+      const newStore = { id: res.data.id, name: res.data.name, description: res.data.description, is_active: true }
+      setCurrentStore(newStore)
+      setStoreDetail(null)
+      setTab('integration')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка создания магазина')
     } finally {

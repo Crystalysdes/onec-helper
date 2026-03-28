@@ -533,7 +533,8 @@ async def create_product(
         integ_r = await db.execute(
             select(Integration).where(
                 Integration.store_id == store_id,
-                Integration.status == IntegrationStatus.active,
+            ).order_by(
+                Integration.status  # "active" < "error" < "inactive" alphabetically → active first
             )
         )
         integration = integ_r.scalars().first()
