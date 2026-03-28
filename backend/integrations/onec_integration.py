@@ -963,13 +963,21 @@ class OneCClient:
         wh_key = await self._get_warehouse_key()
         summa = round(qty * float(price or 0), 2)
 
+        debit_key, credit_key = await self._get_stock_accounts(clean)
+
+        NO_ACCOUNTING = {
+            "ФормироватьПроводки": False,
+            "ОтражатьВБухгалтерскомУчете": False,
+            "ОтражатьВНалоговомУчете": False,
+        }
+
         # ── 0. IR direct overwrite (set absolute qty) ──────────────────────────
-        # Fastest path: find existing IR record and PUT new quantity directly.
         ok_irg, ir_data = await self._request(
             "GET",
             f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
             f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1"
         )
+        logger.debug(f"1C write-off IR GET: ok={ok_irg} rows={len((ir_data or {}).get('value', []))}")
         if ok_irg and isinstance(ir_data, dict):
             ir_rows = ir_data.get("value", [])
             if ir_rows:
@@ -997,7 +1005,7 @@ class OneCClient:
                     if ok_put:
                         logger.info(f"1C write-off via IR PUT: qty={new_absolute_qty} (was +{qty})")
                         return True
-            # No existing record — POST with new absolute qty
+            # No existing record — POST with absolute qty
             ir_post = {
                 "Период": period,
                 "Номенклатура_Key": clean,
@@ -1007,18 +1015,17 @@ class OneCClient:
             }
             if wh_key:
                 ir_post["СтруктурнаяЕдиница_Key"] = wh_key
-            ok_post, _ = await self._request(
-                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
-                json=ir_post
+            ok_irp, resp_irp = await self._request(
+                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров", json=ir_post
             )
-            if ok_post:
+            logger.debug(f"1C write-off IR POST: ok={ok_irp} resp={str(resp_irp)[:100]}")
+            if ok_irp:
                 logger.info(f"1C write-off via IR POST abs: qty={new_absolute_qty}")
                 return True
 
-        # ── 1. Write-off documents ──────────────────────────────────────────────
-        def _make_row(doc_ref: str) -> dict:
-            return {
-                "Ref_Key": doc_ref,
+        # ── 1. Write-off documents (with and without accounting) ─────────────────
+        def _make_wo_row(include_acct: bool) -> dict:
+            r: dict = {
                 "LineNumber": "1",
                 "Номенклатура_Key": clean,
                 "Количество": float(qty),
@@ -1026,36 +1033,50 @@ class OneCClient:
                 "Сумма": summa,
                 "Характеристика_Key": _zero,
             }
+            if include_acct and debit_key:
+                r["СчетДт_Key"] = debit_key
+                r["СчетКт_Key"] = credit_key or _zero
+            return r
 
         for doc_name, tab_name in [("Document_СписаниеЗапасов", "Запасы"),
                                     ("Document_СписаниеТоваров", "Товары")]:
             import uuid as _uuid_mod
-            new_ref = str(_uuid_mod.uuid4())
-            header: dict = {
-                "Ref_Key": new_ref,
-                "Date": period,
-                "Организация_Key": org_key or _zero,
-                "СтруктурнаяЕдиница_Key": wh_key or _zero,
-                "Posted": False,
-                tab_name: [_make_row(new_ref)],
-            }
-            ok_c, resp_c = await self._request(
-                "POST", f"odata/standard.odata/{doc_name}", json=header
-            )
-            if not ok_c:
-                logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:200]}")
-                continue
-            doc_ref_created = (resp_c or {}).get("Ref_Key", new_ref) if isinstance(resp_c, dict) else new_ref
-            clean_ref = str(doc_ref_created).strip("{}")
-            ok_p, resp_p = await self._request(
-                "POST", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')/Post", json={},
-            )
-            if ok_p:
-                logger.info(f"1C write-off posted ({doc_name}): {clean_ref} qty={qty}")
-                return True
-            logger.warning(f"1C {doc_name} Post failed: {str(resp_p)[:200]}")
-            await self._request("PATCH", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')",
-                                json={"ПометкаУдаления": True})
+            for no_acc in ([False, True] if debit_key else [True]):
+                new_ref = str(_uuid_mod.uuid4())
+                header: dict = {
+                    "Ref_Key": new_ref,
+                    "Date": period,
+                    "Комментарий": "Авто из 1С Хелпер",
+                    tab_name: [_make_wo_row(not no_acc)],
+                }
+                if org_key:
+                    header["Организация_Key"] = org_key
+                if wh_key:
+                    header["Склад_Key"] = wh_key
+                    header["СтруктурнаяЕдиница_Key"] = wh_key
+                if not no_acc and debit_key:
+                    header["СчетДт_Key"] = debit_key
+                    header["СчетКт_Key"] = credit_key or _zero
+                if no_acc:
+                    header.update(NO_ACCOUNTING)
+
+                ok_c, resp_c = await self._request(
+                    "POST", f"odata/standard.odata/{doc_name}", json=header
+                )
+                if not ok_c:
+                    logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:200]}")
+                    break  # doc type not available
+                doc_ref_created = (resp_c or {}).get("Ref_Key", new_ref) if isinstance(resp_c, dict) else new_ref
+                clean_ref = str(doc_ref_created).strip("{}")
+                ok_p, resp_p = await self._request(
+                    "POST", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')/Post", json={},
+                )
+                if ok_p:
+                    logger.info(f"1C write-off posted ({doc_name}{'  без проводок' if no_acc else ''}): {clean_ref} qty={qty}")
+                    return True
+                logger.warning(f"1C {doc_name} Post failed (no_acc={no_acc}): {str(resp_p)[:200]}")
+                await self._request("PATCH", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')",
+                                    json={"ПометкаУдаления": True})
 
         # ── 2. AccumulationRegister Расход movement ─────────────────────────────
         for reg in ("AccumulationRegister_ЗапасыНаСкладах", "AccumulationRegister_ТоварыНаСкладах"):
