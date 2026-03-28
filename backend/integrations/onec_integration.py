@@ -971,6 +971,61 @@ class OneCClient:
             "ОтражатьВНалоговомУчете": False,
         }
 
+        # ── 0a. Document_ОприходованиеЗапасов with NEGATIVE quantity ───────────
+        # Same document that successfully adds stock; negative qty = write-off movement.
+        import uuid as _uuid_mod0
+        for neg_tab in ("Запасы", "Товары"):
+            for no_acc0 in ([False, True] if debit_key else [True]):
+                neg_row: dict = {
+                    "LineNumber": 1,
+                    "Номенклатура_Key": clean,
+                    "Количество": -float(qty),
+                    "Цена": float(price or 0),
+                    "Сумма": -round(qty * float(price or 0), 2),
+                    "Характеристика_Key": _zero,
+                }
+                if not no_acc0 and debit_key:
+                    for fld in ("СчетДт_Key", "СчетУчета_Key", "СчетДебета_Key"):
+                        neg_row[fld] = debit_key
+                    for fld in ("СчетКт_Key", "СчетКредита_Key"):
+                        neg_row[fld] = credit_key or _zero
+                neg_hdr: dict = {
+                    "Ref_Key": str(_uuid_mod0.uuid4()),
+                    "Date": period,
+                    "Комментарий": "Авто из 1С Хелпер",
+                    neg_tab: [neg_row],
+                }
+                if org_key:
+                    neg_hdr["Организация_Key"] = org_key
+                if wh_key:
+                    neg_hdr["Склад_Key"] = wh_key
+                    neg_hdr["СтруктурнаяЕдиница_Key"] = wh_key
+                if not no_acc0 and debit_key:
+                    neg_hdr["СчетДт_Key"] = debit_key
+                    neg_hdr["СчетКт_Key"] = credit_key or _zero
+                if no_acc0:
+                    neg_hdr.update(NO_ACCOUNTING)
+                ok_nc, resp_nc = await self._request(
+                    "POST", "odata/standard.odata/Document_ОприходованиеЗапасов", json=neg_hdr
+                )
+                if not ok_nc:
+                    logger.debug(f"1C ОприходованиеЗапасов-neg POST failed ({neg_tab}): {str(resp_nc)[:200]}")
+                    break
+                neg_ref = str((resp_nc or {}).get("Ref_Key", "") if isinstance(resp_nc, dict) else "").strip("{}")
+                if not neg_ref:
+                    break
+                ok_np, resp_np = await self._request(
+                    "POST", f"odata/standard.odata/Document_ОприходованиеЗапасов(guid'{neg_ref}')/Post", json={}
+                )
+                if ok_np:
+                    logger.info(f"1C write-off via ОприходованиеЗапасов neg-qty ({neg_tab} no_acc={no_acc0}): qty=-{qty}")
+                    return True
+                logger.debug(f"1C ОприходованиеЗапасов-neg Post failed ({neg_tab} no_acc={no_acc0}): {str(resp_np)[:300]}")
+                await self._request(
+                    "PATCH", f"odata/standard.odata/Document_ОприходованиеЗапасов(guid'{neg_ref}')",
+                    json={"ПометкаУдаления": True}
+                )
+
         # ── 0. IR direct overwrite (set absolute qty) ──────────────────────────
         ok_irg, ir_data = await self._request(
             "GET",
