@@ -1031,8 +1031,11 @@ class OneCClient:
         # Use template if available; fall back to minimal payload when register is empty
         ir_template = ir_rec or schema  # may be {} (falsy) for a fresh/empty register
         ir_payload = _build_ir_payload(ir_template) if ir_template else {
+            "Период": period,          # required dimension for periodic registers
             "Номенклатура_Key": onec_id,
+            "Характеристика_Key": _zero,  # required composite key field
             "Количество": float(quantity),
+            "Стоимость": summa,
         }
         # Optionally add warehouse key for УНФ-style registers
         if wh_key:
