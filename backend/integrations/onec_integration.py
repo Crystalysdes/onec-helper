@@ -1033,10 +1033,10 @@ class OneCClient:
             new_ref = str(_uuid_mod.uuid4())
             header: dict = {
                 "Ref_Key": new_ref,
-                "Дата": period,
+                "Date": period,
                 "Организация_Key": org_key or _zero,
                 "СтруктурнаяЕдиница_Key": wh_key or _zero,
-                "Проведен": False,
+                "Posted": False,
                 tab_name: [_make_row(new_ref)],
             }
             ok_c, resp_c = await self._request(
