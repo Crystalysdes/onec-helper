@@ -1028,22 +1028,28 @@ class OneCClient:
                     logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
 
         # No existing record OR PUT failed → try POST (create new record)
-        ir_template = ir_rec or schema
-        if ir_template:
-            ir_payload = _build_ir_payload(ir_template)
-            logger.info(f"1C InformationRegister_ОстаткиТоваров POST payload keys: {list(ir_payload.keys())}")
-            try:
-                ok_post, resp_post = await self._request(
-                    "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
-                    json=ir_payload
-                )
-                logger.info(f"1C InformationRegister_ОстаткиТоваров POST result: ok={ok_post} resp={str(resp_post)[:150]}")
-                if ok_post:
-                    logger.info(f"1C stock set via POST InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
-                    ir_ok = True
-                    # Don't return yet — also try document posting for full 1C AR update
-            except Exception as _e:
-                logger.warning(f"1C InformationRegister_ОстаткиТоваров POST exception: {_e}")
+        # Use template if available; fall back to minimal payload when register is empty
+        ir_template = ir_rec or schema  # may be {} (falsy) for a fresh/empty register
+        ir_payload = _build_ir_payload(ir_template) if ir_template else {
+            "Номенклатура_Key": onec_id,
+            "Количество": float(quantity),
+        }
+        # Optionally add warehouse key for УНФ-style registers
+        if wh_key:
+            ir_payload.setdefault("СтруктурнаяЕдиница_Key", wh_key)
+        logger.info(f"1C InformationRegister_ОстаткиТоваров POST payload keys: {list(ir_payload.keys())}")
+        try:
+            ok_post, resp_post = await self._request(
+                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
+                json=ir_payload
+            )
+            logger.info(f"1C InformationRegister_ОстаткиТоваров POST result: ok={ok_post} resp={str(resp_post)[:150]}")
+            if ok_post:
+                logger.info(f"1C stock set via POST InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
+                ir_ok = True
+                # Don't return yet — also try document posting for full 1C AR update
+        except Exception as _e:
+            logger.warning(f"1C InformationRegister_ОстаткиТоваров POST exception: {_e}")
 
         # ── 1. Direct AccumulationRegister write (no document, no account required) ──
         # Try both English (RecordType) and Russian (ВидДвижения) field name conventions
