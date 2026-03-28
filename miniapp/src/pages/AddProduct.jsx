@@ -679,7 +679,8 @@ export default function AddProduct() {
         if (data.barcode?.trim()) {
           try {
             const res = await productsAPI.checkBarcode(data.barcode.trim())
-            if (res.data.found && res.data.source === 'own' && res.data.product?.id)
+            if (res.data.found && res.data.source === 'own' && res.data.product?.id
+                && String(res.data.product.store_id) === String(currentStore.id))
               targetId = res.data.product.id
           } catch { /* ignore */ }
         }
