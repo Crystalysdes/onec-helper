@@ -252,6 +252,9 @@ class OneCClient:
         _zero = "00000000-0000-0000-0000-000000000000"
         if price_type_name:
             price_type_key = await self._get_price_type_key_by_name(price_type_name)
+            if price_type_key is None:
+                logger.warning(f"1C set_price: price type '{price_type_name}' not found in 1C — skipping")
+                return False
         else:
             price_type_key = await self._get_or_fetch_price_type_key()
         vid_key = price_type_key or _zero
@@ -1206,11 +1209,15 @@ class OneCClient:
                     logger.info(f"1C stock posted (verified after 500) ({doc_type}): {onec_id} qty={quantity}")
                     return True
                 logger.warning(f"1C stock Post failed ({doc_type} no_acc={no_acc}): {resp2}")
-                logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — trying RecordSet PUT")
-
-                # Direct AR RecordSet write requires composite key URL format
-                # (not supported — Recorder is composite type, draft document is enough)
-                break  # one draft per doc_type is enough
+                logger.info(f"1C stock draft saved ({doc_type} guid={ref_key}) — marking for deletion, retrying without accounting")
+                # Mark failed draft for deletion, then retry with next acct_attempt (no-accounting mode)
+                await self._request(
+                    "PATCH",
+                    f"odata/standard.odata/{doc_type}(guid'{ref_key}')",
+                    json={"ПометкаУдаления": True},
+                )
+                doc_created = False  # allow next attempt to try a fresh document
+                continue  # try next no_acc value (e.g. True = without accounting)
             if doc_created:
                 break  # stop trying other doc types after first draft
 
