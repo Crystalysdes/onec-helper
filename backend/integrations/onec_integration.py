@@ -952,8 +952,9 @@ class OneCClient:
         return None, None
 
     async def _write_off_stock(self, onec_id: str, qty: float, price: float,
-                               use_accounting: bool) -> bool:
-        """Post a stock write-off for qty units. Returns True on success."""
+                               use_accounting: bool, new_absolute_qty: float = 0.0) -> bool:
+        """Reduce stock by qty. Tries IR direct overwrite first, then write-off documents.
+        new_absolute_qty: the target quantity to set (used for IR direct overwrite)."""
         clean = str(onec_id).strip("{}")
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
@@ -962,10 +963,61 @@ class OneCClient:
         wh_key = await self._get_warehouse_key()
         summa = round(qty * float(price or 0), 2)
 
-        debit_key, credit_key = await self._get_stock_accounts(clean)
+        # ── 0. IR direct overwrite (set absolute qty) ──────────────────────────
+        # Fastest path: find existing IR record and PUT new quantity directly.
+        ok_irg, ir_data = await self._request(
+            "GET",
+            f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+            f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1"
+        )
+        if ok_irg and isinstance(ir_data, dict):
+            ir_rows = ir_data.get("value", [])
+            if ir_rows:
+                ir_rec = ir_rows[0]
+                key_parts = []
+                for k, v in ir_rec.items():
+                    if k in ("Количество", "Стоимость", "odata.metadata", "odata.type") or "@" in k:
+                        continue
+                    if k.lower() == "period":
+                        key_parts.append(f"Period=datetime'{str(v)[:19]}'")
+                    elif k.endswith("_Key"):
+                        key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
+                    else:
+                        key_parts.append(f"{k}='{v}'")
+                if key_parts:
+                    put_payload = {k: v for k, v in ir_rec.items()
+                                   if "@" not in k and k not in ("odata.metadata", "odata.type", "odata.etag")}
+                    put_payload["Количество"] = float(new_absolute_qty)
+                    ok_put, _ = await self._request(
+                        "PUT",
+                        f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+                        f"({','.join(p.strip() for p in key_parts)})",
+                        json=put_payload,
+                    )
+                    if ok_put:
+                        logger.info(f"1C write-off via IR PUT: qty={new_absolute_qty} (was +{qty})")
+                        return True
+            # No existing record — POST with new absolute qty
+            ir_post = {
+                "Период": period,
+                "Номенклатура_Key": clean,
+                "Характеристика_Key": _zero,
+                "Количество": float(new_absolute_qty),
+                "Стоимость": round(new_absolute_qty * float(price or 0), 2),
+            }
+            if wh_key:
+                ir_post["СтруктурнаяЕдиница_Key"] = wh_key
+            ok_post, _ = await self._request(
+                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров",
+                json=ir_post
+            )
+            if ok_post:
+                logger.info(f"1C write-off via IR POST abs: qty={new_absolute_qty}")
+                return True
 
+        # ── 1. Write-off documents ──────────────────────────────────────────────
         def _make_row(doc_ref: str) -> dict:
-            row = {
+            return {
                 "Ref_Key": doc_ref,
                 "LineNumber": "1",
                 "Номенклатура_Key": clean,
@@ -974,72 +1026,53 @@ class OneCClient:
                 "Сумма": summa,
                 "Характеристика_Key": _zero,
             }
-            return row
 
-        doc_variants = [
-            ("Document_СписаниеЗапасов", "Запасы"),
-            ("Document_СписаниеТоваров", None),
-        ]
-        for doc_name, tab_name in doc_variants:
+        for doc_name, tab_name in [("Document_СписаниеЗапасов", "Запасы"),
+                                    ("Document_СписаниеТоваров", "Товары")]:
             import uuid as _uuid_mod
             new_ref = str(_uuid_mod.uuid4())
             header: dict = {
                 "Ref_Key": new_ref,
                 "Дата": period,
-                "Номер": f"WO-{new_ref[:8]}",
+                "Организация_Key": org_key or _zero,
+                "СтруктурнаяЕдиница_Key": wh_key or _zero,
                 "Проведен": False,
+                tab_name: [_make_row(new_ref)],
             }
-            if org_key:
-                header["Организация_Key"] = org_key
-            if wh_key:
-                header["СтруктурнаяЕдиница_Key"] = wh_key
-            tab = tab_name or "Товары"
-            header[tab] = [_make_row(new_ref)]
-
             ok_c, resp_c = await self._request(
                 "POST", f"odata/standard.odata/{doc_name}", json=header
             )
             if not ok_c:
-                logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:120]}")
+                logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:200]}")
                 continue
             doc_ref_created = (resp_c or {}).get("Ref_Key", new_ref) if isinstance(resp_c, dict) else new_ref
             clean_ref = str(doc_ref_created).strip("{}")
             ok_p, resp_p = await self._request(
-                "POST",
-                f"odata/standard.odata/{doc_name}(guid'{clean_ref}')/Post",
-                json={},
+                "POST", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')/Post", json={},
             )
             if ok_p:
                 logger.info(f"1C write-off posted ({doc_name}): {clean_ref} qty={qty}")
                 return True
-            logger.warning(f"1C {doc_name} Post failed: {str(resp_p)[:150]}")
-            await self._request(
-                "PATCH",
-                f"odata/standard.odata/{doc_name}(guid'{clean_ref}')",
-                json={"ПометкаУдаления": True},
-            )
+            logger.warning(f"1C {doc_name} Post failed: {str(resp_p)[:200]}")
+            await self._request("PATCH", f"odata/standard.odata/{doc_name}(guid'{clean_ref}')",
+                                json={"ПометкаУдаления": True})
 
-        # Last resort: AccumulationRegister with negative Расход movement
-        neg_variants: list[dict] = []
-        if wh_key:
-            neg_variants.append({
-                "Recorder_Key": _zero,
+        # ── 2. AccumulationRegister Расход movement ─────────────────────────────
+        for reg in ("AccumulationRegister_ЗапасыНаСкладах", "AccumulationRegister_ТоварыНаСкладах"):
+            payload: dict = {
                 "Номенклатура_Key": clean,
                 "Характеристика_Key": _zero,
-                "СтруктурнаяЕдиница_Key": wh_key,
                 "Количество": float(qty),
                 "Стоимость": summa,
                 "ВидДвижения": "Расход",
                 "RecordType": "Expense",
-            })
-        for reg in ("AccumulationRegister_ЗапасыНаСкладах", "AccumulationRegister_ТоварыНаСкладах"):
-            for payload in neg_variants:
-                ok_r, _ = await self._request(
-                    "POST", f"odata/standard.odata/{reg}", json=payload
-                )
-                if ok_r:
-                    logger.info(f"1C write-off via {reg}: qty={qty}")
-                    return True
+            }
+            if wh_key:
+                payload["СтруктурнаяЕдиница_Key"] = wh_key
+            ok_r, _ = await self._request("POST", f"odata/standard.odata/{reg}", json=payload)
+            if ok_r:
+                logger.info(f"1C write-off via {reg}: qty={qty}")
+                return True
         return False
 
     async def _get_product_stock_qty(self, onec_id: str) -> float:
@@ -1090,15 +1123,19 @@ class OneCClient:
             if abs(delta) < 0.001:
                 return True  # already correct, nothing to post
             if delta < 0:
-                # Write-off: try Document_СписаниеЗапасов first, fallback to IR overwrite
-                written_off = await self._write_off_stock(onec_id, abs(delta), price, use_accounting)
+                # Write-off: try Document_СписаниеЗапасов / AccumulationRegister Расход
+                written_off = await self._write_off_stock(
+                    onec_id, abs(delta), price, use_accounting,
+                    new_absolute_qty=quantity,
+                )
                 if written_off:
                     return True
-                # Fallback: overwrite IR directly with absolute new value (no delta document)
-                logger.warning(f"1C write-off failed, overwriting IR directly qty={quantity}")
-                # fall through with original quantity but skip document path below
-                quantity = quantity  # keep absolute qty for IR write
-                replace = False      # don't recurse
+                # Write-off failed — do NOT fall through to receipt document (would add stock)
+                logger.warning(
+                    f"1C write-off failed for onec_id={onec_id} delta={delta}: "
+                    f"stock NOT changed in 1C"
+                )
+                return False
             else:
                 quantity = delta  # post only the positive delta as receipt
 
