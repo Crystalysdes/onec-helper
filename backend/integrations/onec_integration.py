@@ -1063,7 +1063,7 @@ class OneCClient:
             if wh_key:
                 inv_hdr["Склад_Key"] = wh_key
                 inv_hdr["СтруктурнаяЕдиница_Key"] = wh_key
-            inv_hdr.update(NO_ACCOUNTING)
+            # NOTE: do NOT add NO_ACCOUNTING — it suppresses AccumulationRegister movements
             ok_ic, resp_ic = await self._request(
                 "POST", "odata/standard.odata/Document_ИнвентаризацияЗапасов", json=inv_hdr
             )
@@ -1077,7 +1077,7 @@ class OneCClient:
                 "POST", f"odata/standard.odata/Document_ИнвентаризацияЗапасов(guid'{inv_ref}')/Post", json={}
             )
             if ok_ip:
-                logger.info(f"1C write-off via ИнвентаризацияЗапасов: {inv_ref} abs_qty={new_absolute_qty}")
+                logger.info(f"1C write-off via ИнвентаризацияЗапасов ({inv_tab}): {inv_ref} abs_qty={new_absolute_qty}")
                 return True
             logger.debug(f"1C ИнвентаризацияЗапасов Post failed ({inv_tab}): {str(resp_ip)[:300]}")
             await self._request("PATCH", f"odata/standard.odata/Document_ИнвентаризацияЗапасов(guid'{inv_ref}')",
