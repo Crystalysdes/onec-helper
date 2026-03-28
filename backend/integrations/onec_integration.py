@@ -971,9 +971,74 @@ class OneCClient:
             "ОтражатьВНалоговомУчете": False,
         }
 
+        import re as _re_ir
+        import uuid as _uuid_mod0
+        _IR_SKIP = {"Количество", "Стоимость", "Резерв", "odata.metadata", "odata.type", "odata.etag"}
+        _GUID_PAT = _re_ir.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', _re_ir.IGNORECASE
+        )
+
+        # ── 0. IR direct overwrite (set absolute qty) ──────────────────────────
+        ok_irg, ir_data = await self._request(
+            "GET",
+            f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+            f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1"
+        )
+        logger.debug(f"1C write-off IR GET: ok={ok_irg} rows={len((ir_data or {}).get('value', []))}")
+        if ok_irg and isinstance(ir_data, dict):
+            ir_rows = ir_data.get("value", [])
+            if ir_rows:
+                ir_rec = ir_rows[0]
+                key_parts = []
+                for k, v in ir_rec.items():
+                    if k in _IR_SKIP or "@" in k or k.endswith("_Type"):
+                        continue
+                    if k.lower() in ("period", "период"):
+                        key_parts.append(f"{k}=datetime'{str(v)[:19]}'")
+                    elif k.endswith("_Key"):
+                        key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
+                    elif _GUID_PAT.match(str(v).strip("{}")):
+                        key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
+                    else:
+                        key_parts.append(f"{k}='{v}'")
+                logger.debug(f"1C write-off IR key_parts: {key_parts}")
+                if key_parts:
+                    put_payload = {k: v for k, v in ir_rec.items()
+                                   if "@" not in k
+                                   and k not in ("odata.metadata", "odata.type", "odata.etag")
+                                   and not k.endswith("_Type")}
+                    put_payload["Количество"] = float(new_absolute_qty)
+                    put_payload["Стоимость"] = round(new_absolute_qty * float(price or 0), 2)
+                    ok_put, resp_put = await self._request(
+                        "PUT",
+                        f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+                        f"({','.join(p.strip() for p in key_parts)})",
+                        json=put_payload,
+                    )
+                    logger.debug(f"1C write-off IR PUT: ok={ok_put} resp={str(resp_put)[:200]}")
+                    if ok_put:
+                        logger.info(f"1C write-off via IR PUT: qty={new_absolute_qty} (delta=-{qty})")
+                        return True
+            # No existing IR record — POST with absolute qty
+            ir_post = {
+                "Период": period,
+                "Номенклатура_Key": clean,
+                "Характеристика_Key": _zero,
+                "Количество": float(new_absolute_qty),
+                "Стоимость": round(new_absolute_qty * float(price or 0), 2),
+            }
+            if wh_key:
+                ir_post["СтруктурнаяЕдиница_Key"] = wh_key
+            ok_irp, resp_irp = await self._request(
+                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров", json=ir_post
+            )
+            logger.debug(f"1C write-off IR POST: ok={ok_irp} resp={str(resp_irp)[:100]}")
+            if ok_irp:
+                logger.info(f"1C write-off via IR POST abs: qty={new_absolute_qty}")
+                return True
+
         # ── 0a. Document_ОприходованиеЗапасов with NEGATIVE quantity ───────────
         # Same document that successfully adds stock; negative qty = write-off movement.
-        import uuid as _uuid_mod0
         for neg_tab in ("Запасы", "Товары"):
             for no_acc0 in ([False, True] if debit_key else [True]):
                 neg_row: dict = {
@@ -1025,65 +1090,6 @@ class OneCClient:
                     "PATCH", f"odata/standard.odata/Document_ОприходованиеЗапасов(guid'{neg_ref}')",
                     json={"ПометкаУдаления": True}
                 )
-
-        # ── 0. IR direct overwrite (set absolute qty) ──────────────────────────
-        ok_irg, ir_data = await self._request(
-            "GET",
-            f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
-            f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1"
-        )
-        logger.debug(f"1C write-off IR GET: ok={ok_irg} rows={len((ir_data or {}).get('value', []))}")
-        if ok_irg and isinstance(ir_data, dict):
-            ir_rows = ir_data.get("value", [])
-            if ir_rows:
-                ir_rec = ir_rows[0]
-                _RESOURCE_FIELDS = {"Количество", "Стоимость", "Резерв", "odata.metadata", "odata.type", "odata.etag"}
-                import re as _re
-                _GUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
-                key_parts = []
-                for k, v in ir_rec.items():
-                    if k in _RESOURCE_FIELDS or "@" in k or k.endswith("_Type"):
-                        continue
-                    if k.lower() in ("period", "период"):
-                        key_parts.append(f"{k}=datetime'{str(v)[:19]}'")
-                    elif k.endswith("_Key"):
-                        key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
-                    elif _GUID_RE.match(str(v).strip("{}")):
-                        key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
-                    else:
-                        key_parts.append(f"{k}='{v}'")
-                logger.debug(f"1C write-off IR key_parts: {key_parts}")
-                if key_parts:
-                    put_payload = {k: v for k, v in ir_rec.items()
-                                   if "@" not in k and k not in ("odata.metadata", "odata.type", "odata.etag")}
-                    put_payload["Количество"] = float(new_absolute_qty)
-                    ok_put, resp_put = await self._request(
-                        "PUT",
-                        f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
-                        f"({','.join(p.strip() for p in key_parts)})",
-                        json=put_payload,
-                    )
-                    logger.debug(f"1C write-off IR PUT: ok={ok_put} resp={str(resp_put)[:100]}")
-                    if ok_put:
-                        logger.info(f"1C write-off via IR PUT: qty={new_absolute_qty} (was +{qty})")
-                        return True
-            # No existing record — POST with absolute qty
-            ir_post = {
-                "Период": period,
-                "Номенклатура_Key": clean,
-                "Характеристика_Key": _zero,
-                "Количество": float(new_absolute_qty),
-                "Стоимость": round(new_absolute_qty * float(price or 0), 2),
-            }
-            if wh_key:
-                ir_post["СтруктурнаяЕдиница_Key"] = wh_key
-            ok_irp, resp_irp = await self._request(
-                "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров", json=ir_post
-            )
-            logger.debug(f"1C write-off IR POST: ok={ok_irp} resp={str(resp_irp)[:100]}")
-            if ok_irp:
-                logger.info(f"1C write-off via IR POST abs: qty={new_absolute_qty}")
-                return True
 
         # ── 1. Write-off documents (with and without accounting) ─────────────────
         def _make_wo_row(include_acct: bool) -> dict:
@@ -1267,6 +1273,7 @@ class OneCClient:
             if ok and isinstance(data, dict):
                 total = sum(float(r.get(qty_field) or 0) for r in data.get("value", []))
                 if total > 0:
+                    logger.debug(f"1C _get_product_stock_qty source={path[:80]} qty={total}")
                     return total
         return 0.0
 
