@@ -849,20 +849,53 @@ class OneCClient:
                 if sel.endswith("$top=1"):
                     break  # already tried all fields, no debit found
 
-        # ── Source 3: ChartOfAccounts — no filter, match by code prefix ────────
+        # ── Source 2.5: AccountingRegister_Управленческий — scan debit accounts ──
+        # УНФ uses this register; if any transactions exist we can borrow account GUIDs.
+        if not getattr(self, "_ar_debit_cache", None):
+            for sel_suffix in (
+                "?$format=json&$top=5&$select=СчетДт_Key,СчетКт_Key",
+                "?$format=json&$top=5",
+            ):
+                ok_ar, ar_data = await self._request(
+                    "GET", f"odata/standard.odata/AccountingRegister_Управленческий{sel_suffix}"
+                )
+                if not ok_ar or not isinstance(ar_data, dict):
+                    break
+                for row in ar_data.get("value", []):
+                    for fld in ("СчетДт_Key", "Дебет_Key", "СчетУчета_Key"):
+                        v = _valid(row.get(fld))
+                        if v:
+                            self._ar_debit_cache = v
+                            logger.info(f"1C AR_Управленческий debit account from {fld}: {v}")
+                            break
+                    if getattr(self, "_ar_debit_cache", None):
+                        break
+                if getattr(self, "_ar_debit_cache", None):
+                    break
+        if getattr(self, "_ar_debit_cache", None):
+            return self._ar_debit_cache, None
+
+        # ── Source 3: ChartOfAccounts — no filter, match by code prefix or description ──
         all_charts = (discovered_charts or []) + [
             "ChartOfAccounts_Хозрасчетный", "ChartOfAccounts_Управленческий"
         ]
         for chart in list(dict.fromkeys(all_charts)):
+            # Fetch with Description so we can match by keyword for УНФ (word-based codes)
             ok, data = await self._request(
                 "GET",
-                f"odata/standard.odata/{chart}?$format=json&$top=200&$select=Ref_Key,Code"
+                f"odata/standard.odata/{chart}?$format=json&$top=200"
+                f"&$select=Ref_Key,Code,Description&$filter=IsFolder eq false"
             )
             if not ok or not isinstance(data, dict):
-                continue
+                # Retry without filter/select in case of schema differences
+                ok, data = await self._request(
+                    "GET", f"odata/standard.odata/{chart}?$format=json&$top=200"
+                )
+                if not ok or not isinstance(data, dict):
+                    continue
             all_acc = data.get("value", [])
             logger.info(f"1C {chart}: {len(all_acc)} accounts; "
-                        f"sample={[str(a.get('Code','')) for a in all_acc[:8]]}")
+                        f"sample={[(str(a.get('Code','')), str(a.get('Description',''))[:20]) for a in all_acc[:5]]}")
             if not all_acc:
                 continue
 
@@ -874,18 +907,35 @@ class OneCClient:
                         return str(m["Ref_Key"]).strip("{}")
                 return None
 
+            def _find_by_desc(keywords: list[str]) -> str | None:
+                """Match account by Description keyword — for УНФ word-based chart."""
+                for kw in keywords:
+                    m = next((a for a in all_acc
+                              if kw.lower() in str(a.get("Description", "")).lower()), None)
+                    if m:
+                        return _valid(m.get("Ref_Key"))
+                return None
+
+            # 1. Numeric code match (БУХ/КА/УТ standard chart)
             debit  = _find(["41.02", "41.01", "41.2", "41", "10.01", "10"])
             credit = _find(["91.01", "91.1", "91", "94", "99"])
             if debit:
-                logger.info(f"1C stock accounts from {chart}: debit={debit} credit={credit}")
+                logger.info(f"1C stock accounts from {chart} by code: debit={debit} credit={credit}")
                 return debit, credit
 
-            # Last resort: use the very first non-zero account in the chart
+            # 2. Description keyword match (УНФ management chart uses word names)
+            debit  = _find_by_desc(["Запас", "Товар", "Матери", "Произво"])
+            credit = _find_by_desc(["Выруч", "Доход", "Капитал", "Прибыл"])
+            if debit:
+                logger.info(f"1C stock accounts from {chart} by description: debit={debit} credit={credit}")
+                return debit, credit
+
+            # 3. Last resort: first non-folder non-zero account in the chart
             for a in all_acc:
                 key = _valid(a.get("Ref_Key"))
                 if key:
                     logger.warning(f"1C stock account: using first available "
-                                   f"code={a.get('Code')} key={key}")
+                                   f"code={a.get('Code')} desc={str(a.get('Description',''))[:30]} key={key}")
                     return key, None
 
         logger.warning("1C _get_stock_accounts: no account found in any source")
