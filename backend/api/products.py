@@ -390,32 +390,63 @@ async def search_global_catalog(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Search GlobalProduct catalog + products_cache cross-tenant by name."""
+    """Search own products (all stores) first, then GlobalProduct catalog, then cross-tenant."""
+    from sqlalchemy import text as _text
+    from backend.database.connection import _is_sqlite
+    uid = str(current_user.id).replace('-', '') if _is_sqlite else current_user.id
     q = q.strip()
     if len(q) < 2:
         return []
-    from sqlalchemy import text as _text
 
-    # 1. Search GlobalProduct (Open Food Facts catalog)
-    gp_rows = (await db.execute(_text(
-        "SELECT barcode, name, price, purchase_price, article, category, unit, description "
-        "FROM global_products "
-        "WHERE lower(name) LIKE lower(:q) "
-        "ORDER BY name LIMIT :lim"
-    ), {"q": f"%{q}%", "lim": limit})).fetchall()
+    results: list[dict] = []
+    seen_names: set[str] = set()
 
-    results = [
-        {"id": None, "store_id": None, "barcode": r[0], "name": r[1],
-         "price": r[2], "purchase_price": r[3], "article": r[4],
-         "category": r[5], "unit": r[6], "description": r[7],
-         "quantity": 0, "source": "catalog"}
-        for r in gp_rows
-    ]
+    # 1. User's own products across ALL their stores (highest priority)
+    own_rows = (await db.execute(_text(
+        "SELECT pc.id, pc.store_id, pc.barcode, pc.name, pc.price, pc.purchase_price, "
+        "pc.article, pc.category, pc.unit, pc.description, pc.quantity "
+        "FROM products_cache pc "
+        "JOIN stores s ON pc.store_id = s.id "
+        "WHERE s.owner_id = :uid AND lower(pc.name) LIKE lower(:q) AND pc.is_active = :active "
+        "ORDER BY pc.name LIMIT :lim"
+    ), {"uid": uid, "q": f"%{q}%", "active": True, "lim": limit})).fetchall()
 
-    # 2. Fill remaining slots from products_cache (other users)
+    for r in own_rows:
+        nl = r[3].lower()
+        if nl not in seen_names:
+            results.append({
+                "id": str(r[0]), "store_id": str(r[1]), "barcode": r[2], "name": r[3],
+                "price": r[4], "purchase_price": r[5], "article": r[6],
+                "category": r[7], "unit": r[8], "description": r[9],
+                "quantity": r[10] or 0, "source": "own_store",
+            })
+            seen_names.add(nl)
+        if len(results) >= limit:
+            return results
+
+    # 2. GlobalProduct catalog (Open Food Facts / imported)
     remaining = limit - len(results)
     if remaining > 0:
-        seen_names = {r["name"].lower() for r in results}
+        gp_rows = (await db.execute(_text(
+            "SELECT barcode, name, price, purchase_price, article, category, unit, description "
+            "FROM global_products "
+            "WHERE lower(name) LIKE lower(:q) "
+            "ORDER BY name LIMIT :lim"
+        ), {"q": f"%{q}%", "lim": remaining})).fetchall()
+        for r in gp_rows:
+            nl = r[1].lower()
+            if nl not in seen_names:
+                results.append({
+                    "id": None, "store_id": None, "barcode": r[0], "name": r[1],
+                    "price": r[2], "purchase_price": r[3], "article": r[4],
+                    "category": r[5], "unit": r[6], "description": r[7],
+                    "quantity": 0, "source": "catalog",
+                })
+                seen_names.add(nl)
+
+    # 3. Cross-tenant products_cache (other users)
+    remaining = limit - len(results)
+    if remaining > 0:
         pc_rows = (await db.execute(_text(
             "SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
             "pc.article, pc.category, pc.unit, pc.description "
@@ -424,14 +455,15 @@ async def search_global_catalog(
             "LIMIT :lim"
         ), {"q": f"%{q}%", "lim": remaining * 2, "active": True})).fetchall()
         for r in pc_rows:
-            if r[1].lower() not in seen_names:
+            nl = r[1].lower()
+            if nl not in seen_names:
                 results.append({
                     "id": None, "store_id": None, "barcode": r[0], "name": r[1],
                     "price": r[2], "purchase_price": r[3], "article": r[4],
                     "category": r[5], "unit": r[6], "description": r[7],
-                    "quantity": 0, "source": "user_catalog"
+                    "quantity": 0, "source": "user_catalog",
                 })
-                seen_names.add(r[1].lower())
+                seen_names.add(nl)
             if len(results) >= limit:
                 break
 
