@@ -604,7 +604,7 @@ export default function Settings() {
                   {editingIntegration === int.id ? (
                     <form onSubmit={editForm.handleSubmit(updateIntegration)} className="flex flex-col gap-3">
                       <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Редактировать интеграцию</p>
-                      <input className="input-field" placeholder="URL сервера 1С *" {...editForm.register('onec_url', { required: true })} />
+                      <input className="input-field" placeholder="URL или код приложения * (напр. 3941876)" {...editForm.register('onec_url', { required: true })} />
                       <input className="input-field" placeholder="Имя пользователя *" {...editForm.register('onec_username', { required: true })} />
                       <input className="input-field" type="password" placeholder="Новый пароль (оставьте пустым чтобы не менять)" {...editForm.register('onec_password')} />
                       <input className="input-field" placeholder="Название интеграции" {...editForm.register('name')} />
@@ -861,7 +861,7 @@ export default function Settings() {
                   </p>
                   <input
                     className="input-field"
-                    placeholder="URL сервера 1С *"
+                    placeholder="URL или код приложения * (напр. 3941876)"
                     {...intForm.register('onec_url', { required: true })}
                   />
                   <input
@@ -899,9 +899,12 @@ export default function Settings() {
                       <div className="flex flex-col gap-2" style={{ color: 'var(--tg-theme-hint-color)' }}>
                         <div>
                           <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>🔗 URL сервера</p>
-                          <p>1. Откройте вашу 1С в браузере</p>
-                          <p>2. Скопируйте URL из адресной строки до части <code className="font-mono px-1 rounded" style={{ background: 'rgba(0,0,0,0.1)' }}>/ru/</code> (не включая её)</p>
-                          <p className="font-mono text-[11px] mt-1 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>https://msk1.1cfresh.com/a/sbm/3941876</p>
+                          <p>Вариант 1 — <b>просто код приложения</b> из адреса браузера:</p>
+                          <p className="font-mono text-[11px] mt-0.5 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>3941876</p>
+                          <p className="mt-1">Если сервер не msk1, укажите его через /:</p>
+                          <p className="font-mono text-[11px] mt-0.5 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>msk2/3941876</p>
+                          <p className="mt-1">Вариант 2 — <b>полный URL</b> из браузера (можно со <code className="font-mono px-1 rounded" style={{ background: 'rgba(0,0,0,0.1)' }}>/ru/</code> в конце — обрежется автоматически):</p>
+                          <p className="font-mono text-[11px] mt-0.5 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>https://msk1.1cfresh.com/a/sbm/3941876/ru/</p>
                         </div>
                         <div>
                           <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>👤 Логин и пароль</p>

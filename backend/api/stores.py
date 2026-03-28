@@ -1,4 +1,5 @@
 import asyncio
+import re as _re
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -14,6 +15,37 @@ from backend.database.models import User, Store, Integration, IntegrationStatus,
 from backend.core.security import get_current_user, encrypt_password, decrypt_password
 
 router = APIRouter()
+
+
+def _normalize_onec_url(raw: str) -> str:
+    """Normalise various 1C URL inputs to a canonical base URL.
+
+    Accepted formats:
+      - Full browser URL: https://msk1.1cfresh.com/a/sbm/3941876/ru/
+      - URL without locale: https://msk1.1cfresh.com/a/sbm/3941876
+      - Server + code:  msk1/3941876  or  msk2:3941876
+      - Pure app code:  3941876  (defaults to msk1.1cfresh.com)
+      - Local URL:      http://192.168.1.10/base
+    """
+    raw = raw.strip().rstrip('/')
+    if not raw:
+        return raw
+
+    if raw.startswith('http://') or raw.startswith('https://'):
+        raw = _re.sub(r'/[a-z]{2}(_[A-Z]{2})?/?$', '', raw)
+        return raw.rstrip('/')
+
+    if _re.match(r'^\d+$', raw):
+        return f'https://msk1.1cfresh.com/a/sbm/{raw}'
+
+    m = _re.match(r'^([a-z0-9-]+)[/:]+([0-9]+)$', raw, _re.I)
+    if m:
+        return f'https://{m.group(1)}.1cfresh.com/a/sbm/{m.group(2)}'
+
+    if not raw.startswith('http'):
+        return 'https://' + raw
+
+    return raw
 
 
 class StoreCreate(BaseModel):
@@ -176,7 +208,7 @@ async def create_integration(
     integration = Integration(
         store_id=store_id,
         name=payload.name,
-        onec_url=payload.onec_url,
+        onec_url=_normalize_onec_url(payload.onec_url),
         onec_username=payload.onec_username,
         onec_password_encrypted=encrypt_password(payload.onec_password),
         status=IntegrationStatus.inactive,
@@ -219,7 +251,7 @@ async def update_integration(
         raise HTTPException(status_code=404, detail="Интеграция не найдена")
 
     if payload.onec_url is not None:
-        integration.onec_url = payload.onec_url
+        integration.onec_url = _normalize_onec_url(payload.onec_url)
     if payload.onec_username is not None:
         integration.onec_username = payload.onec_username
     if payload.onec_password is not None:
