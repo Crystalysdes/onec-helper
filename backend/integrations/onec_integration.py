@@ -951,10 +951,124 @@ class OneCClient:
         logger.warning("1C _get_stock_accounts: no account found in any source")
         return None, None
 
+    async def _write_off_stock(self, onec_id: str, qty: float, price: float,
+                               use_accounting: bool) -> bool:
+        """Post a stock write-off for qty units. Returns True on success."""
+        clean = str(onec_id).strip("{}")
+        from datetime import datetime as _dt
+        period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        _zero = "00000000-0000-0000-0000-000000000000"
+        org_key = await self._get_org_key()
+        wh_key = await self._get_warehouse_key()
+        summa = round(qty * float(price or 0), 2)
+
+        debit_key, credit_key = await self._get_stock_accounts(clean)
+
+        def _make_row(doc_ref: str) -> dict:
+            row = {
+                "Ref_Key": doc_ref,
+                "LineNumber": "1",
+                "Номенклатура_Key": clean,
+                "Количество": float(qty),
+                "Цена": float(price or 0),
+                "Сумма": summa,
+                "Характеристика_Key": _zero,
+            }
+            return row
+
+        doc_variants = [
+            ("Document_СписаниеЗапасов", "Запасы"),
+            ("Document_СписаниеТоваров", None),
+        ]
+        for doc_name, tab_name in doc_variants:
+            import uuid as _uuid_mod
+            new_ref = str(_uuid_mod.uuid4())
+            header: dict = {
+                "Ref_Key": new_ref,
+                "Дата": period,
+                "Номер": f"WO-{new_ref[:8]}",
+                "Проведен": False,
+            }
+            if org_key:
+                header["Организация_Key"] = org_key
+            if wh_key:
+                header["СтруктурнаяЕдиница_Key"] = wh_key
+            tab = tab_name or "Товары"
+            header[tab] = [_make_row(new_ref)]
+
+            ok_c, resp_c = await self._request(
+                "POST", f"odata/standard.odata/{doc_name}", json=header
+            )
+            if not ok_c:
+                logger.debug(f"1C {doc_name} POST failed: {str(resp_c)[:120]}")
+                continue
+            doc_ref_created = (resp_c or {}).get("Ref_Key", new_ref) if isinstance(resp_c, dict) else new_ref
+            clean_ref = str(doc_ref_created).strip("{}")
+            ok_p, resp_p = await self._request(
+                "POST",
+                f"odata/standard.odata/{doc_name}(guid'{clean_ref}')/Post",
+                json={},
+            )
+            if ok_p:
+                logger.info(f"1C write-off posted ({doc_name}): {clean_ref} qty={qty}")
+                return True
+            logger.warning(f"1C {doc_name} Post failed: {str(resp_p)[:150]}")
+            await self._request(
+                "PATCH",
+                f"odata/standard.odata/{doc_name}(guid'{clean_ref}')",
+                json={"ПометкаУдаления": True},
+            )
+
+        # Last resort: AccumulationRegister with negative Расход movement
+        neg_variants: list[dict] = []
+        if wh_key:
+            neg_variants.append({
+                "Recorder_Key": _zero,
+                "Номенклатура_Key": clean,
+                "Характеристика_Key": _zero,
+                "СтруктурнаяЕдиница_Key": wh_key,
+                "Количество": float(qty),
+                "Стоимость": summa,
+                "ВидДвижения": "Расход",
+                "RecordType": "Expense",
+            })
+        for reg in ("AccumulationRegister_ЗапасыНаСкладах", "AccumulationRegister_ТоварыНаСкладах"):
+            for payload in neg_variants:
+                ok_r, _ = await self._request(
+                    "POST", f"odata/standard.odata/{reg}", json=payload
+                )
+                if ok_r:
+                    logger.info(f"1C write-off via {reg}: qty={qty}")
+                    return True
+        return False
+
+    async def _get_product_stock_qty(self, onec_id: str) -> float:
+        """Return current stock quantity for a single product from 1C (0 if not found)."""
+        clean = str(onec_id).strip("{}")
+        sources = [
+            (f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+             f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=10&$select=Количество",
+             "Количество"),
+            (f"odata/standard.odata/AccumulationRegister_ЗапасыНаСкладах/Balance"
+             f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1",
+             "КоличествоБаланс"),
+            (f"odata/standard.odata/AccumulationRegister_ТоварыНаСкладах/Balance"
+             f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1",
+             "КоличествоБаланс"),
+        ]
+        for path, qty_field in sources:
+            ok, data = await self._request("GET", path)
+            if ok and isinstance(data, dict):
+                total = sum(float(r.get(qty_field) or 0) for r in data.get("value", []))
+                if total > 0:
+                    return total
+        return 0.0
+
     async def set_stock(self, onec_id: str, quantity: float, price: float = 0.0,
-                         use_accounting: bool = True) -> bool:
+                         use_accounting: bool = True, replace: bool = False) -> bool:
         """Post initial stock quantity to 1C.
 
+        replace=True         → compute delta vs current balance; post only the difference
         use_accounting=True  → try with debit/credit accounts first, fallback to no-accounting
         use_accounting=False → skip accounting journal entirely (ФормироватьПроводки=false)
 
@@ -964,6 +1078,30 @@ class OneCClient:
         3. Document_ОприходованиеТоваров / Document_ПоступлениеТоваровУслуг fallback
         Unposted documents are kept as drafts (not deleted) so user can post manually.
         """
+        if quantity is None or quantity < 0:
+            return False
+
+        # ── replace mode: compute delta vs current 1C balance ──────────────────────
+        if replace:
+            current_qty = await self._get_product_stock_qty(onec_id)
+            delta = round(quantity - current_qty, 6)
+            logger.info(f"1C set_stock replace: onec_id={onec_id} "
+                        f"new={quantity} current={current_qty} delta={delta}")
+            if abs(delta) < 0.001:
+                return True  # already correct, nothing to post
+            if delta < 0:
+                # Write-off: try Document_СписаниеЗапасов first, fallback to IR overwrite
+                written_off = await self._write_off_stock(onec_id, abs(delta), price, use_accounting)
+                if written_off:
+                    return True
+                # Fallback: overwrite IR directly with absolute new value (no delta document)
+                logger.warning(f"1C write-off failed, overwriting IR directly qty={quantity}")
+                # fall through with original quantity but skip document path below
+                quantity = quantity  # keep absolute qty for IR write
+                replace = False      # don't recurse
+            else:
+                quantity = delta  # post only the positive delta as receipt
+
         if not quantity or quantity <= 0:
             return False
         onec_id = str(onec_id).strip("{}")

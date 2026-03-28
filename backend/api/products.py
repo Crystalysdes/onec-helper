@@ -303,9 +303,13 @@ async def _push_to_onec_bg(
                     await client.set_price(clean_id, float(snap.price), price_type_name="розн")
                 if snap.purchase_price is not None and snap.purchase_price > 0:
                     await client.set_price(clean_id, float(snap.purchase_price), price_type_name="закуп")
-                if snap.quantity is not None and snap.quantity > 0:
-                    st_ok = await client.set_stock(clean_id, float(snap.quantity), float(snap.price or 0), use_accounting=use_accounting)
-                    logger.info(f"[1C bg] set_stock ok={st_ok} qty={snap.quantity}")
+                if snap.quantity is not None and snap.quantity >= 0:
+                    st_ok = await client.set_stock(
+                        clean_id, float(snap.quantity), float(snap.price or 0),
+                        use_accounting=use_accounting,
+                        replace=bool(snap.onec_id),  # replace when updating existing product
+                    )
+                    logger.info(f"[1C bg] set_stock ok={st_ok} qty={snap.quantity} replace={bool(snap.onec_id)}")
                 # Save onec_id + synced_at back to DB
                 await db.execute(
                     sa_update(ProductCache)
