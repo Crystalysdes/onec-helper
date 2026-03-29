@@ -561,11 +561,36 @@ export default function Settings() {
                     <Users size={15} style={{ color: 'var(--tg-theme-button-color)' }} />
                     <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Реферальная программа</p>
                   </div>
-                  <p className="text-xs leading-snug" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Пригласите друга — он получит 7 дней пробного периода. Когда он оплатит подписку, вы получите <b style={{ color: 'var(--tg-theme-text-color)' }}>скидку 20%</b> на следующий месяц.
-                  </p>
+
+                  {/* 2-level reward info */}
+                  <div className="rounded-xl p-3 flex flex-col gap-1.5"
+                    style={{ background: 'rgba(99,102,241,0.07)' }}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🎁</span>
+                      <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                        Уровень 1: +20% скидка
+                      </p>
+                    </div>
+                    <p className="text-[11px] leading-snug pl-6" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Ваш реферал оплатил подписку → вы получаете скидку 20% на следующую оплату
+                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-base">🌟</span>
+                      <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                        Уровень 2: +10% скидка
+                      </p>
+                    </div>
+                    <p className="text-[11px] leading-snug pl-6" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Реферал вашего реферала оплатил → вы тоже получаете скидку 10%
+                    </p>
+                    <p className="text-[11px] pl-6 mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Скидки суммируются, максимум 50%
+                    </p>
+                  </div>
+
+                  {/* Referral link */}
                   <div className="flex gap-2">
-                    <div className="flex-1 px-3 py-2.5 rounded-xl text-xs font-mono"
+                    <div className="flex-1 px-3 py-2.5 rounded-xl text-xs font-mono truncate"
                       style={{ background: 'var(--tg-theme-bg-color)', color: 'var(--tg-theme-text-color)' }}>
                       {referral.link || referral.code}
                     </div>
@@ -576,16 +601,56 @@ export default function Settings() {
                       {copied ? <Check size={15} color="white" /> : <Copy size={15} color="white" />}
                     </button>
                   </div>
-                  <div className="flex gap-4">
-                    <div className="text-center flex-1">
-                      <p className="text-lg font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{referral.total_referrals}</p>
+
+                  {/* Stats row */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-xl py-2 text-center" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                      <p className="text-base font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{referral.total_referrals}</p>
                       <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Приглашено</p>
                     </div>
-                    <div className="text-center flex-1">
-                      <p className="text-lg font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{referral.successful_referrals}</p>
+                    <div className="rounded-xl py-2 text-center" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                      <p className="text-base font-bold" style={{ color: '#22c55e' }}>{referral.successful_referrals}</p>
                       <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Оплатили</p>
                     </div>
+                    <div className="rounded-xl py-2 text-center" style={{ background: 'var(--tg-theme-bg-color)' }}>
+                      <p className="text-base font-bold" style={{ color: '#f59e0b' }}>{referral.level2_earned ?? 0}</p>
+                      <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Ур.2 оплатили</p>
+                    </div>
                   </div>
+
+                  {/* Referees list */}
+                  {referral.referees?.length > 0 && (
+                    <div className="flex flex-col gap-1.5">
+                      <p className="text-[11px] font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        МОИ РЕФЕРАЛЫ
+                      </p>
+                      {referral.referees.map((r, i) => (
+                        <div key={i} className="flex items-center gap-2 py-2 px-3 rounded-xl"
+                          style={{ background: 'var(--tg-theme-bg-color)' }}>
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                            style={{ background: r.paid ? '#22c55e' : 'rgba(107,114,128,0.4)' }}>
+                            {(r.name?.[0] || '?').toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
+                              {r.name}{r.username ? ` @${r.username}` : ''}
+                            </p>
+                            <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                              {r.joined_at ? new Date(r.joined_at).toLocaleDateString('ru-RU') : ''}
+                              {r.level2_referrals > 0 ? ` · ${r.level2_referrals} реф. ур.2` : ''}
+                            </p>
+                          </div>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                            style={{
+                              background: r.paid ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.12)',
+                              color: r.paid ? '#22c55e' : '#9ca3af',
+                            }}>
+                            {r.paid ? '✓ +20%' : 'Ожидает'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Apply referral */}
                   <div>

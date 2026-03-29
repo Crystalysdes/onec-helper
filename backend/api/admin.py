@@ -12,6 +12,7 @@ from backend.database.connection import get_db
 from backend.database.models import (
     User, Store, Integration, ProductCache, Log,
     Subscription, Payment, SubscriptionStatus, GlobalProduct,
+    ReferralCode, ReferralUse,
 )
 from backend.core.security import get_current_admin
 from backend.services import catalog_import as _ci
@@ -74,6 +75,8 @@ async def list_all_users(
         stores_count = (await db.execute(
             select(func.count(Store.id)).where(Store.owner_id == u.id)
         )).scalar()
+        ref_result = await db.execute(select(ReferralCode).where(ReferralCode.user_id == u.id))
+        ref = ref_result.scalar_one_or_none()
         data.append({
             "id": str(u.id),
             "telegram_id": u.telegram_id,
@@ -84,6 +87,9 @@ async def list_all_users(
             "stores_count": stores_count,
             "created_at": u.created_at,
             "subscription": _sub_dict(sub),
+            "total_referrals": ref.total_referrals if ref else 0,
+            "successful_referrals": ref.successful_referrals if ref else 0,
+            "referral_code": ref.code if ref else None,
         })
     return data
 
@@ -102,6 +108,28 @@ async def get_user_detail(
     stores_result = await db.execute(select(Store).where(Store.owner_id == user_id))
     stores = stores_result.scalars().all()
 
+    ref_result = await db.execute(select(ReferralCode).where(ReferralCode.user_id == user_id))
+    ref = ref_result.scalar_one_or_none()
+
+    referees = []
+    if ref:
+        uses_result = await db.execute(
+            select(ReferralUse, User)
+            .join(User, User.id == ReferralUse.referee_id)
+            .where(ReferralUse.referrer_id == user_id)
+            .order_by(ReferralUse.created_at.desc())
+        )
+        for use, u in uses_result.all():
+            referees.append({
+                "name": u.telegram_first_name or u.telegram_username or f"ID {u.telegram_id}",
+                "username": u.telegram_username,
+                "paid": use.discount_granted,
+                "joined_at": use.created_at.isoformat() if use.created_at else None,
+            })
+
+    sub_result = await db.execute(select(Subscription).where(Subscription.user_id == user_id))
+    sub = sub_result.scalar_one_or_none()
+
     return {
         "id": str(user.id),
         "telegram_id": user.telegram_id,
@@ -111,6 +139,11 @@ async def get_user_detail(
         "is_active": user.is_active,
         "is_admin": user.is_admin,
         "created_at": user.created_at,
+        "subscription": _sub_dict(sub),
+        "total_referrals": ref.total_referrals if ref else 0,
+        "successful_referrals": ref.successful_referrals if ref else 0,
+        "referral_code": ref.code if ref else None,
+        "referees": referees,
         "stores": [
             {"id": str(s.id), "name": s.name, "is_active": s.is_active}
             for s in stores

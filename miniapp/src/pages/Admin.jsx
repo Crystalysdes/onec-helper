@@ -577,7 +577,8 @@ export default function Admin() {
             </div>
           ) : (
             users.map((u) => (
-              <div key={u.id} className="card flex items-center gap-3">
+              <div key={u.id} className="card flex items-center gap-3 cursor-pointer active:opacity-80"
+                onClick={() => openUser(u.id)}>
                 <div
                   className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0"
                   style={{ background: u.is_active ? 'var(--tg-theme-button-color)' : '#9ca3af' }}
@@ -597,11 +598,12 @@ export default function Admin() {
                     {u.subscription?.days_left != null && u.subscription.is_active
                       ? ` • ${u.subscription.days_left} дн.`
                       : ''}
+                    {u.total_referrals > 0 ? ` • 👥 ${u.total_referrals}` : ''}
                   </p>
                 </div>
                 <button
                   className="flex-shrink-0 active:opacity-60 transition-opacity"
-                  onClick={() => toggleUser(u.id)}
+                  onClick={(e) => { e.stopPropagation(); toggleUser(u.id) }}
                   disabled={u.is_admin}
                 >
                   {u.is_active ? (
@@ -869,6 +871,72 @@ export default function Admin() {
                     </div>
                   ))}
                 </div>
+
+                {/* Subscription info */}
+                {userModal.subscription && userModal.subscription.status !== 'none' && (
+                  <div className="card py-2.5 px-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>Подписка</p>
+                      <SubStatusBadge sub={userModal.subscription} />
+                    </div>
+                    {userModal.subscription.current_period_end && (
+                      <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        до {new Date(userModal.subscription.current_period_end).toLocaleDateString('ru-RU')}
+                      </p>
+                    )}
+                    {userModal.subscription.next_discount_percent > 0 && (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+                        -{userModal.subscription.next_discount_percent}%
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Referral stats */}
+                {(userModal.total_referrals > 0 || userModal.referral_code) && (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>РЕФЕРАЛЫ</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="card py-2 text-center">
+                        <p className="text-base font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{userModal.total_referrals}</p>
+                        <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Приглашено</p>
+                      </div>
+                      <div className="card py-2 text-center">
+                        <p className="text-base font-bold" style={{ color: '#22c55e' }}>{userModal.successful_referrals}</p>
+                        <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Оплатили</p>
+                      </div>
+                      <div className="card py-2 text-center">
+                        <p className="text-xs font-mono font-bold truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{userModal.referral_code || '—'}</p>
+                        <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Код</p>
+                      </div>
+                    </div>
+                    {userModal.referees?.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        {userModal.referees.map((r, i) => (
+                          <div key={i} className="card py-2 px-3 flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
+                              style={{ background: r.paid ? '#22c55e' : '#9ca3af' }}>
+                              {(r.name?.[0] || '?').toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
+                                {r.name}{r.username ? ` @${r.username}` : ''}
+                              </p>
+                            </div>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                              style={{
+                                background: r.paid ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.12)',
+                                color: r.paid ? '#22c55e' : '#9ca3af',
+                              }}>
+                              {r.paid ? '✓ оплатил' : 'ожидает'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {userModal.stores?.length > 0 && (
                   <div className="flex flex-col gap-2">
