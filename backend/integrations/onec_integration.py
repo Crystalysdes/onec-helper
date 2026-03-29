@@ -63,9 +63,8 @@ class OneCClient:
             # Check that required entities are published
             entity_names = {e.get("name", "") for e in entities}
             _REQUIRED = [
-                ("Catalog_Номенклатура",                    "Номенклатура"),
-                ("InformationRegister_ЦеныНоменклатуры",   "Цены номенклатуры"),
-                ("Document_УстановкаЦенНоменклатуры",      "Установка цен номенклатуры"),
+                ("Catalog_Номенклатура",                  "Номенклатура"),
+                ("InformationRegister_ЦеныНоменклатуры", "Цены номенклатуры"),
             ]
             missing = [label for name, label in _REQUIRED if name not in entity_names]
             if missing:
