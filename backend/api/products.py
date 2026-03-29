@@ -800,8 +800,30 @@ async def upload_invoice(
                     p["category"] = gp.category
                 continue
 
-        # 3. Match by exact name (case-insensitive) in store products
-        if name:
+        # 3. Match by article in store products
+        article = (p.get("article") or "").strip()
+        if article and not p.get("_matched"):
+            r = await db.execute(
+                select(ProductCache).where(
+                    ProductCache.store_id == store_id_uuid,
+                    ProductCache.article == article,
+                    ProductCache.is_active == True,
+                )
+            )
+            existing = r.scalar_one_or_none()
+            if existing:
+                p["_matched"] = True
+                p["_existing_id"] = str(existing.id)
+                if not p.get("barcode") and existing.barcode:
+                    p["barcode"] = existing.barcode
+                if not p.get("price") and existing.price:
+                    p["price"] = float(existing.price)
+                if not p.get("category") and existing.category:
+                    p["category"] = existing.category
+                continue
+
+        # 4. Match by exact name (case-insensitive) in store products
+        if name and not p.get("_matched"):
             r = await db.execute(
                 select(ProductCache).where(
                     ProductCache.store_id == store_id_uuid,
@@ -862,6 +884,27 @@ async def save_invoice_products(
                 product = r.scalar_one_or_none()
             except Exception:
                 product = None
+
+        if not product:
+            # Fallback dedup: check by article then by name before creating
+            if p.article and p.article.strip():
+                r = await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.store_id == store_id_uuid,
+                        ProductCache.article == p.article.strip(),
+                        ProductCache.is_active == True,
+                    )
+                )
+                product = r.scalar_one_or_none()
+            if not product and p.name and p.name.strip():
+                r = await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.store_id == store_id_uuid,
+                        _func.lower(ProductCache.name) == p.name.strip().lower(),
+                        ProductCache.is_active == True,
+                    )
+                )
+                product = r.scalar_one_or_none()
 
         if product:
             # Update existing: add quantity, update purchase_price, fill missing fields

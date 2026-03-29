@@ -554,7 +554,21 @@ class OneCClient:
         q = urllib.parse.quote(name.replace("'", "''"))
         ok, data = await self._request(
             "GET",
-            f"odata/standard.odata/Catalog_Номенклатура?$format=json&$filter=Description eq '{q}'&$select=Ref_Key&$top=1"
+            f"odata/standard.odata/Catalog_Номенклатура?$format=json&$filter=Description eq '{q}' and DeletionMark eq false&$select=Ref_Key&$top=1"
+        )
+        if ok and isinstance(data, dict):
+            items = data.get("value", [])
+            if items:
+                return str(items[0].get("Ref_Key", "")).strip("{}")
+        return None
+
+    async def find_product_by_article(self, article: str) -> Optional[str]:
+        """Search 1C Catalog_Номенклатура by Артикул, return Ref_Key GUID or None."""
+        import urllib.parse
+        q = urllib.parse.quote(article.replace("'", "''"))
+        ok, data = await self._request(
+            "GET",
+            f"odata/standard.odata/Catalog_Номенклатура?$format=json&$filter=Артикул eq '{q}' and DeletionMark eq false&$select=Ref_Key&$top=1"
         )
         if ok and isinstance(data, dict):
             items = data.get("value", [])
@@ -563,11 +577,23 @@ class OneCClient:
         return None
 
     async def create_product(self, product) -> Tuple[bool, Optional[dict]]:
-        """Create a new product (nomenclature) in 1C."""
-        payload = {
-            "Description": product.name,
-            "Артикул": product.article or "",
-        }
+        """Create a new product (nomenclature) in 1C, reusing existing if found by article or name."""
+        article = (getattr(product, "article", None) or "").strip()
+        name = (getattr(product, "name", None) or "").strip()
+
+        if article:
+            existing_id = await self.find_product_by_article(article)
+            if existing_id:
+                logger.info(f"[1C] create_product: reusing existing by article={article}, id={existing_id}")
+                return True, {"Ref_Key": existing_id}
+
+        if name:
+            existing_id = await self.find_product_by_name(name)
+            if existing_id:
+                logger.info(f"[1C] create_product: reusing existing by name, id={existing_id}")
+                return True, {"Ref_Key": existing_id}
+
+        payload = {"Description": name, "Артикул": article}
         category = getattr(product, "category", None)
         if category:
             parent_key = await self.get_or_create_category(category)
