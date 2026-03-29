@@ -64,12 +64,14 @@ export default function Products() {
   const handleBulkDelete = async () => {
     if (selected.size === 0) return
     const doDelete = async () => {
+      if (deleting) return
       setDeleting(true)
       try {
-        const res = await productsAPI.bulkDelete([...selected])
+        const ids = [...selected]
+        const res = await productsAPI.bulkDelete(ids)
         toast.success(`Удалено ${res.data.deleted} товаров`)
         exitSelectMode()
-        load(true)
+        load(1)
       } catch {
         toast.error('Ошибка удаления')
       } finally {
