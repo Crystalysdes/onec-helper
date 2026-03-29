@@ -999,14 +999,16 @@ class OneCClient:
                         key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
                     elif _GUID_PAT.match(str(v).strip("{}")):
                         key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
+                        type_val = ir_rec.get(k + "_Type")
+                        if type_val:
+                            key_parts.append(f"{k}_Type='{type_val}'")
                     else:
                         key_parts.append(f"{k}='{v}'")
                 logger.debug(f"1C write-off IR key_parts: {key_parts}")
                 if key_parts:
                     put_payload = {k: v for k, v in ir_rec.items()
                                    if "@" not in k
-                                   and k not in ("odata.metadata", "odata.type", "odata.etag")
-                                   and not k.endswith("_Type")}
+                                   and k not in ("odata.metadata", "odata.type", "odata.etag")}
                     put_payload["Количество"] = float(new_absolute_qty)
                     put_payload["Стоимость"] = round(new_absolute_qty * float(price or 0), 2)
                     ok_put, resp_put = await self._request(
@@ -1382,8 +1384,12 @@ class OneCClient:
                     key_parts.append(f"{k}=guid'{str(v).strip('{}')}' ")
                 elif _GUID_PAT.match(str(v).strip("{}")):
                     key_parts.append(f"{k}=guid'{str(v).strip('{}')}'")
+                    type_val = ir_rec.get(k + "_Type")
+                    if type_val:
+                        key_parts.append(f"{k}_Type='{type_val}'")
                 else:
                     key_parts.append(f"{k}='{v}'")
+
             if key_parts:
                 ok_put, resp_put = await self._request(
                     "PUT",
