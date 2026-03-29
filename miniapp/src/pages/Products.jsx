@@ -63,17 +63,24 @@ export default function Products() {
 
   const handleBulkDelete = async () => {
     if (selected.size === 0) return
-    if (!window.confirm(`Удалить ${selected.size} товар(ов)? Это действие необратимо.`)) return
-    setDeleting(true)
-    try {
-      const res = await productsAPI.bulkDelete([...selected])
-      toast.success(`Удалено ${res.data.deleted} товаров`)
-      exitSelectMode()
-      load(true)
-    } catch {
-      toast.error('Ошибка удаления')
-    } finally {
-      setDeleting(false)
+    const doDelete = async () => {
+      setDeleting(true)
+      try {
+        const res = await productsAPI.bulkDelete([...selected])
+        toast.success(`Удалено ${res.data.deleted} товаров`)
+        exitSelectMode()
+        load(true)
+      } catch {
+        toast.error('Ошибка удаления')
+      } finally {
+        setDeleting(false)
+      }
+    }
+    const tg = window.Telegram?.WebApp
+    if (tg?.showConfirm) {
+      tg.showConfirm(`Удалить ${selected.size} товар(ов)?`, (ok) => { if (ok) doDelete() })
+    } else {
+      doDelete()
     }
   }
 

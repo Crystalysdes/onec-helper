@@ -940,6 +940,10 @@ async def save_invoice_products(
                     logger.warning(f"1C sync failed for {product.name}: {e}")
 
     await db.commit()
+
+    for product in saved:
+        await _upsert_global_product(db, product)
+
     return {"saved": len(saved), "products": [_serialize_product(p) for p in saved]}
 
 
