@@ -1023,14 +1023,13 @@ class OneCClient:
                         return True
             # No existing IR record — POST with absolute qty
             ir_post = {
-                "Период": period,
                 "Номенклатура_Key": clean,
                 "Характеристика_Key": _zero,
                 "Количество": float(new_absolute_qty),
                 "Стоимость": round(new_absolute_qty * float(price or 0), 2),
             }
             if wh_key:
-                ir_post["СтруктурнаяЕдиница_Key"] = wh_key
+                ir_post["СтруктурнаяЕдиница"] = wh_key
             ok_irp, resp_irp = await self._request(
                 "POST", "odata/standard.odata/InformationRegister_ОстаткиТоваров", json=ir_post
             )
@@ -1392,24 +1391,23 @@ class OneCClient:
 
             if key_parts:
                 ok_put, resp_put = await self._request(
-                    "PUT",
+                    "PATCH",
                     f"odata/standard.odata/InformationRegister_ОстаткиТоваров({','.join(p.strip() for p in key_parts)})",
-                    json={k: v for k, v in _build_ir_payload(ir_rec).items()}
+                    json={"Количество": float(quantity), "Стоимость": round(quantity * float(price or 0), 2)}
                 )
                 if ok_put:
-                    logger.info(f"1C stock set via PUT InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
+                    logger.info(f"1C stock set via PATCH InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
                     ir_ok = True
                     # Don't return yet — also try document posting for full 1C AR update
                 else:
-                    logger.warning(f"1C InformationRegister_ОстаткиТоваров PUT failed: {str(resp_put)[:200]}")
+                    logger.warning(f"1C InformationRegister_ОстаткиТоваров PATCH failed: {str(resp_put)[:200]}")
 
         # No existing record OR PUT failed → try POST (create new record)
         # Use template if available; fall back to minimal payload when register is empty
         ir_template = ir_rec or schema  # may be {} (falsy) for a fresh/empty register
         ir_payload = _build_ir_payload(ir_template) if ir_template else {
-            "Период": period,          # required dimension for periodic registers
             "Номенклатура_Key": onec_id,
-            "Характеристика_Key": _zero,  # required composite key field
+            "Характеристика_Key": _zero,
             "Количество": float(quantity),
             "Стоимость": summa,
         }
