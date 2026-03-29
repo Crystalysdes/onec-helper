@@ -297,38 +297,82 @@ class OneCClient:
             price_type_key = await self._get_or_fetch_price_type_key()
         vid_key = price_type_key or _zero
 
-        # ── 1. Document_УстановкаЦенНоменклатуры (tabular section = Запасы)
+        # ── 1. Document_УстановкаЦенНоменклатуры
         org_key = await self._get_org_key()
         row = {"LineNumber": 1, "Номенклатура_Key": onec_id, "Цена": price,
                "Характеристика_Key": _zero, "ВидЦены_Key": vid_key}
-        doc = {"Date": period, "ВидЦены_Key": vid_key,
-                "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
-                "Комментарий": "Авто из 1С Хелпер",
-                "Запасы": [row]}
+        doc_base = {"Date": period, "ВидЦены_Key": vid_key,
+                    "ЗаписыватьНовыеЦеныПоверхУстановленных": True,
+                    "Комментарий": "Авто из 1С Хелпер"}
         if org_key:
-            doc["Организация_Key"] = org_key
-        ok, resp = await self._request(
-            "POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc
-        )
-        if ok and isinstance(resp, dict):
-            ref_key = str(resp.get("Ref_Key", "")).strip("{}")
-            if ref_key:
-                # Conduct via (guid)/Post
-                ok2, resp2 = await self._request(
-                    "POST",
-                    f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{ref_key}')/Post"
+            doc_base["Организация_Key"] = org_key
+
+        # Try multiple tabular section names; detect the correct one by checking the response
+        _tabular_names = [
+            getattr(self, "_price_doc_tabular", None),  # cached correct name first
+            "Запасы", "Товары", "Номенклатура", "ТоварыУслуги",
+        ]
+        doc_ref_key = None      # ref of confirmed-correct document
+        used_tabular = None     # confirmed correct tabular section name
+        fallback_ref = None     # first accepted doc (unknown if correct) — last resort
+        fallback_tab = None
+        for tab_name in _tabular_names:
+            if not tab_name:
+                continue
+            doc = {**doc_base, tab_name: [row]}
+            ok, resp = await self._request(
+                "POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc
+            )
+            if ok and isinstance(resp, dict) and resp.get("Ref_Key"):
+                rk = str(resp["Ref_Key"]).strip("{}")
+                rows_in_resp = resp.get(tab_name, [])
+                if rows_in_resp:  # server echoed back our rows → correct section name
+                    self._price_doc_tabular = tab_name
+                    used_tabular = tab_name
+                    doc_ref_key = rk
+                    logger.debug(f"1C price doc tabular section '{tab_name}' confirmed")
+                    # Delete any previously created hollow docs
+                    if fallback_ref:
+                        await self._request(
+                            "DELETE",
+                            f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{fallback_ref}')"
+                        )
+                        fallback_ref = None
+                    break
+                else:
+                    # Hollow doc accepted — keep as last resort, delete if a better one found later
+                    if fallback_ref is None:
+                        fallback_ref = rk
+                        fallback_tab = tab_name
+                    else:
+                        # Discard this extra hollow doc
+                        await self._request(
+                            "DELETE",
+                            f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{rk}')"
+                        )
+
+        # If no confirmed-correct doc found, use the first hollow doc as last resort
+        if doc_ref_key is None and fallback_ref:
+            doc_ref_key = fallback_ref
+            used_tabular = fallback_tab
+            logger.warning(f"1C set_price: using hollow doc fallback tabular='{fallback_tab}'")
+
+        if doc_ref_key:
+            ok2, resp2 = await self._request(
+                "POST",
+                f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{doc_ref_key}')/Post"
+            )
+            if ok2:
+                logger.info(f"1C price Document posted [{used_tabular}]: {onec_id} → {price}")
+                await self._request(
+                    "PATCH",
+                    f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{doc_ref_key}')",
+                    json={"ПометкаУдаления": True}
                 )
-                if ok2:
-                    logger.info(f"1C price Document posted: {onec_id} → {price}")
-                    # Mark for deletion so it doesn’t clutter the 1C journal
-                    await self._request(
-                        "PATCH",
-                        f"odata/standard.odata/Document_УстановкаЦенНоменклатуры(guid'{ref_key}')",
-                        json={"ПометкаУдаления": True}
-                    )
-                    return True
-                logger.warning(f"1C price Document Post failed for {ref_key}: {resp2}")
-        logger.warning(f"1C price Document_УстановкаЦен/Запасы failed: {resp}")
+                return True
+            logger.warning(f"1C price Document Post/conduct failed for {doc_ref_key}: {resp2}")
+        else:
+            logger.warning(f"1C price Document_УстановкаЦен: all tabular section names failed")
 
         # ── 2. InformationRegister fallback
         period0 = "0001-01-01T00:00:00"
