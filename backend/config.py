@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4-6"
     OPENROUTER_FAST_MODEL: str = "anthropic/claude-haiku-4-5"
     OPENROUTER_VISION_MODEL: str = "google/gemini-flash-1.5-8b"
+    OPENROUTER_INVOICE_MODEL: str = "anthropic/claude-opus-4-5"
     CLAUDE_MODEL: str = "claude-3-5-sonnet-20241022"
 
     # MiniApp

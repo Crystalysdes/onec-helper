@@ -24,7 +24,7 @@ class AIService:
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1",
                 default_headers={"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
-                timeout=40.0,
+                timeout=90.0,
             )
             self._model = settings.OPENROUTER_MODEL
             self._fast_model = settings.OPENROUTER_FAST_MODEL
@@ -35,7 +35,7 @@ class AIService:
             self._mode = "anthropic"
             self._client = anthropic.AsyncAnthropic(
                 api_key=settings.ANTHROPIC_API_KEY,
-                timeout=40.0,
+                timeout=90.0,
             )
             self._fast_model = settings.CLAUDE_MODEL
             self._vision_model = settings.CLAUDE_MODEL
@@ -59,6 +59,19 @@ class AIService:
         if system:
             kwargs["system"] = system
         r = await self._client.messages.create(**kwargs)
+        return r.content[0].text.strip()
+
+    async def _call_invoice(self, messages: list, max_tokens: int = 8192) -> str:
+        """Call dedicated Claude Opus 4 model for invoice parsing."""
+        model = settings.OPENROUTER_INVOICE_MODEL if self._mode == "openai" else settings.CLAUDE_MODEL
+        if self._mode == "openai":
+            r = await self._client.chat.completions.create(
+                model=model, max_tokens=max_tokens, messages=messages
+            )
+            return r.choices[0].message.content.strip()
+        r = await self._client.messages.create(
+            model=model, max_tokens=max_tokens, messages=messages
+        )
         return r.content[0].text.strip()
 
     async def parse_invoice(self, ocr_text: str) -> List[dict]:
@@ -103,33 +116,147 @@ class AIService:
             logger.error(f"AI invoice parse error: {e}")
             return []
 
+    async def _extract_invoice_header(self, first_image_bytes: bytes) -> dict:
+        """Pass 1: Extract column structure and document info from first invoice photo."""
+        b64 = base64.standard_b64encode(first_image_bytes).decode()
+        prompt = """Ты анализируешь первое фото товарной накладной.
+
+Найди ШАПКУ ТАБЛИЦЫ — строку (или две строки) с названиями колонок.
+Определи структуру таблицы и реквизиты документа.
+
+Верни ТОЛЬКО JSON без пояснений:
+{
+  "columns": ["название колонки 0", "название колонки 1", "..."],
+  "col_name": 0,
+  "col_article": null,
+  "col_unit": null,
+  "col_qty": null,
+  "col_purchase_price": null,
+  "col_price": null,
+  "col_barcode": null,
+  "supplier": null,
+  "doc_number": null,
+  "doc_date": null,
+  "doc_type": null
+}
+
+Правила определения индексов:
+- col_name: колонка "Наименование" / "Товар" / "Название" — ОБЯЗАТЕЛЬНО (0-based индекс)
+- col_article: колонка "Артикул" / "Код" / "Арт." — или null
+- col_unit: колонка "Ед." / "Ед.изм." / "Единица" — или null
+- col_qty: колонка "Кол-во" / "Количество" — или null
+- col_purchase_price: колонка "Цена без НДС" / "Цена" / "Закупочная" — ПЕРВАЯ/единственная колонка с ценой
+- col_price: колонка розничной цены продажи — только если явно "Розничная" / "Цена продажи" — или null
+- col_barcode: колонка "Штрих-код" / "Баркод" / "EAN" — или null
+- supplier: название организации-поставщика из шапки документа
+- doc_number: номер накладной/документа
+- doc_date: дата документа
+- doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / Чек
+
+Если шапку таблицы не видно — верни {"columns": [], "col_name": 0}"""
+
+        content = [self._img_block(b64), {"type": "text", "text": prompt}]
+        messages = [{"role": "user", "content": content}]
+        try:
+            result = await self._call_invoice(messages, max_tokens=1024)
+            header = json.loads(_strip_json(result))
+            logger.info(f"Invoice header extracted: cols={header.get('columns')}, "
+                        f"supplier={header.get('supplier')}, doc={header.get('doc_number')}")
+            return header
+        except Exception as e:
+            logger.warning(f"Header extraction failed ({e}), proceeding without column context")
+            return {"columns": [], "col_name": 0}
+
+    def _build_column_context(self, header: dict) -> str:
+        """Build human-readable column mapping for the parsing prompt."""
+        columns = header.get("columns") or []
+        if not columns:
+            return "Структура колонок неизвестна — определяй поля товара самостоятельно по контексту."
+
+        field_map = [
+            ("col_name",           "name            (название товара, ОБЯЗАТЕЛЬНО)"),
+            ("col_article",        "article          (артикул/код)"),
+            ("col_unit",           "unit             (единица измерения)"),
+            ("col_qty",            "quantity         (количество)"),
+            ("col_purchase_price", "purchase_price   (закупочная цена)"),
+            ("col_price",          "price            (розничная цена продажи)"),
+            ("col_barcode",        "barcode          (штрих-код EAN)"),
+        ]
+        cols_str = "  ".join(f"{i}:{c}" for i, c in enumerate(columns))
+        lines = [f"Колонки (слева→право): {cols_str}", "Маппинг:"]
+        for key, desc in field_map:
+            idx = header.get(key)
+            if idx is not None and isinstance(idx, int) and idx < len(columns):
+                lines.append(f"  [{idx}] «{columns[idx]}» → {desc}")
+        ignored = [
+            i for i in range(len(columns))
+            if i not in [header.get(k) for k in [fm[0] for fm in field_map]]
+        ]
+        if ignored:
+            ign_names = ", ".join(f"{i}:{columns[i]}" for i in ignored)
+            lines.append(f"  Игнорировать колонки: {ign_names}")
+        return "\n".join(lines)
+
     async def parse_invoice_from_images(self, images_bytes: List[bytes]) -> List[dict]:
-        """Parse invoice from one or more images in a single AI call (vision)."""
+        """
+        Smart 2-pass invoice parsing using Claude Opus 4.
+
+        Pass 1 (first photo only): extract column header structure — which column
+                                   is the name, quantity, price, etc.
+        Pass 2 (all photos):       parse every product row using the column mapping
+                                   so data is correctly mapped even on photos where
+                                   the column header row is no longer visible.
+        """
+        if not images_bytes:
+            return []
+
         multi = len(images_bytes) > 1
-        intro = (
-            "На изображениях — части одной накладной (несколько фотографий одного документа)."
-            if multi else
-            "На изображении — товарная накладная, счёт-фактура или товарный чек."
-        )
-        dedup_rule = (
-            "Не дублируй товары: если фото перекрываются, считай каждый товар ОДИН раз."
-            if multi else
-            "Включи каждую строку товара строго один раз."
-        )
-        prompt = f"""Ты — профессиональная система распознавания товарных накладных.
-{intro}
-Извлеки ПОЛНЫЙ список товаров. Точность критически важна — не пропускай ни одной строки.
 
-Правила:
-1. {dedup_rule}
-2. Нормализуй названия: правильный регистр, убери лишние коды и мусорные символы
-3. Если одна колонка цен — это закупочная цена (purchase_price)
-4. Игнорируй: итого, НДС, скидки, заголовки колонок, реквизиты поставщика, пустые строки
-5. barcode — только цифры EAN (8-13 знаков), иначе null
-6. unit: шт/кг/г/л/мл/упак/пара/м/рулон — по умолчанию "шт"
+        # ── Pass 1: extract header from first photo ──────────────────────
+        logger.info(f"Invoice Pass 1: extracting header from first of {len(images_bytes)} photo(s)")
+        header = await self._extract_invoice_header(images_bytes[0])
+        col_context = self._build_column_context(header)
 
-Верни ТОЛЬКО JSON массив без текста до или после:
-[{{"name":"Название","article":null,"barcode":null,"quantity":1,"unit":"шт","purchase_price":100.50,"price":null,"category":null}}]
+        # ── Build meta hints ─────────────────────────────────────────────
+        meta = ""
+        if header.get("supplier"):
+            meta += f"Поставщик: {header['supplier']}. "
+        if header.get("doc_type"):
+            meta += f"Тип: {header['doc_type']}. "
+        if header.get("doc_number"):
+            meta += f"№{header['doc_number']}. "
+        if header.get("doc_date"):
+            meta += f"Дата: {header['doc_date']}."
+
+        # ── Pass 2: parse all photos with column context ──────────────────
+        logger.info("Invoice Pass 2: parsing all photos with column context")
+
+        multi_note = (
+            "Накладная СФОТОГРАФИРОВАНА СВЕРХУ ВНИЗ несколькими фото.\n"
+            "Шапка таблицы (заголовки колонок) ВИДНА ТОЛЬКО НА ПЕРВОМ ФОТО.\n"
+            "На остальных фото шапки нет — колонки те же, используй маппинг ниже."
+        ) if multi else "На фото — товарная накладная, счёт-фактура или товарный чек."
+
+        prompt = f"""Ты — профессиональная система распознавания товарных накладных. {meta}
+{multi_note}
+
+СТРУКТУРА ТАБЛИЦЫ (применяй к КАЖДОЙ строке на КАЖДОМ фото):
+{col_context}
+
+ЗАДАЧА: извлечь ПОЛНЫЙ список товарных строк со всех фото.
+
+ПРАВИЛА:
+1. {'Каждый товар встречается только на одном фото — не дублируй.' if multi else 'Каждую строку товара включи ровно один раз.'}
+2. Применяй маппинг колонок к каждой строке, даже где шапка не видна
+3. ИГНОРИРУЙ строки: «Итого», «НДС», «Скидка», «Всего», суммарные строки, реквизиты, подписи, пустые строки
+4. barcode — только цифры EAN (8–13 знаков), иначе null
+5. Нормализуй названия: правильный регистр, убери лишние коды и мусорные символы из названия
+6. quantity — дробное число для кг/л, целое для шт; по умолчанию 1
+7. unit — шт/кг/г/л/мл/упак/пара/м/рулон; по умолчанию «шт»
+8. Если в документе только одна колонка цен → записывай в purchase_price
+
+Верни ТОЛЬКО JSON массив без текста до и после:
+[{{"name":"Название товара","article":null,"barcode":null,"quantity":1,"unit":"шт","purchase_price":100.50,"price":null,"category":null}}]
 
 Если товаров нет — верни []"""
 
@@ -142,13 +269,15 @@ class AIService:
         messages = [{"role": "user", "content": content}]
         result = None
         try:
-            result = await self._call(messages, max_tokens=8192)
-            return json.loads(_strip_json(result))
+            result = await self._call_invoice(messages, max_tokens=8192)
+            products = json.loads(_strip_json(result))
+            logger.info(f"Invoice parsed: {len(products)} products extracted")
+            return products
         except json.JSONDecodeError as e:
-            logger.error(f"AI multi-image invoice JSON error: {e}. Preview: {result[:300] if result else 'empty'}")
+            logger.error(f"Invoice JSON parse error: {e}. Preview: {result[:400] if result else 'empty'}")
             return []
         except Exception as e:
-            logger.error(f"AI multi-image invoice error: {e}")
+            logger.error(f"Invoice parse error: {e}")
             return []
 
     async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
