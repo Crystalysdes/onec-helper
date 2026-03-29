@@ -32,15 +32,19 @@ class AIService:
             logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}, vision={self._vision_model}")
         else:
             import anthropic
+            import httpx
             self._mode = "anthropic"
-            self._client = anthropic.AsyncAnthropic(
-                api_key=settings.ANTHROPIC_API_KEY,
-                timeout=90.0,
-            )
+            proxy_url = settings.ANTHROPIC_PROXY_URL.strip() if settings.ANTHROPIC_PROXY_URL else None
+            http_client = httpx.AsyncClient(proxy=proxy_url, timeout=90.0) if proxy_url else None
+            client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY, "timeout": 90.0}
+            if http_client:
+                client_kwargs["http_client"] = http_client
+            self._client = anthropic.AsyncAnthropic(**client_kwargs)
             self._fast_model = settings.CLAUDE_MODEL
             self._vision_model = settings.CLAUDE_MODEL
             self._model = settings.CLAUDE_MODEL
-            logger.info(f"AIService: Anthropic direct mode, model={self._model}")
+            proxy_info = f" via proxy={proxy_url}" if proxy_url else ""
+            logger.info(f"AIService: Anthropic direct mode, model={self._model}{proxy_info}")
 
     def _img_block(self, b64: str) -> dict:
         if self._mode == "openai":

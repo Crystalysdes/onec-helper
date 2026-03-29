@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     # AI
     ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_PROXY_URL: str = ""  # e.g. socks5://user:pass@host:port
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4-6"
     OPENROUTER_FAST_MODEL: str = "anthropic/claude-haiku-4-5"
