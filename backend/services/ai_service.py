@@ -103,6 +103,54 @@ class AIService:
             logger.error(f"AI invoice parse error: {e}")
             return []
 
+    async def parse_invoice_from_images(self, images_bytes: List[bytes]) -> List[dict]:
+        """Parse invoice from one or more images in a single AI call (vision)."""
+        multi = len(images_bytes) > 1
+        intro = (
+            "На изображениях — части одной накладной (несколько фотографий одного документа)."
+            if multi else
+            "На изображении — товарная накладная, счёт-фактура или товарный чек."
+        )
+        dedup_rule = (
+            "Не дублируй товары: если фото перекрываются, считай каждый товар ОДИН раз."
+            if multi else
+            "Включи каждую строку товара строго один раз."
+        )
+        prompt = f"""Ты — профессиональная система распознавания товарных накладных.
+{intro}
+Извлеки ПОЛНЫЙ список товаров. Точность критически важна — не пропускай ни одной строки.
+
+Правила:
+1. {dedup_rule}
+2. Нормализуй названия: правильный регистр, убери лишние коды и мусорные символы
+3. Если одна колонка цен — это закупочная цена (purchase_price)
+4. Игнорируй: итого, НДС, скидки, заголовки колонок, реквизиты поставщика, пустые строки
+5. barcode — только цифры EAN (8-13 знаков), иначе null
+6. unit: шт/кг/г/л/мл/упак/пара/м/рулон — по умолчанию "шт"
+
+Верни ТОЛЬКО JSON массив без текста до или после:
+[{{"name":"Название","article":null,"barcode":null,"quantity":1,"unit":"шт","purchase_price":100.50,"price":null,"category":null}}]
+
+Если товаров нет — верни []"""
+
+        content = []
+        for img_bytes in images_bytes:
+            b64 = base64.standard_b64encode(img_bytes).decode()
+            content.append(self._img_block(b64))
+        content.append({"type": "text", "text": prompt})
+
+        messages = [{"role": "user", "content": content}]
+        result = None
+        try:
+            result = await self._call(messages, max_tokens=8192)
+            return json.loads(_strip_json(result))
+        except json.JSONDecodeError as e:
+            logger.error(f"AI multi-image invoice JSON error: {e}. Preview: {result[:300] if result else 'empty'}")
+            return []
+        except Exception as e:
+            logger.error(f"AI multi-image invoice error: {e}")
+            return []
+
     async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
         """Parse invoice by sending image directly to Claude vision (when OCR is unavailable)."""
         base64_image = base64.standard_b64encode(image_bytes).decode("utf-8")

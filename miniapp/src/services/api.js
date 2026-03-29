@@ -84,7 +84,10 @@ export const productsAPI = {
   uploadInvoice: (formData) =>
     api.post('/products/upload-invoice', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
     }),
+  saveInvoice: (storeId, products, syncToOnec = false) =>
+    api.post(`/products/save-invoice?store_id=${storeId}&sync_to_onec=${syncToOnec}`, products),
   bulkCreate: (storeId, products, syncToOnec = false) =>
     api.post(`/products/bulk-create?store_id=${storeId}&sync_to_onec=${syncToOnec}`, products),
   checkBarcode: (barcode) =>

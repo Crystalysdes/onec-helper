@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
+from loguru import logger
+
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status
 from pydantic import BaseModel
@@ -694,52 +696,218 @@ async def recognize_photo(
     return {"recognized": product_data, "ocr_text": "", "source": "ai"}
 
 
+class InvoiceProductSave(BaseModel):
+    name: str
+    article: Optional[str] = None
+    barcode: Optional[str] = None
+    quantity: Optional[float] = 1.0
+    unit: Optional[str] = "шт"
+    purchase_price: Optional[float] = None
+    price: Optional[float] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    existing_id: Optional[str] = None  # if set, update existing product
+
+
 @router.post("/upload-invoice")
 async def upload_invoice(
     store_id: str = Form(...),
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     from backend.services.ai_service import AIService
     from backend.services.ocr_service import OCRService
+    from sqlalchemy import func as _func
 
     store_id_uuid = UUID(store_id)
     await _check_store_access(store_id_uuid, current_user, db)
 
-    contents = await file.read()
-    filename = f"{uuid.uuid4()}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
+    all_image_bytes: List[bytes] = []
+    combined_text_parts: List[str] = []
+    all_pdf = True
 
-    async with aiofiles.open(file_path, "wb") as f:
-        await f.write(contents)
-
-    ocr_service = OCRService()
-    content_type = file.content_type or "image/jpeg"
-    extracted_text = ocr_service.extract_from_file(contents, content_type)
+    for f in files:
+        contents = await f.read()
+        content_type = f.content_type or "image/jpeg"
+        all_image_bytes.append(contents)
+        if "pdf" in content_type:
+            ocr_service = OCRService()
+            extracted = ocr_service.extract_from_file(contents, content_type)
+            if extracted.strip():
+                combined_text_parts.append(extracted)
+        else:
+            all_pdf = False
 
     ai_service = AIService()
-    if extracted_text.strip():
-        products = await ai_service.parse_invoice(extracted_text)
+    if combined_text_parts and all_pdf:
+        products = await ai_service.parse_invoice("\n\n".join(combined_text_parts))
     else:
-        products = await ai_service.parse_invoice_from_image(contents)
+        products = await ai_service.parse_invoice_from_images(all_image_bytes)
+
+    # DB matching — enrich each product from store products and global catalog
+    for p in products:
+        p.setdefault("_matched", False)
+        p.setdefault("_existing_id", None)
+        p.setdefault("_global_match", False)
+        barcode = p.get("barcode")
+        name = (p.get("name") or "").strip()
+
+        # 1. Match by barcode in store products
+        if barcode:
+            r = await db.execute(
+                select(ProductCache).where(
+                    ProductCache.store_id == store_id_uuid,
+                    ProductCache.barcode == barcode,
+                    ProductCache.is_active == True,
+                )
+            )
+            existing = r.scalar_one_or_none()
+            if existing:
+                p["_matched"] = True
+                p["_existing_id"] = str(existing.id)
+                if not p.get("price") and existing.price:
+                    p["price"] = float(existing.price)
+                if not p.get("category") and existing.category:
+                    p["category"] = existing.category
+                if not p.get("article") and existing.article:
+                    p["article"] = existing.article
+                continue
+
+        # 2. Match by barcode in global catalog
+        if barcode:
+            r = await db.execute(
+                select(GlobalProduct).where(GlobalProduct.barcode == barcode)
+            )
+            gp = r.scalar_one_or_none()
+            if gp:
+                p["_global_match"] = True
+                if not p.get("name") or len(p.get("name", "")) < 3:
+                    p["name"] = gp.name
+                if not p.get("article") and gp.article:
+                    p["article"] = gp.article
+                if not p.get("category") and gp.category:
+                    p["category"] = gp.category
+                continue
+
+        # 3. Match by exact name (case-insensitive) in store products
+        if name:
+            r = await db.execute(
+                select(ProductCache).where(
+                    ProductCache.store_id == store_id_uuid,
+                    _func.lower(ProductCache.name) == name.lower(),
+                    ProductCache.is_active == True,
+                )
+            )
+            existing = r.scalar_one_or_none()
+            if existing:
+                p["_matched"] = True
+                p["_existing_id"] = str(existing.id)
+                if not p.get("barcode") and existing.barcode:
+                    p["barcode"] = existing.barcode
+                if not p.get("price") and existing.price:
+                    p["price"] = float(existing.price)
+                if not p.get("category") and existing.category:
+                    p["category"] = existing.category
 
     log = Log(
         user_id=current_user.id,
         store_id=store_id_uuid,
         level=LogLevel.info,
         action="invoice_uploaded",
-        message=f"Загружена накладная: {file.filename}",
-        meta={"filename": filename, "products_found": len(products)},
+        message=f"Накладная распознана: {len(files)} фото",
+        meta={"photos": len(files), "products_found": len(products)},
     )
     db.add(log)
+    await db.commit()
 
-    return {
-        "filename": file.filename,
-        "ocr_text": extracted_text,
-        "products": products,
-        "count": len(products),
-    }
+    return {"products": products, "count": len(products)}
+
+
+@router.post("/save-invoice")
+async def save_invoice_products(
+    store_id: str,
+    products: List[InvoiceProductSave],
+    sync_to_onec: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    store_id_uuid = UUID(store_id)
+    await _check_store_access(store_id_uuid, current_user, db)
+
+    saved = []
+    for p in products:
+        if not p.name or not p.name.strip():
+            continue
+        product = None
+        if p.existing_id:
+            try:
+                r = await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.id == UUID(p.existing_id),
+                        ProductCache.store_id == store_id_uuid,
+                        ProductCache.is_active == True,
+                    )
+                )
+                product = r.scalar_one_or_none()
+            except Exception:
+                product = None
+
+        if product:
+            # Update existing: add quantity, update purchase_price, fill missing fields
+            if p.quantity is not None:
+                product.quantity = (product.quantity or 0) + p.quantity
+            if p.purchase_price is not None:
+                product.purchase_price = p.purchase_price
+            if p.price is not None and p.price > 0:
+                product.price = p.price
+            if p.barcode and not product.barcode:
+                product.barcode = p.barcode
+            if p.article and not product.article:
+                product.article = p.article
+            if p.category and not product.category:
+                product.category = p.category
+        else:
+            product = ProductCache(
+                store_id=store_id_uuid,
+                name=p.name.strip(),
+                price=p.price,
+                purchase_price=p.purchase_price,
+                barcode=p.barcode,
+                article=p.article,
+                category=p.category,
+                quantity=p.quantity or 0,
+                unit=p.unit or "шт",
+                description=p.description,
+            )
+            db.add(product)
+            await db.flush()
+        saved.append(product)
+
+    if sync_to_onec and saved:
+        result = await db.execute(
+            select(Integration).where(
+                Integration.store_id == store_id_uuid,
+                Integration.status == IntegrationStatus.active,
+            )
+        )
+        integration = result.scalar_one_or_none()
+        if integration:
+            from backend.integrations.onec_integration import OneCClient
+            from backend.core.security import decrypt_password
+            client = OneCClient(
+                url=integration.onec_url,
+                username=integration.onec_username,
+                password=decrypt_password(integration.onec_password_encrypted),
+            )
+            for product in saved:
+                try:
+                    await client.create_product(product)
+                except Exception as e:
+                    logger.warning(f"1C sync failed for {product.name}: {e}")
+
+    await db.commit()
+    return {"saved": len(saved), "products": [_serialize_product(p) for p in saved]}
 
 
 @router.post("/bulk-create")

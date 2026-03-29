@@ -1,36 +1,51 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ChevronLeft, Upload, FileText, Check, Trash2,
-  Camera, ChevronDown, ChevronRight, Package,
+  ChevronLeft, Upload, Check, Trash2,
+  Camera, ChevronDown, ChevronRight, Package, Plus, X, Zap,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
 import { productsAPI } from '../services/api'
 
-const STEPS = ['upload', 'review', 'done']
+const STEPS = ['scan', 'review', 'done']
 const UNITS = ['шт', 'кг', 'г', 'л', 'мл', 'упак', 'пара', 'рулон', 'м']
 
 function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
   const [open, setOpen] = useState(false)
+  const isMatched = p._matched
+  const isGlobal = p._global_match && !p._matched
+
   return (
     <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-      {/* Collapsed header */}
       <div className="flex items-center gap-2 p-3 cursor-pointer active:opacity-70" onClick={() => setOpen(v => !v)}>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-          style={{ background: 'rgba(99,102,241,0.1)' }}>
-          <Package size={14} style={{ color: 'var(--tg-theme-button-color)' }} />
+          style={{ background: isMatched ? 'rgba(34,197,94,0.12)' : 'rgba(99,102,241,0.1)' }}>
+          <Package size={14} style={{ color: isMatched ? '#22c55e' : 'var(--tg-theme-button-color)' }} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
-            {p.name || 'Без названия'}
-          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className="text-sm font-semibold truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
+              {p.name || 'Без названия'}
+            </p>
+            {isMatched && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+                В магазине
+              </span>
+            )}
+            {isGlobal && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
+                Из каталога
+              </span>
+            )}
+          </div>
           <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
             {[
               p.quantity != null && `${p.quantity} ${p.unit || 'шт'}`,
               p.purchase_price != null && `Закуп: ${p.purchase_price} ₽`,
               p.price != null && `Цена: ${p.price} ₽`,
-              p.category,
             ].filter(Boolean).join(' · ')}
           </p>
         </div>
@@ -48,27 +63,25 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
         </div>
       </div>
 
-      {/* Expanded editor */}
       {open && (
-        <div className="px-3 pb-3 flex flex-col gap-2"
-          style={{ borderTop: '1px solid rgba(128,128,128,0.1)' }}>
+        <div className="px-3 pb-3 flex flex-col gap-2" style={{ borderTop: '1px solid rgba(128,128,128,0.1)' }}>
           <div className="pt-2">
-            <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Название</label>
+            <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Название *</label>
             <input className="input-field text-sm mt-0.5" value={p.name || ''} placeholder="Название товара"
               onChange={(e) => onUpdate(i, 'name', e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Цена продажи</label>
-              <input className="input-field text-sm mt-0.5" type="number" step="0.01"
-                value={p.price ?? ''} placeholder="0.00"
-                onChange={(e) => onUpdate(i, 'price', e.target.value ? parseFloat(e.target.value) : null)} />
-            </div>
-            <div>
-              <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Закупочная</label>
+              <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Закупочная ₽</label>
               <input className="input-field text-sm mt-0.5" type="number" step="0.01"
                 value={p.purchase_price ?? ''} placeholder="0.00"
                 onChange={(e) => onUpdate(i, 'purchase_price', e.target.value ? parseFloat(e.target.value) : null)} />
+            </div>
+            <div>
+              <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Цена продажи ₽</label>
+              <input className="input-field text-sm mt-0.5" type="number" step="0.01"
+                value={p.price ?? ''} placeholder="0.00"
+                onChange={(e) => onUpdate(i, 'price', e.target.value ? parseFloat(e.target.value) : null)} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
@@ -89,12 +102,12 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Штрих-код</label>
-              <input className="input-field text-sm mt-0.5" value={p.barcode || ''} placeholder="4601234567890"
+              <input className="input-field text-sm mt-0.5" value={p.barcode || ''} placeholder="EAN"
                 onChange={(e) => onUpdate(i, 'barcode', e.target.value || null)} />
             </div>
             <div>
               <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Артикул</label>
-              <input className="input-field text-sm mt-0.5" value={p.article || ''} placeholder="SKU-001"
+              <input className="input-field text-sm mt-0.5" value={p.article || ''} placeholder="SKU"
                 onChange={(e) => onUpdate(i, 'article', e.target.value || null)} />
             </div>
           </div>
@@ -112,42 +125,70 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
 export default function UploadInvoice() {
   const navigate = useNavigate()
   const { currentStore } = useStore()
-  const [step, setStep] = useState('upload')
+  const [step, setStep] = useState('scan')
   const [loading, setLoading] = useState(false)
+  const [loadingMsg, setLoadingMsg] = useState('')
   const [saving, setSaving] = useState(false)
-  const [file, setFile] = useState(null)
+  const [photos, setPhotos] = useState([])
+  const [previews, setPreviews] = useState([])
   const [products, setProducts] = useState([])
+  const [syncToOnec, setSyncToOnec] = useState(false)
   const fileRef = useRef()
-  const photoRef = useRef()
+  const cameraRef = useRef()
 
-  const handleFile = (e) => {
-    const f = e.target.files?.[0]
-    if (f) { setFile(f); e.target.value = '' }
+  const addFiles = (fileList) => {
+    const newFiles = Array.from(fileList)
+    if (!newFiles.length) return
+    setPhotos(prev => [...prev, ...newFiles])
+    newFiles.forEach(f => {
+      const reader = new FileReader()
+      reader.onload = (e) => setPreviews(prev => [...prev, e.target.result])
+      reader.readAsDataURL(f)
+    })
+  }
+
+  const removePhoto = (i) => {
+    setPhotos(prev => prev.filter((_, idx) => idx !== i))
+    setPreviews(prev => prev.filter((_, idx) => idx !== i))
   }
 
   const handleUpload = async () => {
-    if (!file) return toast.error('Выберите файл')
+    if (photos.length === 0) return toast.error('Добавьте хотя бы одну фотографию')
     if (!currentStore) return toast.error('Выберите магазин')
     setLoading(true)
+    setLoadingMsg('Отправляю фото...')
+    const timer1 = setTimeout(() => setLoadingMsg('ИИ анализирует накладную...'), 2500)
+    const timer2 = setTimeout(() => setLoadingMsg('Ищу товары в базе...'), 8000)
     try {
       const fd = new FormData()
-      fd.append('file', file)
       fd.append('store_id', currentStore.id)
+      photos.forEach(f => fd.append('files', f))
       const res = await productsAPI.uploadInvoice(fd)
       const list = res.data.products || []
       if (list.length === 0) {
-        toast.error('Товары не распознаны — попробуйте более чёткое фото')
+        toast.error('Товары не распознаны — сделайте фото чётче и попробуйте снова')
         return
       }
       setProducts(list)
       setStep('review')
-      toast.success(`Найдено ${list.length} товаров`)
+      const matched = list.filter(p => p._matched).length
+      const globalMatch = list.filter(p => p._global_match && !p._matched).length
+      toast.success(
+        `Найдено ${list.length} товаров` +
+        (matched ? ` · ${matched} уже в магазине` : '') +
+        (globalMatch ? ` · ${globalMatch} из каталога` : '')
+      )
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка обработки файла')
+      toast.error(e.response?.data?.detail || 'Ошибка обработки фото')
     } finally {
+      clearTimeout(timer1)
+      clearTimeout(timer2)
       setLoading(false)
     }
   }
+
+  const addManualProduct = () =>
+    setProducts(prev => [...prev, { name: '', quantity: 1, unit: 'шт', purchase_price: null, price: null, barcode: null, article: null, category: null }])
 
   const removeProduct = (i) => setProducts(prev => prev.filter((_, idx) => idx !== i))
   const updateProduct = (i, field, value) =>
@@ -158,12 +199,19 @@ export default function UploadInvoice() {
     if (valid.length === 0) return toast.error('Нет товаров для сохранения')
     setSaving(true)
     try {
-      await productsAPI.bulkCreate(
-        currentStore.id,
-        valid.map(p => ({ ...p, store_id: currentStore.id })),
-        false
-      )
-      toast.success(`Сохранено ${valid.length} товаров!`)
+      const payload = valid.map(p => ({
+        name: p.name,
+        article: p.article || null,
+        barcode: p.barcode || null,
+        quantity: p.quantity ?? 1,
+        unit: p.unit || 'шт',
+        purchase_price: p.purchase_price ?? null,
+        price: p.price ?? null,
+        category: p.category || null,
+        existing_id: p._existing_id || null,
+      }))
+      await productsAPI.saveInvoice(currentStore.id, payload, syncToOnec)
+      toast.success(`Сохранено ${valid.length} товаров!${syncToOnec ? ' Отправлено в 1С.' : ''}`)
       setStep('done')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка сохранения')
@@ -172,6 +220,10 @@ export default function UploadInvoice() {
     }
   }
 
+  const validCount = products.filter(p => p.name?.trim()).length
+  const matchedCount = products.filter(p => p._matched).length
+  const newCount = products.filter(p => p.name?.trim() && !p._matched).length
+
   return (
     <div className="flex flex-col pb-28">
       {/* Header */}
@@ -179,139 +231,173 @@ export default function UploadInvoice() {
         <button
           className="w-9 h-9 rounded-xl flex items-center justify-center active:opacity-60"
           style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
-          onClick={() => step === 'review' ? setStep('upload') : navigate(-1)}
+          onClick={() => step === 'review' ? setStep('scan') : navigate(-1)}
         >
           <ChevronLeft size={20} style={{ color: 'var(--tg-theme-text-color)' }} />
         </button>
         <div>
-          <h1 className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>
-            Загрузить накладную
-          </h1>
+          <h1 className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>Накладная</h1>
           <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-            Claude AI распознаёт список товаров
+            {step === 'scan' ? 'Сфотографируйте накладную' : step === 'review' ? `${validCount} товаров — проверьте` : 'Готово!'}
           </p>
         </div>
       </div>
 
       {/* Step indicator */}
       <div className="px-4 mb-4 flex items-center gap-2">
-        {['Загрузка', 'Проверка', 'Готово'].map((label, i) => {
-          const stepIdx = STEPS.indexOf(step)
-          const isActive = i === stepIdx
-          const isDone = i < stepIdx
+        {['Фото', 'Проверка', 'Готово'].map((label, i) => {
+          const idx = STEPS.indexOf(step)
+          const isActive = i === idx
+          const isDone = i < idx
           return (
             <div key={label} className="flex items-center gap-2 flex-1">
               <div className="flex items-center gap-1.5">
-                <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
                   style={{
                     background: isDone || isActive ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)',
                     color: isDone || isActive ? 'white' : 'var(--tg-theme-hint-color)',
-                  }}
-                >
+                  }}>
                   {isDone ? <Check size={12} /> : i + 1}
                 </div>
                 <span className="text-xs" style={{ color: isActive ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)' }}>
                   {label}
                 </span>
               </div>
-              {i < 2 && (
-                <div className="flex-1 h-px"
-                  style={{ background: isDone ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)' }} />
-              )}
+              {i < 2 && <div className="flex-1 h-px" style={{ background: isDone ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-secondary-bg-color)' }} />}
             </div>
           )
         })}
       </div>
 
-      {/* Step: Upload */}
-      {step === 'upload' && (
+      {/* ── STEP: SCAN ── */}
+      {step === 'scan' && (
         <div className="px-4 flex flex-col gap-3">
-          <input ref={fileRef} type="file" accept="image/*,.pdf" className="hidden" onChange={handleFile} />
-          <input ref={photoRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
+          <input ref={fileRef} type="file" accept="image/*,.pdf" multiple className="hidden"
+            onChange={(e) => { if (e.target.files?.length) { addFiles(e.target.files); e.target.value = '' } }} />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden"
+            onChange={(e) => { if (e.target.files?.length) { addFiles(e.target.files); e.target.value = '' } }} />
 
-          {/* File drop zone */}
+          {/* Photo thumbnails strip */}
+          {previews.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+              {previews.map((src, i) => (
+                <div key={i} className="relative flex-shrink-0">
+                  <img src={src} alt="" className="w-20 h-20 object-cover rounded-xl" />
+                  <button
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center"
+                    style={{ background: '#ef4444' }}
+                    onClick={() => removePhoto(i)}
+                  >
+                    <X size={11} color="white" />
+                  </button>
+                  <div className="absolute bottom-1 left-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold"
+                    style={{ background: 'var(--tg-theme-button-color)', color: 'white' }}>
+                    {i + 1}
+                  </div>
+                </div>
+              ))}
+              <button
+                className="w-20 h-20 rounded-xl flex-shrink-0 flex flex-col items-center justify-center gap-1 border-2 border-dashed active:opacity-70"
+                style={{ borderColor: 'var(--tg-theme-hint-color)', background: 'var(--tg-theme-secondary-bg-color)' }}
+                onClick={() => cameraRef.current?.click()}
+              >
+                <Plus size={18} style={{ color: 'var(--tg-theme-hint-color)' }} />
+                <span className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Ещё</span>
+              </button>
+            </div>
+          )}
+
+          {/* Main camera CTA */}
           <button
-            className="rounded-2xl flex flex-col items-center gap-3 py-10 border-2 border-dashed active:opacity-70"
+            className="rounded-2xl flex flex-col items-center justify-center gap-3 py-10 border-2 border-dashed active:opacity-70"
             style={{
-              borderColor: file ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-hint-color)',
+              borderColor: previews.length > 0 ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-hint-color)',
               background: 'var(--tg-theme-secondary-bg-color)',
             }}
-            onClick={() => fileRef.current?.click()}
+            onClick={() => cameraRef.current?.click()}
           >
-            {file ? (
-              <>
-                <div className="w-14 h-14 rounded-2xl flex items-center justify-center"
-                  style={{ background: 'rgba(99,102,241,0.1)' }}>
-                  <FileText size={28} style={{ color: 'var(--tg-theme-button-color)' }} />
-                </div>
-                <div className="text-center">
-                  <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>{file.name}</p>
-                  <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {(file.size / 1024).toFixed(0)} KB · Нажмите для замены
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="w-14 h-14 rounded-2xl flex items-center justify-center"
-                  style={{ background: 'rgba(99,102,241,0.1)' }}>
-                  <Upload size={28} style={{ color: 'var(--tg-theme-button-color)' }} />
-                </div>
-                <div className="text-center">
-                  <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Выбрать файл</p>
-                  <p className="text-xs mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Фото накладной, скан или PDF
-                  </p>
-                </div>
-              </>
-            )}
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center"
+              style={{ background: 'rgba(99,102,241,0.1)' }}>
+              <Camera size={28} style={{ color: 'var(--tg-theme-button-color)' }} />
+            </div>
+            <div className="text-center">
+              <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                {previews.length > 0 ? `${previews.length} фото — добавить ещё` : 'Сфотографировать накладную'}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                Длинную накладную снимайте по частям
+              </p>
+            </div>
           </button>
 
-          {/* Camera button */}
+          {/* Gallery / PDF fallback */}
           <button
-            className="rounded-2xl flex items-center justify-center gap-2 py-3 active:opacity-70"
+            className="rounded-xl flex items-center justify-center gap-2 py-2.5 active:opacity-70"
             style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
-            onClick={() => photoRef.current?.click()}
+            onClick={() => fileRef.current?.click()}
           >
-            <Camera size={18} style={{ color: 'var(--tg-theme-button-color)' }} />
-            <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>
-              Сфотографировать накладную
-            </span>
+            <Upload size={15} style={{ color: 'var(--tg-theme-hint-color)' }} />
+            <span className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>Выбрать из галереи или PDF</span>
           </button>
+
+          {/* Tips */}
+          <div className="rounded-xl p-3 text-xs flex flex-col gap-1"
+            style={{ background: 'rgba(99,102,241,0.06)' }}>
+            <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>💡 Советы</p>
+            <p style={{ color: 'var(--tg-theme-hint-color)' }}>• Хорошее освещение, держите телефон параллельно накладной</p>
+            <p style={{ color: 'var(--tg-theme-hint-color)' }}>• Длинную накладную снимайте несколькими фото с небольшим перекрытием</p>
+            <p style={{ color: 'var(--tg-theme-hint-color)' }}>• ИИ объединит все фото в один список автоматически</p>
+          </div>
 
           <button
             className="btn-primary flex items-center justify-center gap-2"
-            disabled={!file || loading}
+            disabled={photos.length === 0 || loading}
             onClick={handleUpload}
           >
             {loading ? (
               <>
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                ИИ распознаёт...
+                {loadingMsg || 'Обрабатываю...'}
               </>
             ) : (
               <>
-                <Upload size={18} />
-                Распознать накладную
+                <Zap size={18} />
+                {photos.length > 0
+                  ? `Распознать${photos.length > 1 ? ` (${photos.length} фото)` : ''}`
+                  : 'Распознать накладную'}
               </>
             )}
           </button>
         </div>
       )}
 
-      {/* Step: Review */}
+      {/* ── STEP: REVIEW ── */}
       {step === 'review' && (
         <div className="px-4 flex flex-col gap-3">
-          <div className="rounded-2xl p-3 flex items-center gap-3"
+          {/* Summary */}
+          <div className="rounded-2xl p-3 flex items-start gap-3"
             style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-            <span className="text-2xl">🤖</span>
+            <span className="text-2xl mt-0.5">🤖</span>
             <div className="flex-1">
               <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                Claude AI нашёл {products.length} товаров
+                Найдено {products.length} товаров
               </p>
-              <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                Нажмите ▶ на товар, чтобы раскрыть и отредактировать
+              <div className="flex flex-wrap gap-2 mt-1">
+                {matchedCount > 0 && (
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full"
+                    style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e' }}>
+                    ✓ {matchedCount} уже в магазине
+                  </span>
+                )}
+                {newCount > 0 && (
+                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full"
+                    style={{ background: 'rgba(99,102,241,0.1)', color: 'var(--tg-theme-button-color)' }}>
+                    + {newCount} новых
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                Нажмите ▶ на товар чтобы раскрыть и отредактировать
               </p>
             </div>
           </div>
@@ -320,25 +406,52 @@ export default function UploadInvoice() {
             <ProductRow key={i} product={p} index={i} onUpdate={updateProduct} onRemove={removeProduct} />
           ))}
 
-          <div className="flex gap-3 mt-2">
-            <button className="btn-secondary flex-1" onClick={() => setStep('upload')}>
-              Назад
+          {/* Add manually */}
+          <button
+            className="rounded-xl flex items-center justify-center gap-2 py-3 border-2 border-dashed active:opacity-70"
+            style={{ borderColor: 'rgba(128,128,128,0.25)', background: 'transparent' }}
+            onClick={addManualProduct}
+          >
+            <Plus size={16} style={{ color: 'var(--tg-theme-hint-color)' }} />
+            <span className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>Добавить товар вручную</span>
+          </button>
+
+          {/* 1C sync toggle */}
+          <div className="card flex items-center justify-between gap-3 py-3">
+            <div>
+              <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Отправить в 1С</p>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                Создать / обновить товары и остатки в 1С
+              </p>
+            </div>
+            <button
+              type="button"
+              className="w-12 h-7 rounded-full transition-all relative flex-shrink-0"
+              style={{ background: syncToOnec ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.3)' }}
+              onClick={() => setSyncToOnec(v => !v)}
+            >
+              <span className="absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all"
+                style={{ left: syncToOnec ? 'calc(100% - 22px)' : '2px' }} />
             </button>
+          </div>
+
+          <div className="flex gap-3">
+            <button className="btn-secondary flex-1" onClick={() => setStep('scan')}>Назад</button>
             <button
               className="btn-primary flex-1 flex items-center justify-center gap-2"
-              disabled={saving || products.filter(p => p.name?.trim()).length === 0}
+              disabled={saving || validCount === 0}
               onClick={handleSave}
             >
               {saving
                 ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 : <Check size={18} />}
-              {saving ? 'Сохраняю...' : `Сохранить ${products.filter(p => p.name?.trim()).length}`}
+              {saving ? 'Сохраняю...' : `Сохранить ${validCount}`}
             </button>
           </div>
         </div>
       )}
 
-      {/* Step: Done */}
+      {/* ── STEP: DONE ── */}
       {step === 'done' && (
         <div className="px-4 flex flex-col items-center gap-4 py-12">
           <div className="w-20 h-20 rounded-3xl flex items-center justify-center"
@@ -348,14 +461,14 @@ export default function UploadInvoice() {
           <div className="text-center">
             <p className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>Готово!</p>
             <p className="text-sm mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              Товары добавлены в магазин
+              Товары сохранены{syncToOnec ? ' и отправлены в 1С' : ''}
             </p>
           </div>
           <button className="btn-primary w-auto px-10 mt-4" onClick={() => navigate('/products')}>
             Перейти к товарам
           </button>
           <button className="btn-secondary w-auto px-8"
-            onClick={() => { setStep('upload'); setFile(null); setProducts([]) }}>
+            onClick={() => { setStep('scan'); setPhotos([]); setPreviews([]); setProducts([]) }}>
             Загрузить ещё
           </button>
         </div>
