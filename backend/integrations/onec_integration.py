@@ -1160,7 +1160,7 @@ class OneCClient:
         # ── 0a. Document_ОприходованиеЗапасов with NEGATIVE quantity ───────────
         # Same document that successfully adds stock; negative qty = write-off movement.
         for neg_tab in ("Запасы", "Товары"):
-            for no_acc0 in ([False, True] if debit_key else [True]):
+            for no_acc0 in ([None, False, True] if debit_key else [None, True]):
                 neg_row: dict = {
                     "LineNumber": 1,
                     "Номенклатура_Key": clean,
@@ -1169,7 +1169,7 @@ class OneCClient:
                     "Сумма": -round(qty * float(price or 0), 2),
                     "Характеристика_Key": _zero,
                 }
-                if not no_acc0 and debit_key:
+                if no_acc0 is False and debit_key:
                     for fld in ("СчетДт_Key", "СчетУчета_Key", "СчетДебета_Key"):
                         neg_row[fld] = debit_key
                     for fld in ("СчетКт_Key", "СчетКредита_Key"):
@@ -1185,10 +1185,10 @@ class OneCClient:
                 if wh_key:
                     neg_hdr["Склад_Key"] = wh_key
                     neg_hdr["СтруктурнаяЕдиница_Key"] = wh_key
-                if not no_acc0 and debit_key:
+                if no_acc0 is False and debit_key:
                     neg_hdr["СчетДт_Key"] = debit_key
                     neg_hdr["СчетКт_Key"] = credit_key or _zero
-                if no_acc0:
+                if no_acc0 is True:
                     neg_hdr.update(NO_ACCOUNTING)
                 ok_nc, resp_nc = await self._request(
                     "POST", "odata/standard.odata/Document_ОприходованиеЗапасов", json=neg_hdr
@@ -1697,26 +1697,31 @@ class OneCClient:
             ("Document_ОприходованиеТоваров",    "Товары", {}),
             ("Document_ПоступлениеТоваровУслуг", "Товары", {}),
         ]
-        # Respect use_accounting setting: with accounts first if enabled, then without
-        acct_attempts = ([False, True] if use_accounting else [True])
+        # Always try plain first (no NO_ACCOUNTING, no account fields) — required for Розница 3.0
+        # where NO_ACCOUNTING suppresses AccumulationRegister movements.
+        acct_attempts = ([None, False, True] if use_accounting else [None, True])
 
         for doc_type, tab_name, extra_fields in doc_variants:
 
-            def _build_doc(no_accounting: bool, _tab=tab_name, _extra=extra_fields) -> dict:
+            def _build_doc(no_accounting, _tab=tab_name, _extra=extra_fields) -> dict:
+                # no_accounting=None → plain (no account fields, no NO_ACCOUNTING flags)
+                # no_accounting=False → with accounting accounts
+                # no_accounting=True → no account fields + NO_ACCOUNTING flags
+                include_acct = (no_accounting is False)
                 d: dict = {
                     "Date": period,
                     "Комментарий": "Авто из 1С Хелпер",
-                    _tab: [_make_row(not no_accounting)],
+                    _tab: [_make_row(include_acct)],
                 }
                 if org_key:
                     d["Организация_Key"] = org_key
                 if wh_key:
                     d["Склад_Key"] = wh_key
                     d["СтруктурнаяЕдиница_Key"] = wh_key  # УНФ field name
-                if not no_accounting and debit_key:
+                if include_acct and debit_key:
                     d["СчетДт_Key"] = debit_key
                     d["СчетКт_Key"] = credit_key or _zero
-                if no_accounting:
+                if no_accounting is True:
                     d.update(NO_ACCOUNTING)
                 d.update(_extra)
                 return d
@@ -1754,7 +1759,7 @@ class OneCClient:
                     f"odata/standard.odata/{doc_type}(guid'{ref_key}')/Post"
                 )
                 if ok2:
-                    suffix = " (без проводок)" if no_acc else ""
+                    suffix = " (без проводок)" if no_acc is True else (" [plain]" if no_acc is None else "")
                     logger.info(f"1C stock posted ({doc_type}){suffix}: {onec_id} qty={quantity}")
                     return True
                 # 1C sometimes returns HTTP 500 even when the document was actually posted.
