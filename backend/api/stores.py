@@ -232,7 +232,7 @@ async def create_integration(
         onec_url=_normalize_onec_url(payload.onec_url),
         onec_username=payload.onec_username,
         onec_password_encrypted=encrypt_password(payload.onec_password),
-        status=IntegrationStatus.inactive,
+        status=IntegrationStatus.active,
         settings={"use_accounting": payload.use_accounting},
     )
     db.add(integration)

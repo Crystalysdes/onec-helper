@@ -46,9 +46,6 @@ export default function ProductDetail() {
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [scannerCb, setScannerCb] = useState(null)
-  const [syncing, setSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState(null)
-  const [pulling, setPulling] = useState(false)
 
   const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm()
 
@@ -96,40 +93,7 @@ export default function ProductDetail() {
 
   const openScanner = () => setScannerCb({ fn: (code) => { if (code) setValue('barcode', code) } })
 
-  const pullFromOnec = async () => {
-    setPulling(true)
-    try {
-      const res = await productsAPI.pullFromOnec(id)
-      setProduct(res.data.product)
-      const u = res.data.updated
-      const parts = []
-      if (u.price != null) parts.push(`цена: ${u.price} ₽`)
-      if (u.purchase_price != null) parts.push(`закупочная: ${u.purchase_price} ₽`)
-      if (u.quantity != null) parts.push(`остаток: ${u.quantity}`)
-      if (u.barcode) parts.push(`штрихкод: ${u.barcode}`)
-      toast.success(parts.length ? `Обновлено из 1С: ${parts.join(', ')}` : 'Данные актуальны')
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка получения данных из 1С')
-    } finally {
-      setPulling(false)
-    }
-  }
 
-  const syncToOnec = async () => {
-    setSyncing(true)
-    setSyncResult(null)
-    try {
-      const res = await productsAPI.syncToOnec(id)
-      setSyncResult(res.data)
-      const allOk = Object.values(res.data.steps).every(s => s.ok !== false)
-      if (allOk) toast.success('Синхронизация выполнена')
-      else toast.error('Часть шагов не выполнена — см. детали')
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка синхронизации')
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   if (loading) {
     return (
@@ -236,133 +200,6 @@ export default function ProductDetail() {
               </div>
             </div>
           </div>
-
-          {/* 1C buttons */}
-          <div className="flex gap-2">
-            <button
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl active:opacity-70 transition-opacity"
-              style={{ background: 'var(--tg-theme-secondary-bg-color)', border: '1px solid rgba(128,128,128,0.15)' }}
-              onClick={pullFromOnec}
-              disabled={pulling || syncing}
-            >
-              {pulling
-                ? <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                : <span>⬇️</span>}
-              <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-button-color)' }}>
-                {pulling ? 'Загрузка...' : 'Из 1С'}
-              </span>
-            </button>
-            <button
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl active:opacity-70 transition-opacity"
-              style={{ background: 'var(--tg-theme-secondary-bg-color)', border: '1px solid rgba(128,128,128,0.15)' }}
-              onClick={syncToOnec}
-              disabled={syncing || pulling}
-            >
-              {syncing
-                ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                : <span>⬆️</span>}
-              <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-text-color)' }}>
-                {syncing ? 'Отправка...' : 'В 1С'}
-              </span>
-            </button>
-          </div>
-
-          {syncResult && (
-            <div className="rounded-2xl p-3 flex flex-col gap-2 text-xs"
-              style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-              <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>📋 Результат синхронизации</p>
-
-              {/* Product step */}
-              {syncResult.steps?.product && (
-                <div className="p-2 rounded-xl" style={{ background: 'var(--tg-theme-bg-color)' }}>
-                  <p style={{ color: syncResult.steps.product.ok ? '#22c55e' : '#ef4444' }}>
-                    {syncResult.steps.product.ok ? '✅' : '❌'} Товар в 1С ({syncResult.steps.product.action})
-                  </p>
-                  {!syncResult.steps.product.ok && (
-                    <p className="break-all mt-0.5" style={{ color: '#ef4444' }}>{syncResult.steps.product.resp?.slice(0,200)}</p>
-                  )}
-                </div>
-              )}
-
-              {/* Probe: price types + existing fields */}
-              {syncResult.probe && (
-                <div className="p-2 rounded-xl flex flex-col gap-1" style={{ background: 'var(--tg-theme-bg-color)' }}>
-                  <p style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Типы цен: {syncResult.probe.price_types_found?.length
-                      ? syncResult.probe.price_types_found.join(', ')
-                      : '❌ не найдены'}
-                  </p>
-                  {syncResult.probe.org_key && (
-                    <p className="break-all" style={{ color: '#22c55e' }}>
-                      🏢 Организация: {syncResult.probe.org_key}
-                    </p>
-                  )}
-                  {syncResult.probe.nom_price_barcode_fields?.length > 0 && (
-                    <p className="break-all" style={{ color: '#f59e0b' }}>
-                      🔑 Поля Номенклатуры (цена/штрихкод): {syncResult.probe.nom_price_barcode_fields.join(', ')}
-                    </p>
-                  )}
-                  {syncResult.probe.published_bc_price_entities?.length > 0 && (
-                    <p className="break-all" style={{ color: '#60a5fa' }}>
-                      📋 Опубликованные сущности (цена/штрихкод): {syncResult.probe.published_bc_price_entities.join(', ')}
-                    </p>
-                  )}
-                  {syncResult.probe.existing_doc_fields && Object.keys(syncResult.probe.existing_doc_fields).length > 0 && (
-                    <p className="break-all" style={{ color: '#a78bfa' }}>
-                      📄 Поля документа УстановкаЦен: {Object.keys(syncResult.probe.existing_doc_fields).join(', ')}
-                    </p>
-                  )}
-                  {syncResult.probe.existing_bc_for_product?.length > 0 && (
-                    <p className="break-all" style={{ color: '#f59e0b' }}>
-                      📦 Существующие штрихкоды в регистре: {JSON.stringify(syncResult.probe.existing_bc_for_product)}
-                    </p>
-                  )}
-                  {syncResult.probe.existing_barcode_fields && Object.keys(syncResult.probe.existing_barcode_fields).length > 0 && (
-                    <p className="break-all" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      📋 Поля штрихкода: {Object.keys(syncResult.probe.existing_barcode_fields).join(', ')}
-                    </p>
-                  )}
-                  {syncResult.probe.existing_price_fields && Object.keys(syncResult.probe.existing_price_fields).length > 0 && (
-                    <p className="break-all" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      📋 Поля цены: {Object.keys(syncResult.probe.existing_price_fields).join(', ')}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Probe: barcode attempts */}
-              {syncResult.probe?.barcode_attempts?.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    🔖 Попытки штрихкода ({syncResult.probe.barcode_attempts.filter(a=>a.ok).length > 0 ? '✅ успех' : '❌ все провалились'})
-                  </summary>
-                  <div className="mt-1 flex flex-col gap-1">
-                    {syncResult.probe.barcode_attempts.map((a, i) => (
-                      <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
-                        {a.ok ? '✅' : '❌'} {a.entity} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,400)}
-                      </p>
-                    ))}
-                  </div>
-                </details>
-              )}
-
-              {/* Probe: price attempts */}
-              {syncResult.probe?.price_attempts?.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    💰 Попытки цены ({syncResult.probe.price_attempts.filter(a=>a.ok).length > 0 ? '✅ успех' : '❌ все провалились'})
-                  </summary>
-                  <div className="mt-1 flex flex-col gap-1">
-                    {syncResult.probe.price_attempts.map((a, i) => (
-                      <p key={i} className="break-all" style={{ color: a.ok ? '#22c55e' : '#ef4444' }}>
-                        {a.ok ? '✅' : '❌'} {a.register} [{a.payload}]: {a.ok ? 'OK' : a.resp?.slice(0,400)}
-                      </p>
-                    ))}
-                  </div>
-                </details>
-              )}
-            </div>
-          )}
 
           {/* Delete */}
           {!confirmDelete ? (
