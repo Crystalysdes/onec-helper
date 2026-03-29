@@ -1050,6 +1050,7 @@ class OneCClient:
         """Reduce stock by qty. Tries IR direct overwrite first, then write-off documents.
         new_absolute_qty: the target quantity to set (used for IR direct overwrite)."""
         clean = str(onec_id).strip("{}")
+        ir_ok_flag = False  # set if IR PATCH/POST succeeded; used as last-resort fallback
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         _zero = "00000000-0000-0000-0000-000000000000"
@@ -1138,8 +1139,7 @@ class OneCClient:
                         if ok_ar:
                             logger.info(f"1C write-off via {_ar_name} Expense: qty={qty} delta=-{qty}")
                             return True
-                if ir_ok_flag:
-                    return True  # IR PATCH worked even if AR failed
+                # do NOT return here — fall through to document section
             # No existing IR record — POST with absolute qty
             ir_post = {
                 "Номенклатура_Key": clean,
@@ -1155,7 +1155,7 @@ class OneCClient:
             logger.debug(f"1C write-off IR POST: ok={ok_irp} resp={str(resp_irp)[:100]}")
             if ok_irp:
                 logger.info(f"1C write-off via IR POST abs: qty={new_absolute_qty}")
-                return True
+                ir_ok_flag = True  # saved; fall through to document section
 
         # ── 0a. Document_ОприходованиеЗапасов with NEGATIVE quantity ───────────
         # Same document that successfully adds stock; negative qty = write-off movement.
@@ -1372,6 +1372,9 @@ class OneCClient:
             if ok_r:
                 logger.info(f"1C write-off via {reg}: qty={qty}")
                 return True
+        if ir_ok_flag:
+            logger.info("1C write-off: documents failed but IR PATCH/POST worked — using IR result")
+            return True
         return False
 
     async def _get_product_stock_qty(self, onec_id: str) -> float:
