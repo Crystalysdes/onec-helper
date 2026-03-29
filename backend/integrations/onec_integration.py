@@ -1114,7 +1114,32 @@ class OneCClient:
                     logger.debug(f"1C write-off IR PATCH: ok={ok_put} resp={str(resp_put)[:200]}")
                     if ok_put:
                         logger.info(f"1C write-off via IR PATCH: qty={new_absolute_qty} (delta=-{qty})")
-                        return True
+                        # IR PATCH succeeded — also attempt AR write-off so AccumulationRegister is updated
+                        ir_ok_flag = True
+                    else:
+                        ir_ok_flag = False
+                else:
+                    ir_ok_flag = False
+                # Try direct AccumulationRegister Expense write regardless of IR result
+                _ar_base = {"Номенклатура_Key": clean, "Количество": float(qty),
+                             "Стоимость": summa, "Характеристика_Key": _zero}
+                if wh_key:
+                    _ar_base["Склад_Key"] = wh_key
+                if org_key:
+                    _ar_base["Организация_Key"] = org_key
+                for _ar_name in ("AccumulationRegister_ЗапасыНаСкладах",
+                                  "AccumulationRegister_Запасы"):
+                    for _vid in ("Expense", "Расход"):
+                        _payload = {"Period": period, **_ar_base,
+                                    ("RecordType" if _vid == "Expense" else "ВидДвижения"): _vid}
+                        ok_ar, _ = await self._request(
+                            "POST", f"odata/standard.odata/{_ar_name}", json=_payload
+                        )
+                        if ok_ar:
+                            logger.info(f"1C write-off via {_ar_name} Expense: qty={qty} delta=-{qty}")
+                            return True
+                if ir_ok_flag:
+                    return True  # IR PATCH worked even if AR failed
             # No existing IR record — POST with absolute qty
             ir_post = {
                 "Номенклатура_Key": clean,
@@ -1586,8 +1611,13 @@ class OneCClient:
             # Try both main endpoint and _RecordType endpoint
             ("AccumulationRegister_ЗапасыНаСкладах",           {"Period": period, "RecordType": "Receipt", **base_unf}),
             ("AccumulationRegister_ЗапасыНаСкладах",           {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            # Розница 3.0: ЗапасыНаСкладах uses Склад_Key (not СтруктурнаяЕдиница_Key)
+            ("AccumulationRegister_ЗапасыНаСкладах",           {"Period": period, "RecordType": "Receipt", **base_std}),
+            ("AccumulationRegister_ЗапасыНаСкладах",           {"Period": period, "ВидДвижения": "Приход", **base_std}),
             ("AccumulationRegister_ЗапасыНаСкладах_RecordType",  {"Period": period, "RecordType": "Receipt", **base_unf}),
             ("AccumulationRegister_ЗапасыНаСкладах_RecordType",  {"Period": period, "ВидДвижения": "Приход", **base_unf}),
+            ("AccumulationRegister_ЗапасыНаСкладах_RecordType",  {"Period": period, "RecordType": "Receipt", **base_std}),
+            ("AccumulationRegister_ЗапасыНаСкладах_RecordType",  {"Period": period, "ВидДвижения": "Приход", **base_std}),
             ("AccumulationRegister_Запасы",                    {"Period": period, "RecordType": "Receipt", **base_unf}),
             ("AccumulationRegister_Запасы",                    {"Period": period, "ВидДвижения": "Приход", **base_unf}),
             ("AccumulationRegister_Запасы_RecordType",         {"Period": period, "RecordType": "Receipt", **base_unf}),
