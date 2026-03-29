@@ -240,9 +240,23 @@ export default function Settings() {
     }
   }
 
+  const normalizeOnecUrl = (raw) => {
+    if (!raw) return ''
+    raw = raw.trim().replace(/\/$/, '')
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return raw.replace(/\/[a-z]{2}(_[A-Z]{2})?\/\s*$/, '').replace(/\/$/, '')
+    }
+    if (/^\d+$/.test(raw)) return `https://msk1.1cfresh.com/a/sbm/${raw}`
+    const m = raw.match(/^([a-z0-9-]+)[/:]+([0-9]+)$/i)
+    if (m) return `https://${m[1]}.1cfresh.com/a/sbm/${m[2]}`
+    if (!raw.startsWith('http')) return 'https://' + raw
+    return raw
+  }
+
   const getSetupUrl = (onecUrl) => {
     if (!onecUrl) return null
-    const base = onecUrl.replace(/\/odata.*$/, '').replace(/\/ru\/?$/, '').replace(/\/$/, '')
+    const base = normalizeOnecUrl(onecUrl)
+    if (!base.startsWith('http')) return null
     return `${base}/#e1cib/command/Обработка.НастройкаСтандартногоИнтерфейсаOData.Команда.НастройкиСтандартногоИнтерфейсаOData`
   }
 
@@ -826,19 +840,21 @@ export default function Settings() {
                     Подключить 1С
                   </p>
 
-                  {/* Step 1: URL */}
+                  {/* Step 1: App ID */}
                   <div className="flex flex-col gap-1.5">
                     <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Шаг 1 — URL вашей 1С
+                      Шаг 1 — ID приложения 1СФреш
                     </p>
                     <input
                       className="input-field"
-                      placeholder="Код приложения или URL (напр. 3941876)"
-                      {...intForm.register('onec_url', { required: true })}
-                      onChange={() => setFormTestResult(null)}
+                      placeholder="ID приложения (напр. 3941876) *"
+                      {...intForm.register('onec_url', {
+                        required: true,
+                        onChange: () => setFormTestResult(null),
+                      })}
                     />
                     <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Код из адреса браузера 1СФреш, или полный https://... адрес
+                      Цифровой код из адреса браузера 1СФреш — напр. <span className="font-mono">3941876</span> или <span className="font-mono">msk2/3941876</span>
                     </p>
                   </div>
 
@@ -912,15 +928,19 @@ export default function Settings() {
                     <input
                       className="input-field"
                       placeholder="Имя пользователя (напр. odata.user) *"
-                      {...intForm.register('onec_username', { required: true })}
-                      onChange={() => setFormTestResult(null)}
+                      {...intForm.register('onec_username', {
+                        required: true,
+                        onChange: () => setFormTestResult(null),
+                      })}
                     />
                     <input
                       className="input-field"
                       type="password"
                       placeholder="Пароль *"
-                      {...intForm.register('onec_password', { required: true })}
-                      onChange={() => setFormTestResult(null)}
+                      {...intForm.register('onec_password', {
+                        required: true,
+                        onChange: () => setFormTestResult(null),
+                      })}
                     />
                   </div>
 
