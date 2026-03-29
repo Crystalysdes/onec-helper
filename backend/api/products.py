@@ -1580,6 +1580,7 @@ async def bulk_delete_products(
         await db.commit()
 
     import asyncio as _aio
+    store_integrations: dict = {}
     for product, store in rows:
         if not product.onec_id:
             continue
