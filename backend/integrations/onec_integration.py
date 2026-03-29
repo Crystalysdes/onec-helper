@@ -199,7 +199,7 @@ class OneCClient:
             path = (
                 f"odata/standard.odata/{register}"
                 f"?$format=json&$top=50000"
-                f"&$select=Номенклатура_Key,Цена,ВидЦены_Key"
+                f"&$select=Номенклатура_Key,Цена,ВидЦены_Key,ТипЦен_Key"
             )
             ok, data = await self._request("GET", path)
             if not ok or not isinstance(data, dict):
@@ -447,9 +447,13 @@ class OneCClient:
         return prices
 
     async def get_stock_balances(self, store_id: str = None) -> Tuple[bool, List[dict]]:
-        """Get stock balances from 1C. Tries multiple register names for different 1C configs."""
+        """Гет остатки из 1С. Пробует несколько регистров для разных конфигураций 1С."""
         registers = [
+            # Розница 3.0 — primary AR (вкладка Хранение)
+            ("AccumulationRegister_ЗапасыНаСкладах/Balance", "КоличествоБаланс", "Склад_Key", True),
+            # УНФ — IR
             ("InformationRegister_ОстаткиТоваров", "Количество", "СтруктурнаяЕдиница", False),
+            # УТ/КА
             ("AccumulationRegister_ТоварыНаСкладах/Balance", "КоличествоБаланс", "Склад_Key", True),
             ("AccumulationRegister_ЗапасыКПоступлениюНаСклады/Balance", "КоличествоБаланс", "Склад_Key", True),
         ]
@@ -471,7 +475,9 @@ class OneCClient:
                     for item in items
                     if item.get("Номенклатура_Key")
                 ]
-                return True, balances
+                if balances:  # only use if register actually has data
+                    logger.debug(f"1C get_stock_balances: using {reg_path} ({len(balances)} rows)")
+                    return True, balances
         return False, []
 
     async def get_or_create_category(self, category_name: str) -> Optional[str]:
@@ -1050,7 +1056,6 @@ class OneCClient:
         """Reduce stock by qty. Tries IR direct overwrite first, then write-off documents.
         new_absolute_qty: the target quantity to set (used for IR direct overwrite)."""
         clean = str(onec_id).strip("{}")
-        ir_ok_flag = False  # set if IR PATCH/POST succeeded; used as last-resort fallback
         from datetime import datetime as _dt
         period = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         _zero = "00000000-0000-0000-0000-000000000000"
@@ -1139,7 +1144,8 @@ class OneCClient:
                         if ok_ar:
                             logger.info(f"1C write-off via {_ar_name} Expense: qty={qty} delta=-{qty}")
                             return True
-                # do NOT return here — fall through to document section
+                if ir_ok_flag:
+                    return True  # IR PATCH worked even if AR failed
             # No existing IR record — POST with absolute qty
             ir_post = {
                 "Номенклатура_Key": clean,
@@ -1155,7 +1161,26 @@ class OneCClient:
             logger.debug(f"1C write-off IR POST: ok={ok_irp} resp={str(resp_irp)[:100]}")
             if ok_irp:
                 logger.info(f"1C write-off via IR POST abs: qty={new_absolute_qty}")
-                ir_ok_flag = True  # saved; fall through to document section
+                return True
+
+        # ── 0b. Direct AR Expense — runs regardless of IR result (Розница uses ЗапасыНаСкладах) ──
+        _ar_wo_base = {"Номенклатура_Key": clean, "Количество": float(qty),
+                      "Стоимость": summa, "Характеристика_Key": _zero}
+        if wh_key:
+            _ar_wo_base["Склад_Key"] = wh_key
+        if org_key:
+            _ar_wo_base["Организация_Key"] = org_key
+        for _ar_wo_name in ("AccumulationRegister_ЗапасыНаСкладах",
+                            "AccumulationRegister_Запасы"):
+            for _vid in ("Expense", "Расход"):
+                _pl = {"Period": period, **_ar_wo_base,
+                       ("RecordType" if _vid == "Expense" else "ВидДвижения"): _vid}
+                ok_arw, _ = await self._request(
+                    "POST", f"odata/standard.odata/{_ar_wo_name}", json=_pl
+                )
+                if ok_arw:
+                    logger.info(f"1C write-off via {_ar_wo_name} [{_vid}]: qty={qty}")
+                    return True
 
         # ── 0a. Document_ОприходованиеЗапасов with NEGATIVE quantity ───────────
         # Same document that successfully adds stock; negative qty = write-off movement.
@@ -1372,21 +1397,21 @@ class OneCClient:
             if ok_r:
                 logger.info(f"1C write-off via {reg}: qty={qty}")
                 return True
-        if ir_ok_flag:
-            logger.info("1C write-off: documents failed but IR PATCH/POST worked — using IR result")
-            return True
         return False
 
     async def _get_product_stock_qty(self, onec_id: str) -> float:
         """Return current stock quantity for a single product from 1C (0 if not found)."""
         clean = str(onec_id).strip("{}")
         sources = [
-            (f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
-             f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=10&$select=Количество",
-             "Количество"),
+            # Розница 3.0 — prefer AccumulationRegister (canonical)
             (f"odata/standard.odata/AccumulationRegister_ЗапасыНаСкладах/Balance"
              f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1",
              "КоличествоБаланс"),
+            # УНФ
+            (f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
+             f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=10&$select=Количество",
+             "Количество"),
+            # УТ/КА
             (f"odata/standard.odata/AccumulationRegister_ТоварыНаСкладах/Balance"
              f"?$format=json&$filter=Номенклатура_Key eq guid'{clean}'&$top=1",
              "КоличествоБаланс"),
