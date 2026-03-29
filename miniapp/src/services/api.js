@@ -48,6 +48,7 @@ export const storesAPI = {
   get: (id) => api.get(`/stores/${id}`),
   update: (id, data) => api.put(`/stores/${id}`, data),
   delete: (id) => api.delete(`/stores/${id}`),
+  testCredentials: (data) => api.post('/stores/test-credentials', data),
   createIntegration: (storeId, data) =>
     api.post(`/stores/${storeId}/integrations`, data),
   updateIntegration: (storeId, intId, data) =>

@@ -48,6 +48,25 @@ def _normalize_onec_url(raw: str) -> str:
     return raw
 
 
+class TestCredentialsRequest(BaseModel):
+    onec_url: str
+    onec_username: str
+    onec_password: str
+
+
+@router.post("/test-credentials")
+async def test_onec_credentials(
+    payload: TestCredentialsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Test 1C credentials without saving an integration."""
+    from backend.integrations.onec_integration import OneCClient
+    url = _normalize_onec_url(payload.onec_url)
+    client = OneCClient(url=url, username=payload.onec_username, password=payload.onec_password)
+    success, message = await client.test_connection()
+    return {"success": success, "message": message}
+
+
 class StoreCreate(BaseModel):
     name: str
     description: Optional[str] = None

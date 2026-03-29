@@ -21,6 +21,8 @@ export default function Settings() {
   const [diagnoseLoadingId, setDiagnoseLoadingId] = useState(null)
   const [diagnoseResults, setDiagnoseResults] = useState({})
   const [testResults, setTestResults] = useState({})
+  const [formTestResult, setFormTestResult] = useState(null)
+  const [formTestLoading, setFormTestLoading] = useState(false)
   const [storeDetail, setStoreDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -131,6 +133,27 @@ export default function Settings() {
     toast.success(`Выбран магазин: ${store.name}`)
   }
 
+  const testFormCredentials = async () => {
+    const data = intForm.getValues()
+    if (!data.onec_url || !data.onec_username || !data.onec_password) {
+      return toast.error('Заполните URL, логин и пароль')
+    }
+    setFormTestLoading(true)
+    setFormTestResult(null)
+    try {
+      const res = await storesAPI.testCredentials({
+        onec_url: data.onec_url,
+        onec_username: data.onec_username,
+        onec_password: data.onec_password,
+      })
+      setFormTestResult(res.data)
+    } catch (e) {
+      setFormTestResult({ success: false, message: e.response?.data?.detail || 'Ошибка подключения' })
+    } finally {
+      setFormTestLoading(false)
+    }
+  }
+
   const createIntegration = async (data) => {
     if (!currentStore) return toast.error('Выберите магазин')
     setLoading(true)
@@ -139,10 +162,11 @@ export default function Settings() {
         onec_url: data.onec_url,
         onec_username: data.onec_username,
         onec_password: data.onec_password,
-        name: data.name || '1C Integration',
+        name: '1C Integration',
       })
       toast.success('Интеграция создана!')
       intForm.reset()
+      setFormTestResult(null)
       setShowIntegrationForm(false)
       await loadStoreDetail(currentStore.id)
     } catch (e) {
@@ -811,6 +835,7 @@ export default function Settings() {
                       className="input-field"
                       placeholder="Код приложения или URL (напр. 3941876)"
                       {...intForm.register('onec_url', { required: true })}
+                      onChange={() => setFormTestResult(null)}
                     />
                     <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
                       Код из адреса браузера 1СФреш, или полный https://... адрес
@@ -821,6 +846,9 @@ export default function Settings() {
                   <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
                     style={{ background: 'rgba(234,179,8,0.08)', color: 'var(--tg-theme-text-color)' }}>
                     <p className="font-semibold text-[13px]">Шаг 2 — Настройка OData в 1С (один раз)</p>
+                    <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Путь: <b style={{ color: 'var(--tg-theme-text-color)' }}>Настройки → Синхронизация данных → Настройка стандартного интерфейса OData</b>
+                    </p>
 
                     {/* Open link */}
                     {(() => {
@@ -850,8 +878,8 @@ export default function Settings() {
                       <p className="font-semibold mb-0.5">📋 Вкладка «Авторизация»</p>
                       <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
                         <p>1. Включите переключатель <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
-                        <p>2. Придумайте и введите <b style={{ color: 'var(--tg-theme-text-color)' }}>имя пользователя</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
-                        <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните их — они нужны для шага 3</p>
+                        <p>2. Придумайте <b style={{ color: 'var(--tg-theme-text-color)' }}>логин</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
+                        <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните их — введёте в шаге 3</p>
                       </div>
                     </div>
 
@@ -876,29 +904,77 @@ export default function Settings() {
                     </div>
                   </div>
 
-                  {/* Step 3: Login / Password (from 1C Authorization tab) */}
+                  {/* Step 3: Login / Password */}
                   <div className="flex flex-col gap-1.5">
                     <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Шаг 3 — Введите логин и пароль из вкладки «Авторизация»
+                      Шаг 3 — Логин и пароль из вкладки «Авторизация»
                     </p>
                     <input
                       className="input-field"
                       placeholder="Имя пользователя (напр. odata.user) *"
                       {...intForm.register('onec_username', { required: true })}
+                      onChange={() => setFormTestResult(null)}
                     />
                     <input
                       className="input-field"
                       type="password"
                       placeholder="Пароль *"
                       {...intForm.register('onec_password', { required: true })}
+                      onChange={() => setFormTestResult(null)}
                     />
                   </div>
 
+                  {/* Test result */}
+                  {formTestResult && (() => {
+                    const isFullSuccess = formTestResult.success && !formTestResult.message?.includes('не опубликованы')
+                    const isMissingEntities = formTestResult.success && formTestResult.message?.includes('не опубликованы')
+                    return (
+                      <div className={`text-xs p-3 rounded-xl ${
+                        isFullSuccess ? 'bg-green-50 text-green-700' :
+                        isMissingEntities ? 'bg-amber-50 text-amber-800' :
+                        'bg-red-50 text-red-700'
+                      }`}>
+                        <p className="font-semibold mb-1">
+                          {isFullSuccess ? '✅ Подключение работает — можно сохранить' :
+                           isMissingEntities ? '⚠️ Подключение есть, но не все галочки поставлены' :
+                           '❌ Ошибка подключения'}
+                        </p>
+                        <p>{formTestResult.message}</p>
+                        {isMissingEntities && (
+                          <p className="mt-1">Вернитесь в 1С → вкладка «Состав» → поставьте нужные галочки → Сохранить и закрыть → нажмите «Тестировать» ещё раз</p>
+                        )}
+                        {!formTestResult.success && (
+                          <p className="mt-1">Проверьте URL, логин и пароль. Убедитесь что в 1С создан пользователь для OData (вкладка «Авторизация»).</p>
+                        )}
+                      </div>
+                    )
+                  })()}
+
                   <div className="flex gap-2">
-                    <button type="button" className="btn-secondary flex-1" onClick={() => setShowIntegrationForm(false)}>
+                    <button type="button" className="btn-secondary flex-1" onClick={() => { setShowIntegrationForm(false); setFormTestResult(null) }}>
                       Отмена
                     </button>
-                    <button type="submit" className="btn-primary flex-1" disabled={loading}>
+                    <button
+                      type="button"
+                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold active:opacity-70"
+                      style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                      onClick={testFormCredentials}
+                      disabled={formTestLoading}
+                    >
+                      {formTestLoading
+                        ? <span className="flex items-center justify-center gap-1.5"><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" /> Проверка...</span>
+                        : '🔍 Тестировать'}
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity"
+                      style={{
+                        background: 'var(--tg-theme-button-color)',
+                        opacity: (formTestResult?.success && !formTestResult?.message?.includes('не опубликованы')) ? 1 : 0.35,
+                        cursor: (formTestResult?.success && !formTestResult?.message?.includes('не опубликованы')) ? 'pointer' : 'not-allowed',
+                      }}
+                      disabled={loading || !(formTestResult?.success && !formTestResult?.message?.includes('не опубликованы'))}
+                    >
                       {loading ? '...' : 'Сохранить'}
                     </button>
                   </div>
