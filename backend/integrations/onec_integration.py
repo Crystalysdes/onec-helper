@@ -217,22 +217,27 @@ class OneCClient:
             retail: dict = {}
             purchase: dict = {}
             for oid, entries in by_product.items():
+                # Pass 1: named types take priority
                 for price_val, type_key in entries:
                     name = type_names.get(type_key, "")
                     if any(h in name for h in RETAIL_HINTS):
                         retail[oid] = price_val
                     elif any(h in name for h in PURCHASE_HINTS):
                         purchase[oid] = price_val
-                    else:
-                        # unknown type: highest → retail, others → purchase
-                        cur = retail.get(oid)
-                        if cur is None:
-                            retail[oid] = price_val
-                        elif price_val > cur:
-                            purchase[oid] = cur
-                            retail[oid] = price_val
-                        else:
-                            purchase[oid] = price_val
+
+                # Pass 2: unknown types fill whatever is still missing
+                unknowns = sorted(
+                    [pv for pv, tk in entries
+                     if not any(h in type_names.get(tk, "") for h in RETAIL_HINTS)
+                     and not any(h in type_names.get(tk, "") for h in PURCHASE_HINTS)],
+                    reverse=True,  # highest first
+                )
+                for price_val in unknowns:
+                    if oid not in retail:
+                        retail[oid] = price_val
+                    elif oid not in purchase and price_val != retail[oid]:
+                        purchase[oid] = price_val
+                        break
 
             logger.info(f"1C prices classified from {register}: retail={len(retail)} purchase={len(purchase)}")
             return retail, purchase
