@@ -184,8 +184,8 @@ class OneCClient:
         Purchase hints: 'закуп', 'учет', 'purchase', 'cost'
         Unknown types: highest price → retail, second highest → purchase.
         """
-        RETAIL_HINTS = ("розн",)
-        PURCHASE_HINTS = ("закуп", "учет", "purchase", "cost", "себест")
+        RETAIL_HINTS = ("розн", "продаж", "основн", "retail", "base")
+        PURCHASE_HINTS = ("закуп", "учет", "purchase", "cost", "себест", "поставщик", "приход", "входящ", "опт")
 
         type_names: dict[str, str] = {}
         types = await self.get_price_types()
@@ -258,8 +258,22 @@ class OneCClient:
         if price_type_name:
             price_type_key = await self._get_price_type_key_by_name(price_type_name)
             if price_type_key is None:
-                logger.warning(f"1C set_price: price type '{price_type_name}' not found in 1C — skipping")
-                return False
+                # Fallback: pick by position among available types
+                _all_types = await self.get_price_types()
+                _RETAIL_H = ("розн", "продаж", "основн", "retail")
+                _PURCH_H = ("закуп", "учет", "purchase", "cost", "поставщик", "приход")
+                _is_purch = any(h in price_type_name.lower() for h in _PURCH_H)
+                if _is_purch and _all_types:
+                    non_retail = [t for t in _all_types
+                                  if not any(h in t.get("Description", "").lower() for h in _RETAIL_H)]
+                    price_type_key = str((non_retail[0] if non_retail else _all_types[-1]).get("Ref_Key", "")).strip("{}")
+                    logger.warning(f"1C set_price: '{price_type_name}' not found, using fallback: {(non_retail[0] if non_retail else _all_types[-1]).get('Description')}")
+                elif _all_types:
+                    price_type_key = str(_all_types[0].get("Ref_Key", "")).strip("{}")
+                    logger.warning(f"1C set_price: '{price_type_name}' not found, using fallback: {_all_types[0].get('Description')}")
+                else:
+                    logger.warning(f"1C set_price: price type '{price_type_name}' not found, no types available — skipping")
+                    return False
         else:
             price_type_key = await self._get_or_fetch_price_type_key()
         vid_key = price_type_key or _zero
@@ -558,11 +572,23 @@ class OneCClient:
 
     async def _get_price_type_key_by_name(self, name_hint: str) -> str | None:
         """Return Ref_Key of the price type whose Description contains name_hint (case-insensitive)."""
+        _RETAIL_ALIASES = ("розн", "продаж", "основн", "retail", "base")
+        _PURCHASE_ALIASES = ("закуп", "учет", "purchase", "cost", "себест", "поставщик", "приход", "входящ", "опт")
         types = await self.get_price_types()
         hint = name_hint.lower()
         match = next((t for t in types if hint in t.get("Description", "").lower()), None)
         if match:
             return str(match.get("Ref_Key", "")).strip("{}")
+        aliases = _RETAIL_ALIASES if hint in _RETAIL_ALIASES else (
+            _PURCHASE_ALIASES if hint in _PURCHASE_ALIASES else ()
+        )
+        for alias in aliases:
+            match = next((t for t in types if alias in t.get("Description", "").lower()), None)
+            if match:
+                logger.debug(f"1C price type '{name_hint}' matched via alias '{alias}': {match.get('Description')}")
+                return str(match.get("Ref_Key", "")).strip("{}")
+        available = [t.get("Description", "") for t in types]
+        logger.warning(f"1C price type '{name_hint}' not found. Available: {available}")
         return None
 
     async def _get_org_key(self) -> str | None:
