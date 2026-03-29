@@ -1007,21 +1007,19 @@ class OneCClient:
                 logger.debug(f"1C write-off IR key_parts: {key_parts}")
                 logger.debug(f"1C write-off IR rec fields: {list(ir_rec.keys())} nom={ir_rec.get('Номенклатура_Key', 'MISSING')}")
                 if key_parts:
-                    put_payload = {k: v for k, v in ir_rec.items()
-                                   if "@" not in k
-                                   and k not in ("odata.metadata", "odata.type", "odata.etag")}
-                    put_payload["Номенклатура_Key"] = clean
-                    put_payload["Количество"] = float(new_absolute_qty)
-                    put_payload["Стоимость"] = round(new_absolute_qty * float(price or 0), 2)
+                    patch_payload = {
+                        "Количество": float(new_absolute_qty),
+                        "Стоимость": round(new_absolute_qty * float(price or 0), 2),
+                    }
                     ok_put, resp_put = await self._request(
-                        "PUT",
+                        "PATCH",
                         f"odata/standard.odata/InformationRegister_ОстаткиТоваров"
                         f"({','.join(p.strip() for p in key_parts)})",
-                        json=put_payload,
+                        json=patch_payload,
                     )
-                    logger.debug(f"1C write-off IR PUT: ok={ok_put} resp={str(resp_put)[:200]}")
+                    logger.debug(f"1C write-off IR PATCH: ok={ok_put} resp={str(resp_put)[:200]}")
                     if ok_put:
-                        logger.info(f"1C write-off via IR PUT: qty={new_absolute_qty} (delta=-{qty})")
+                        logger.info(f"1C write-off via IR PATCH: qty={new_absolute_qty} (delta=-{qty})")
                         return True
             # No existing IR record — POST with absolute qty
             ir_post = {
