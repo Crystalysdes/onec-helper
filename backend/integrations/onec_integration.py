@@ -202,15 +202,34 @@ class OneCClient:
                 f"&$select=Номенклатура_Key,Цена,ВидЦены_Key"
             )
             ok, data = await self._request("GET", path)
-            if not ok or not isinstance(data, dict) or not data.get("value"):
+            if not ok or not isinstance(data, dict):
+                logger.debug(f"1C price register {register} GET failed: ok={ok} type={type(data)}")
+                # Try without $select — might be wrong field name
+                ok, data = await self._request(
+                    "GET", f"odata/standard.odata/{register}?$format=json&$top=1"
+                )
+                if ok and isinstance(data, dict) and data.get("value"):
+                    sample = data["value"][0]
+                    logger.warning(f"1C {register} fields: {list(sample.keys())}")
+                continue
+            if not data.get("value"):
+                logger.debug(f"1C price register {register} returned empty value list")
+                # probe schema
+                ok2, d2 = await self._request(
+                    "GET", f"odata/standard.odata/{register}?$format=json&$top=1"
+                )
+                if ok2 and isinstance(d2, dict) and d2.get("value"):
+                    sample = d2["value"][0]
+                    logger.warning(f"1C {register} has data but $select missed fields. Available: {list(sample.keys())}")
                 continue
 
             # accumulate per-product by price type
             by_product: dict[str, list[tuple[float, str]]] = {}
             for item in data["value"]:
                 oid = str(item.get("Номенклатура_Key", "")).strip("{}")
-                price = item.get("Цена") or item.get("Price")
-                type_key = str(item.get("ВидЦены_Key") or "").strip("{}")
+                price = (item.get("Цена") or item.get("ЦенаЗаЕдиницу")
+                         or item.get("Price") or item.get("ЦенаЕдиницы"))
+                type_key = str(item.get("ВидЦены_Key") or item.get("ТипЦен_Key") or "").strip("{}")
                 if oid and price is not None:
                     by_product.setdefault(oid, []).append((float(price), type_key))
 
