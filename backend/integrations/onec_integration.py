@@ -60,6 +60,20 @@ class OneCClient:
                     "Откройте 1С → Администрирование → найдите «Настройка автоматического REST-сервиса» "
                     "и отметьте нужные объекты (Номенклатура, Товары на складах, Цены)."
                 )
+            # Check that required entities are published
+            entity_names = {e.get("name", "") for e in entities}
+            _REQUIRED = [
+                ("Catalog_Номенклатура",                    "Номенклатура"),
+                ("InformationRegister_ЦеныНоменклатуры",   "Цены номенклатуры"),
+                ("Document_УстановкаЦенНоменклатуры",      "Установка цен номенклатуры"),
+            ]
+            missing = [label for name, label in _REQUIRED if name not in entity_names]
+            if missing:
+                return True, (
+                    f"Подключение установлено ({len(entities)} объектов), "
+                    f"но не опубликованы в OData: {', '.join(missing)}. "
+                    f"Загрузите метаданные и поставьте нужные галочки."
+                )
             return True, f"Подключение к 1С успешно установлено. Доступно объектов: {len(entities)}"
         error = data.get("error", "Неизвестная ошибка") if data else "Нет ответа"
         return False, f"Ошибка подключения к 1С: {error}"
