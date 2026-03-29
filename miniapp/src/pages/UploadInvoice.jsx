@@ -15,13 +15,21 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
   const [open, setOpen] = useState(false)
   const isMatched = p._matched
   const isGlobal = p._global_match && !p._matched
+  const isNew = !isMatched
+
+  const cardBg = isMatched
+    ? 'rgba(34,197,94,0.07)'
+    : 'rgba(59,130,246,0.07)'
+  const borderColor = isMatched ? 'rgba(34,197,94,0.35)' : 'rgba(59,130,246,0.35)'
+  const iconBg = isMatched ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)'
+  const iconColor = isMatched ? '#22c55e' : '#3b82f6'
 
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+    <div className="rounded-2xl overflow-hidden" style={{ background: cardBg, border: `1.5px solid ${borderColor}` }}>
       <div className="flex items-center gap-2 p-3 cursor-pointer active:opacity-70" onClick={() => setOpen(v => !v)}>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-          style={{ background: isMatched ? 'rgba(34,197,94,0.12)' : 'rgba(99,102,241,0.1)' }}>
-          <Package size={14} style={{ color: isMatched ? '#22c55e' : 'var(--tg-theme-button-color)' }} />
+          style={{ background: iconBg }}>
+          <Package size={14} style={{ color: iconColor }} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -30,13 +38,19 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
             </p>
             {isMatched && (
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
-                style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+                style={{ background: 'rgba(34,197,94,0.18)', color: '#22c55e' }}>
                 В магазине
+              </span>
+            )}
+            {isNew && !isGlobal && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                style={{ background: 'rgba(59,130,246,0.18)', color: '#3b82f6' }}>
+                Новый
               </span>
             )}
             {isGlobal && (
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
-                style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
+                style={{ background: 'rgba(59,130,246,0.18)', color: '#3b82f6' }}>
                 Из каталога
               </span>
             )}
@@ -45,9 +59,22 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
             {[
               p.quantity != null && `${p.quantity} ${p.unit || 'шт'}`,
               p.purchase_price != null && `Закуп: ${p.purchase_price} ₽`,
-              p.price != null && `Цена: ${p.price} ₽`,
             ].filter(Boolean).join(' · ')}
           </p>
+        </div>
+        {/* Inline retail price */}
+        <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center rounded-lg overflow-hidden"
+            style={{ border: '1px solid rgba(128,128,128,0.2)', background: 'rgba(0,0,0,0.08)' }}>
+            <input
+              type="number" step="0.01" placeholder="Цена"
+              value={p.price ?? ''}
+              onChange={e => onUpdate(i, 'price', e.target.value ? parseFloat(e.target.value) : null)}
+              className="w-16 text-xs text-right bg-transparent outline-none py-1 pl-1 pr-0.5"
+              style={{ color: 'var(--tg-theme-text-color)' }}
+            />
+            <span className="text-xs pr-1" style={{ color: 'var(--tg-theme-hint-color)' }}>₽</span>
+          </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
