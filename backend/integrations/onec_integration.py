@@ -1295,10 +1295,13 @@ class OneCClient:
         if quantity is None or quantity < 0:
             return False
 
+        quantity = round(float(quantity), 3)  # clean float before any arithmetic
+        abs_qty = quantity  # absolute target — used for IR PATCH later
+
         # ── replace mode: compute delta vs current 1C balance ──────────────────────
         if replace:
-            current_qty = await self._get_product_stock_qty(onec_id)
-            delta = round(quantity - current_qty, 6)
+            current_qty = round(await self._get_product_stock_qty(onec_id), 3)
+            delta = round(quantity - current_qty, 3)
             logger.info(f"1C set_stock replace: onec_id={onec_id} "
                         f"new={quantity} current={current_qty} delta={delta}")
             if abs(delta) < 0.001:
@@ -1393,7 +1396,7 @@ class OneCClient:
                 ok_put, resp_put = await self._request(
                     "PATCH",
                     f"odata/standard.odata/InformationRegister_ОстаткиТоваров({','.join(p.strip() for p in key_parts)})",
-                    json={"Количество": float(quantity), "Стоимость": round(quantity * float(price or 0), 2)}
+                    json={"Количество": float(abs_qty), "Стоимость": round(abs_qty * float(price or 0), 2)}
                 )
                 if ok_put:
                     logger.info(f"1C stock set via PATCH InformationRegister_ОстаткиТоваров: {onec_id} qty={quantity}")
