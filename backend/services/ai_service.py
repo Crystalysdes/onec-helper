@@ -64,7 +64,7 @@ class AIService:
     async def _call_invoice(self, messages: list, max_tokens: int = 8192) -> str:
         """Call dedicated Claude Opus 4 model for invoice parsing.
         Falls back to fast model on 402 (insufficient credits)."""
-        primary = settings.OPENROUTER_INVOICE_MODEL if self._mode == "openai" else settings.CLAUDE_MODEL
+        primary = settings.OPENROUTER_INVOICE_MODEL if self._mode == "openai" else settings.ANTHROPIC_INVOICE_MODEL
         fallback = self._fast_model
 
         for attempt, (model, tokens) in enumerate([
