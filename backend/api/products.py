@@ -1548,6 +1548,7 @@ async def bulk_delete_products(
     if not body.ids:
         return {"deleted": 0}
 
+    logger.info(f"bulk_delete: received {len(body.ids)} ids from user={current_user.id}")
     result = await db.execute(
         select(ProductCache, Store)
         .join(Store, ProductCache.store_id == Store.id)
@@ -1558,10 +1559,25 @@ async def bulk_delete_products(
         )
     )
     rows = result.all()
-    store_integrations: dict = {}
-    for product, _ in rows:
-        product.is_active = False
-    await db.commit()
+    logger.info(f"bulk_delete: matched {len(rows)} products to delete")
+    if rows:
+        matched_ids = [product.id for product, _ in rows]
+        from sqlalchemy import update as _sa_update
+        await db.execute(
+            _sa_update(ProductCache)
+            .where(ProductCache.id.in_(matched_ids))
+            .values(is_active=False)
+        )
+        await db.commit()
+        # Re-fetch rows after update for 1C sync
+        re_result = await db.execute(
+            select(ProductCache, Store)
+            .join(Store, ProductCache.store_id == Store.id)
+            .where(ProductCache.id.in_(matched_ids))
+        )
+        rows = re_result.all()
+    else:
+        await db.commit()
 
     import asyncio as _aio
     for product, store in rows:
