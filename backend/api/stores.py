@@ -189,6 +189,7 @@ async def delete_store(
     if not store:
         raise HTTPException(status_code=404, detail="Магазин не найден")
     await db.delete(store)
+    await db.commit()
 
 
 @router.post("/{store_id}/integrations", status_code=status.HTTP_201_CREATED)

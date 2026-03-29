@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
-  Plus, Store, Plug, Check, ChevronLeft, ChevronRight, TestTube2,
+  Plus, Store, Plug, Check, ChevronLeft, ChevronRight,
   CreditCard, RefreshCw, Users, Copy, CheckCircle2,
-  AlertCircle, Crown, Zap, ExternalLink, RotateCcw, Pencil, Trash2,
+  AlertCircle, Crown, Zap, ExternalLink, Pencil, Trash2,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
@@ -18,11 +18,9 @@ export default function Settings() {
   const [showStoreForm, setShowStoreForm] = useState(false)
   const [showIntegrationForm, setShowIntegrationForm] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [testLoadingId, setTestLoadingId] = useState(null)
-  const [testResults, setTestResults] = useState({})
-  const [syncLoadingId, setSyncLoadingId] = useState(null)
   const [diagnoseLoadingId, setDiagnoseLoadingId] = useState(null)
   const [diagnoseResults, setDiagnoseResults] = useState({})
+  const [testResults, setTestResults] = useState({})
   const [storeDetail, setStoreDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -36,7 +34,6 @@ export default function Settings() {
   const [payLoading, setPayLoading] = useState(false)
 
   const [editingIntegration, setEditingIntegration] = useState(null)
-  const [connType, setConnType] = useState('web')
 
   const storeForm = useForm()
   const intForm = useForm({ defaultValues: { name: '1C Integration' } })
@@ -94,15 +91,34 @@ export default function Settings() {
       toast.success('Магазин создан!')
       storeForm.reset()
       setShowStoreForm(false)
-      await loadStores()
       const newStore = { id: res.data.id, name: res.data.name, description: res.data.description, is_active: true }
+      // Set new store BEFORE loadStores to avoid race: loadStores would see old currentStore
       setCurrentStore(newStore)
       setStoreDetail(null)
+      const listRes = await storesAPI.list()
+      setStores(listRes.data)
+      setShowIntegrationForm(true)
       setTab('integration')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка создания магазина')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const deleteStore = async (store) => {
+    if (!window.confirm(`Удалить магазин «${store.name}»? Все товары в нём будут удалены.`)) return
+    try {
+      await storesAPI.delete(store.id)
+      toast.success('Магазин удалён')
+      if (currentStore?.id === store.id) {
+        setCurrentStore(null)
+        setStoreDetail(null)
+      }
+      const listRes = await storesAPI.list()
+      setStores(listRes.data)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Ошибка удаления магазина')
     }
   }
 
@@ -136,24 +152,6 @@ export default function Settings() {
     }
   }
 
-  const testIntegration = async (storeId, intId) => {
-    setTestLoadingId(intId)
-    setTestResults(prev => { const n = { ...prev }; delete n[intId]; return n })
-    try {
-      const res = await storesAPI.testIntegration(storeId, intId)
-      setTestResults(prev => ({ ...prev, [intId]: res.data }))
-      if (res.data.success && !res.data.message?.includes('не опубликованы')) {
-        toast.success('Подключение успешно!')
-      } else if (!res.data.success) {
-        toast.error(res.data.message || 'Ошибка подключения')
-      }
-      await loadStoreDetail(storeId)
-    } catch (e) {
-      toast.error('Ошибка тестирования')
-    } finally {
-      setTestLoadingId(null)
-    }
-  }
 
   const startEditIntegration = (int) => {
     setEditingIntegration(int.id)
@@ -187,24 +185,17 @@ export default function Settings() {
     }
   }
 
-  const syncIntegration = async (storeId, intId) => {
-    setSyncLoadingId(intId)
-    try {
-      await storesAPI.syncIntegration(storeId, intId)
-      toast.success('Импорт товаров из 1С запущен!')
-    } catch {
-      toast.error('Ошибка синхронизации')
-    } finally {
-      setSyncLoadingId(null)
-    }
-  }
-
   const diagnoseIntegration = async (storeId, intId) => {
     setDiagnoseLoadingId(intId)
     setDiagnoseResults(prev => { const n = { ...prev }; delete n[intId]; return n })
+    setTestResults(prev => { const n = { ...prev }; delete n[intId]; return n })
     try {
-      const res = await storesAPI.diagnoseIntegration(storeId, intId)
-      setDiagnoseResults(prev => ({ ...prev, [intId]: res.data }))
+      const [testRes, diagRes] = await Promise.all([
+        storesAPI.testIntegration(storeId, intId),
+        storesAPI.diagnoseIntegration(storeId, intId),
+      ])
+      setTestResults(prev => ({ ...prev, [intId]: testRes.data }))
+      setDiagnoseResults(prev => ({ ...prev, [intId]: diagRes.data }))
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка диагностики')
     } finally {
@@ -343,13 +334,15 @@ export default function Settings() {
           {stores.map((store) => (
             <div
               key={store.id}
-              className="card flex items-center gap-3 cursor-pointer active:opacity-70 transition-opacity"
-              onClick={() => selectStore(store)}
+              className="card flex items-center gap-3"
             >
-              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+              <div
+                className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0 cursor-pointer active:opacity-70"
+                onClick={() => selectStore(store)}
+              >
                 <Store size={18} className="text-blue-500" />
               </div>
-              <div className="flex-1 min-w-0">
+              <div className="flex-1 min-w-0 cursor-pointer active:opacity-70" onClick={() => selectStore(store)}>
                 <p className="font-medium text-sm truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
                   {store.name}
                 </p>
@@ -359,14 +352,23 @@ export default function Settings() {
                   </p>
                 )}
               </div>
-              {currentStore?.id === store.id && (
-                <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
-                  style={{ background: 'var(--tg-theme-button-color)' }}
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {currentStore?.id === store.id && (
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center"
+                    style={{ background: 'var(--tg-theme-button-color)' }}
+                  >
+                    <Check size={13} color="white" strokeWidth={3} />
+                  </div>
+                )}
+                <button
+                  className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-60"
+                  style={{ background: 'rgba(239,68,68,0.1)' }}
+                  onClick={(e) => { e.stopPropagation(); deleteStore(store) }}
                 >
-                  <Check size={13} color="white" strokeWidth={3} />
-                </div>
-              )}
+                  <Trash2 size={13} style={{ color: '#ef4444' }} />
+                </button>
+              </div>
             </div>
           ))}
 
@@ -710,171 +712,74 @@ export default function Settings() {
                         style={{ left: int.use_accounting ? 'calc(100% - 22px)' : '2px' }} />
                     </button>
                   </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button
-                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70"
-                      style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
-                      disabled={testLoadingId === int.id}
-                      onClick={() => testIntegration(currentStore.id, int.id)}
-                    >
-                      {testLoadingId === int.id
-                        ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                        : <TestTube2 size={12} />}
-                      Тест
-                    </button>
-                    <button
-                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70"
-                      style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
-                      disabled={diagnoseLoadingId === int.id}
-                      onClick={() => diagnoseIntegration(currentStore.id, int.id)}
-                    >
-                      {diagnoseLoadingId === int.id
-                        ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                        : <span>🔍</span>}
-                      Диагностика
-                    </button>
-                    <button
-                      className="flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium active:opacity-70 text-white"
-                      style={{ background: 'var(--tg-theme-button-color)' }}
-                      disabled={syncLoadingId === int.id}
-                      onClick={() => syncIntegration(currentStore.id, int.id)}
-                    >
-                      {syncLoadingId === int.id
-                        ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        : <RotateCcw size={12} />}
-                      Импорт
-                    </button>
-                  </div>
-                  {diagnoseResults[int.id] && (() => {
-                    const diagnoseResult = diagnoseResults[int.id]
-                    return (
-                    <div className="flex flex-col gap-2 p-3 rounded-xl text-xs" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                      <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>🔍 Результат диагностики</p>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {[
-                          ['Объектов OData', diagnoseResult.entities_published],
-                          ['Товаров в 1С (пример)', diagnoseResult.products_ok ? diagnoseResult.products_sample?.length : `❌ ${diagnoseResult.products_error || 'нет доступа'}`],
-                          ['Штрихкодов в 1С', diagnoseResult.barcodes_fetched],
-                          ['Каталог штрихкодов', diagnoseResult.barcode_catalog_published ? '✅ опубликован' : '❌ не опубликован'],
-                          ['Товаров в боте', diagnoseResult.synced_in_db],
-                          ['Товаров с баркодом', diagnoseResult.synced_with_barcode],
-                        ].map(([label, val]) => (
-                          <div key={label} className="p-2 rounded-lg" style={{ background: 'var(--tg-theme-bg-color)' }}>
-                            <p style={{ color: 'var(--tg-theme-hint-color)' }}>{label}</p>
-                            <p className="font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{val ?? '—'}</p>
-                          </div>
-                        ))}
-                      </div>
-                      {diagnoseResult.products_sample?.length > 0 && (
-                        <div>
-                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Примеры товаров из 1С:</p>
-                          {diagnoseResult.products_sample.map((p, i) => (
-                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {p.name} <span style={{ color: 'var(--tg-theme-hint-color)' }}>({p.onec_id?.slice(0,8)}...)</span></p>
-                          ))}
-                        </div>
-                      )}
-                      {Object.keys(diagnoseResult.barcodes_sample || {}).length > 0 && (
-                        <div>
-                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Примеры штрихкодов:</p>
-                          {Object.entries(diagnoseResult.barcodes_sample).map(([k, v]) => (
-                            <p key={k} style={{ color: 'var(--tg-theme-text-color)' }}>• {v}</p>
-                          ))}
-                        </div>
-                      )}
-                      {!diagnoseResult.barcode_catalog_published && (
-                        <div className="p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
-                          <p className="font-semibold mb-1" style={{ color: '#ef4444' }}>⚠️ Штрихкоды не доступны</p>
-                          <p style={{ color: 'var(--tg-theme-hint-color)' }}>Для синхронизации штрихкодов нужно опубликовать <b>НоменклатураШтрихкоды</b> в настройках REST-сервиса 1С.</p>
-                          <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>1С → Администрирование → Настройка REST-сервиса → добавить <b>Catalog.НоменклатураШтрихкоды</b></p>
-                        </div>
-                      )}
-                      {diagnoseResult.barcode_entities?.length > 0 && (
-                        <div>
-                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Сущности штрихкодов в OData:</p>
-                          {diagnoseResult.barcode_entities.map((e, i) => (
-                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
-                          ))}
-                        </div>
-                      )}
-                      {diagnoseResult.price_entities?.length > 0 && (
-                        <div>
-                          <p className="font-medium mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>Регистры цен в OData:</p>
-                          {diagnoseResult.price_entities.map((e, i) => (
-                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
-                          ))}
-                        </div>
-                      )}
-                      {diagnoseResult.probe_barcode_price && (
-                        <details>
-                          <summary className="cursor-pointer font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>🧪 Тест записи штрихкода/цены</summary>
-                          <div className="mt-1 text-xs break-all" style={{ color: 'var(--tg-theme-text-color)' }}>
-                            <p>Типы цен: {diagnoseResult.probe_barcode_price.price_types_found?.join(', ') || 'не найдены'}</p>
-                            {diagnoseResult.probe_barcode_price.barcode_attempts?.map((a, i) => (
-                              <p key={i}>{a.ok ? '✅' : '❌'} {a.entity}/{a.owner_field}: {a.ok ? 'OK' : a.resp?.slice(0,120)}</p>
-                            ))}
-                            {diagnoseResult.probe_barcode_price.price_attempts?.map((a, i) => (
-                              <p key={i}>{a.ok ? '✅' : '❌'} {a.register}: {a.ok ? 'OK' : a.resp?.slice(0,120)}</p>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-                      {diagnoseResult.nom_entities?.length > 0 && (
-                        <details>
-                          <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>Каталоги Номенклатур в OData</summary>
-                          <div className="mt-1">{diagnoseResult.nom_entities.map((e, i) => (
-                            <p key={i} style={{ color: 'var(--tg-theme-text-color)' }}>• {e}</p>
-                          ))}</div>
-                        </details>
-                      )}
-                      {diagnoseResult.entities?.length > 0 && (
-                        <details>
-                          <summary className="cursor-pointer" style={{ color: 'var(--tg-theme-hint-color)' }}>Все объекты OData ({diagnoseResult.entities_published})</summary>
-                          <p style={{ color: 'var(--tg-theme-text-color)' }} className="mt-1 break-all">{diagnoseResult.entities.join(', ')}</p>
-                        </details>
-                      )}
-                    </div>
-                    )
-                  })()}
-                  {testResults[int.id] && (() => {
-                    const testResult = testResults[int.id]
-                    const needsSetup = testResult.success && testResult.message?.includes('не опубликованы')
+                  <button
+                    className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium active:opacity-70 w-full"
+                    style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
+                    disabled={diagnoseLoadingId === int.id}
+                    onClick={() => diagnoseIntegration(currentStore.id, int.id)}
+                  >
+                    {diagnoseLoadingId === int.id
+                      ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                      : <span>🔍</span>}
+                    {diagnoseLoadingId === int.id ? 'Проверка...' : 'Тестировать подключение'}
+                  </button>
+                  {(testResults[int.id] || diagnoseResults[int.id]) && (() => {
+                    const t = testResults[int.id]
+                    const d = diagnoseResults[int.id]
+                    const needsSetup = t?.success && t?.message?.includes('не опубликованы')
                     const setupUrl = needsSetup ? getSetupUrl(int.onec_url) : null
+                    const connOk = t?.success
                     return (
                       <div className={`text-xs p-3 rounded-xl flex flex-col gap-2 ${
                         needsSetup ? 'bg-amber-50 text-amber-800' :
-                        testResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                        connOk ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
                       }`}>
-                        <span>{testResult.message}</span>
+                        <p className="font-semibold text-sm">
+                          {connOk ? '✅ Подключение установлено' : '❌ Нет подключения'}
+                        </p>
+                        {t?.message && <p>{t.message}</p>}
+                        {d && connOk && !needsSetup && (
+                          <div className="grid grid-cols-3 gap-1 mt-0.5">
+                            {[
+                              ['Товаров в 1С', d.products_ok ? `${d.products_sample?.length || 0}+` : '—'],
+                              ['В боте', d.synced_in_db ?? '—'],
+                              ['Штрихкодов', d.barcodes_fetched ?? '—'],
+                            ].map(([label, val]) => (
+                              <div key={label} className="p-1.5 rounded-lg text-center" style={{ background: 'rgba(34,197,94,0.1)' }}>
+                                <p className="text-[10px] opacity-70">{label}</p>
+                                <p className="font-bold text-xs">{val}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {needsSetup && setupUrl && (
                           <div className="flex flex-col gap-2">
                             <p className="font-semibold text-amber-900">Настройка OData (1 раз):</p>
                             <div className="flex flex-col gap-1">
                               <p><b>1.</b> Откройте ссылку ниже</p>
-                              <p><b>2.</b> Нажмите <b>«Загрузить метаданные»</b> — появится список объектов</p>
-                              <p><b>3.</b> Найдите и поставьте галочки (ищите по названию):</p>
+                              <p><b>2.</b> Нажмите <b>«Загрузить метаданные»</b></p>
+                              <p><b>3.</b> Найдите и поставьте галочки:</p>
                             </div>
                             <div className="flex flex-col gap-1 pl-2">
                               {[
-                                ['Номенклатура', 'Товары — обязательно'],
-                                ['Штрихкоды номенклатуры', 'Штрихкоды — обязательно'],
-                                ['Цены номенклатуры', 'Цены и запись цен — обязательно'],
-                                ['Остатки товаров', 'Остатки — рекомендуется'],
+                                ['Номенклатура', 'обязательно'],
+                                ['Штрихкоды номенклатуры', 'обязательно'],
+                                ['Цены номенклатуры', 'обязательно'],
+                                ['Остатки товаров', 'рекомендуется'],
                               ].map(([name, hint]) => (
-                                <div key={name} className="flex items-center gap-2">
-                                  <span className="text-amber-600 font-bold flex-shrink-0">✓</span>
-                                  <div>
-                                    <span className="font-semibold">{name}</span>
-                                    <span className="text-amber-700"> — {hint}</span>
-                                  </div>
+                                <div key={name} className="flex items-center gap-1.5">
+                                  <span className="text-amber-600 font-bold">✓</span>
+                                  <span className="font-semibold">{name}</span>
+                                  <span className="opacity-70">— {hint}</span>
                                 </div>
                               ))}
                             </div>
-                            <p className="text-amber-700"><b>4.</b> Нажмите <b>«Сохранить и закрыть»</b> → вернитесь и нажмите <b>«Импорт»</b></p>
+                            <p className="text-amber-700"><b>4.</b> Сохранить → вернитесь → нажмите «Тестировать» ещё раз</p>
                             <a
                               href={setupUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="mt-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-white"
+                              className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-white"
                               style={{ background: 'var(--tg-theme-button-color)' }}
                             >
                               <ExternalLink size={13} />
@@ -896,6 +801,12 @@ export default function Settings() {
                   <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
                     Подключить 1С
                   </p>
+                  <div className="text-xs p-3 rounded-xl flex flex-col gap-1.5" style={{ background: 'rgba(36,129,204,0.08)', color: 'var(--tg-theme-hint-color)' }}>
+                    <p><b style={{ color: 'var(--tg-theme-text-color)' }}>URL</b> — код приложения из адреса браузера:</p>
+                    <p className="font-mono px-2 py-1 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.07)' }}>3941876 &nbsp;или&nbsp; msk2/3941876</p>
+                    <p>Или полный адрес: <span className="font-mono">https://msk1.1cfresh.com/a/sbm/3941876/ru/</span></p>
+                    <p className="mt-0.5"><b style={{ color: 'var(--tg-theme-text-color)' }}>Логин/пароль</b> — от аккаунта 1СФреш (или пользователь в самой 1С)</p>
+                  </div>
                   <input
                     className="input-field"
                     placeholder="URL или код приложения * (напр. 3941876)"
@@ -912,72 +823,6 @@ export default function Settings() {
                     placeholder="Пароль *"
                     {...intForm.register('onec_password', { required: true })}
                   />
-                  <input
-                    className="input-field"
-                    placeholder="Название интеграции"
-                    {...intForm.register('name')}
-                  />
-                  {/* Connection type selector */}
-                  <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                    {[['web', '☁️ Облако / 1СФреш'], ['local', '🖥️ Локальная сеть']].map(([v, l]) => (
-                      <button key={v} type="button"
-                        className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
-                        style={{
-                          background: connType === v ? 'var(--tg-theme-bg-color)' : 'transparent',
-                          color: connType === v ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
-                        }}
-                        onClick={() => setConnType(v)}>{l}</button>
-                    ))}
-                  </div>
-
-                  {connType === 'web' ? (
-                    <div className="text-xs p-3 rounded-xl flex flex-col gap-2" style={{ background: 'rgba(36,129,204,0.08)' }}>
-                      <p className="font-semibold text-[13px]" style={{ color: 'var(--tg-theme-text-color)' }}>☁️ 1СФреш / Облако</p>
-                      <div className="flex flex-col gap-2" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        <div>
-                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>🔗 URL сервера</p>
-                          <p>Вариант 1 — <b>просто код приложения</b> из адреса браузера:</p>
-                          <p className="font-mono text-[11px] mt-0.5 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>3941876</p>
-                          <p className="mt-1">Если сервер не msk1, укажите его через /:</p>
-                          <p className="font-mono text-[11px] mt-0.5 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>msk2/3941876</p>
-                          <p className="mt-1">Вариант 2 — <b>полный URL</b> из браузера (можно со <code className="font-mono px-1 rounded" style={{ background: 'rgba(0,0,0,0.1)' }}>/ru/</code> в конце — обрежется автоматически):</p>
-                          <p className="font-mono text-[11px] mt-0.5 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>https://msk1.1cfresh.com/a/sbm/3941876/ru/</p>
-                        </div>
-                        <div>
-                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>👤 Логин и пароль</p>
-                          <p>Логин: ваш email или логин от 1СФреш</p>
-                          <p>Пароль: от того же аккаунта (не ИНН/ОГРН)</p>
-                        </div>
-                        <div className="px-2 py-1.5 rounded-lg" style={{ background: 'rgba(36,129,204,0.1)' }}>
-                          <p style={{ color: 'var(--tg-theme-text-color)' }}>💡 После сохранения нажмите <b>«Тест»</b> — если OData не настроен, появится прямая ссылка для настройки</p>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-xs p-3 rounded-xl flex flex-col gap-2" style={{ background: 'rgba(34,197,94,0.08)' }}>
-                      <p className="font-semibold text-[13px]" style={{ color: 'var(--tg-theme-text-color)' }}>🖥️ Локальный сервер</p>
-                      <div className="flex flex-col gap-2" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        <div>
-                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>🔗 URL сервера</p>
-                          <p>Формат: <code className="font-mono px-1 rounded" style={{ background: 'rgba(0,0,0,0.1)' }}>http://&lt;адрес&gt;/&lt;база&gt;</code></p>
-                          <p className="font-mono text-[11px] mt-1 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.07)' }}>http://192.168.1.10/УправлениеМагазином</p>
-                          <p className="mt-1">Чтобы найти: откройте <b>1СПредприятие</b> → Панель администратора → <b>Публикация на веб-сервере</b> → скопируйте Адрес имени базы</p>
-                        </div>
-                        <div>
-                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>👤 Логин и пароль</p>
-                          <p>Логин: имя пользователя в самой 1С (не Windows-логин)</p>
-                          <p>Пароль: пароль пользователя в 1С</p>
-                          <p className="mt-1">Найти: 1С → <b>Администрирование</b> → <b>Пользователи</b> → имя пользователя</p>
-                        </div>
-                        <div>
-                          <p className="font-semibold mb-0.5" style={{ color: 'var(--tg-theme-text-color)' }}>⚙️ Требования к серверу</p>
-                          <p>• Сервер должен быть доступен из интернета</p>
-                          <p>• Открыт порт 80 (или 443 для HTTPS)</p>
-                          <p>• В 1С должен быть запущен модуль <b>REST-сервиса</b></p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                   <div className="flex gap-2">
                     <button type="button" className="btn-secondary flex-1" onClick={() => setShowIntegrationForm(false)}>
                       Отмена
@@ -1002,12 +847,6 @@ export default function Settings() {
                 </button>
               )}
 
-              <div className="card mt-1 flex flex-col gap-1" style={{ background: 'rgba(234,179,8,0.1)' }}>
-                <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Как подключить 1С:Fresh</p>
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  Введите URL без <code>/ru/</code> в конце. После подключения нажмите <b>«Проверить»</b> — если OData не настроен, бот покажет прямую ссылку на настройку (займёт ~1 мин).
-                </p>
-              </div>
             </>
           )}
         </div>
