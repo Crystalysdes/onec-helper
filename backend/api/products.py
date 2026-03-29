@@ -903,6 +903,7 @@ async def save_invoice_products(
         )
         integration = result.scalar_one_or_none()
         if integration:
+            import asyncio as _aio
             from backend.integrations.onec_integration import OneCClient
             from backend.core.security import decrypt_password
             client = OneCClient(
@@ -910,9 +911,31 @@ async def save_invoice_products(
                 username=integration.onec_username,
                 password=decrypt_password(integration.onec_password_encrypted),
             )
+            _settings = integration.settings or {}
+            use_accounting = bool(_settings.get("use_accounting", False))
             for product in saved:
                 try:
-                    await client.create_product(product)
+                    onec_id = product.onec_id
+                    if not onec_id:
+                        success, data = await client.create_product(product)
+                        if success and data and data.get("Ref_Key"):
+                            onec_id = str(data["Ref_Key"]).strip("{}")
+                            product.onec_id = onec_id
+                    if onec_id:
+                        _aio.ensure_future(_push_barcode_and_prices(
+                            onec_url=integration.onec_url,
+                            onec_username=integration.onec_username,
+                            onec_password_enc=integration.onec_password_encrypted,
+                            onec_id=onec_id,
+                            barcode=product.barcode,
+                            price=float(product.price) if product.price else None,
+                            purchase_price=float(product.purchase_price) if product.purchase_price else None,
+                            name=product.name,
+                            article=product.article,
+                            quantity=float(product.quantity) if product.quantity else None,
+                            use_accounting=use_accounting,
+                            delay=5,
+                        ))
                 except Exception as e:
                     logger.warning(f"1C sync failed for {product.name}: {e}")
 
