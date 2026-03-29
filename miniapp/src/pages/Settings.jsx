@@ -797,32 +797,91 @@ export default function Settings() {
 
               {/* Add Integration Form */}
               {showIntegrationForm ? (
-                <form onSubmit={intForm.handleSubmit(createIntegration)} className="card flex flex-col gap-3">
+                <form onSubmit={intForm.handleSubmit(createIntegration)} className="card flex flex-col gap-4">
                   <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
                     Подключить 1С
                   </p>
-                  <div className="text-xs p-3 rounded-xl flex flex-col gap-1.5" style={{ background: 'rgba(36,129,204,0.08)', color: 'var(--tg-theme-hint-color)' }}>
-                    <p><b style={{ color: 'var(--tg-theme-text-color)' }}>URL</b> — код приложения из адреса браузера:</p>
-                    <p className="font-mono px-2 py-1 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.07)' }}>3941876 &nbsp;или&nbsp; msk2/3941876</p>
-                    <p>Или полный адрес: <span className="font-mono">https://msk1.1cfresh.com/a/sbm/3941876/ru/</span></p>
-                    <p className="mt-0.5"><b style={{ color: 'var(--tg-theme-text-color)' }}>Логин/пароль</b> — от аккаунта 1СФреш (или пользователь в самой 1С)</p>
+
+                  {/* Step 1: URL */}
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Шаг 1 — URL вашей 1С
+                    </p>
+                    <input
+                      className="input-field"
+                      placeholder="Код приложения или URL (напр. 3941876)"
+                      {...intForm.register('onec_url', { required: true })}
+                    />
+                    <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Код из адреса браузера 1СФреш, или полный https://... адрес
+                    </p>
                   </div>
-                  <input
-                    className="input-field"
-                    placeholder="URL или код приложения * (напр. 3941876)"
-                    {...intForm.register('onec_url', { required: true })}
-                  />
-                  <input
-                    className="input-field"
-                    placeholder="Имя пользователя *"
-                    {...intForm.register('onec_username', { required: true })}
-                  />
-                  <input
-                    className="input-field"
-                    type="password"
-                    placeholder="Пароль *"
-                    {...intForm.register('onec_password', { required: true })}
-                  />
+
+                  {/* Step 2: OData checklist with live link */}
+                  <div className="flex flex-col gap-2 p-3 rounded-xl text-xs"
+                    style={{ background: 'rgba(234,179,8,0.1)', color: 'var(--tg-theme-text-color)' }}>
+                    <p className="font-semibold">Шаг 2 — Настройка OData в 1С (один раз)</p>
+                    <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      <p><b style={{ color: 'var(--tg-theme-text-color)' }}>1.</b> Откройте настройку OData (кнопка ниже)</p>
+                      <p><b style={{ color: 'var(--tg-theme-text-color)' }}>2.</b> Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Загрузить метаданные»</b></p>
+                      <p><b style={{ color: 'var(--tg-theme-text-color)' }}>3.</b> Найдите и поставьте галочки:</p>
+                    </div>
+                    <div className="flex flex-col gap-1 pl-2">
+                      {[
+                        'Номенклатура',
+                        'Штрихкоды номенклатуры',
+                        'Цены номенклатуры',
+                        'Остатки товаров',
+                      ].map((name) => (
+                        <div key={name} className="flex items-center gap-1.5">
+                          <span className="font-bold" style={{ color: '#d97706' }}>✓</span>
+                          <span className="font-semibold">{name}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      <b style={{ color: 'var(--tg-theme-text-color)' }}>4.</b> Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Сохранить и закрыть»</b>
+                    </p>
+                    {(() => {
+                      const url = intForm.watch('onec_url')
+                      const link = url ? getSetupUrl(url) : null
+                      return link ? (
+                        <a
+                          href={link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-white mt-1"
+                          style={{ background: 'var(--tg-theme-button-color)' }}
+                        >
+                          <ExternalLink size={13} />
+                          Открыть настройку OData в 1С
+                        </a>
+                      ) : (
+                        <p className="text-center italic mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          ← Введите URL выше, чтобы появилась ссылка
+                        </p>
+                      )
+                    })()}
+                  </div>
+
+                  {/* Step 3: Login / Password */}
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                      Шаг 3 — Логин и пароль
+                    </p>
+                    <input
+                      className="input-field"
+                      placeholder="Имя пользователя *"
+                      {...intForm.register('onec_username', { required: true })}
+                    />
+                    <input
+                      className="input-field"
+                      type="password"
+                      placeholder="Пароль *"
+                      {...intForm.register('onec_password', { required: true })}
+                    />
+                  </div>
+
                   <div className="flex gap-2">
                     <button type="button" className="btn-secondary flex-1" onClick={() => setShowIntegrationForm(false)}>
                       Отмена
