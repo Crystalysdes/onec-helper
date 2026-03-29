@@ -1158,12 +1158,16 @@ async def delete_product(
         raise HTTPException(status_code=404, detail="Товар не найден")
 
     await _check_store_access(product.store_id, current_user, db)
+    # Save before commit — async SQLAlchemy expires objects after commit
+    _store_id = product.store_id
+    _onec_id = product.onec_id
+    _name = product.name
     product.is_active = False
     await db.commit()
 
-    if product.onec_id:
+    if _onec_id:
         integ_r = await db.execute(
-            select(Integration).where(Integration.store_id == product.store_id)
+            select(Integration).where(Integration.store_id == _store_id)
             .order_by(Integration.status)
         )
         integration = integ_r.scalars().first()
@@ -1173,8 +1177,8 @@ async def delete_product(
                 onec_url=integration.onec_url,
                 onec_username=integration.onec_username,
                 onec_password_enc=integration.onec_password_encrypted,
-                onec_id=product.onec_id,
-                name=product.name,
+                onec_id=_onec_id,
+                name=_name,
             ))
 
 
