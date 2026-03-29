@@ -1005,10 +1005,12 @@ class OneCClient:
                     else:
                         key_parts.append(f"{k}='{v}'")
                 logger.debug(f"1C write-off IR key_parts: {key_parts}")
+                logger.debug(f"1C write-off IR rec fields: {list(ir_rec.keys())} nom={ir_rec.get('Номенклатура_Key', 'MISSING')}")
                 if key_parts:
                     put_payload = {k: v for k, v in ir_rec.items()
                                    if "@" not in k
                                    and k not in ("odata.metadata", "odata.type", "odata.etag")}
+                    put_payload["Номенклатура_Key"] = clean
                     put_payload["Количество"] = float(new_absolute_qty)
                     put_payload["Стоимость"] = round(new_absolute_qty * float(price or 0), 2)
                     ok_put, resp_put = await self._request(
