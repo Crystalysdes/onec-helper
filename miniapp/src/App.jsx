@@ -13,6 +13,7 @@ import ImportCSV from './pages/ImportCSV'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import Admin from './pages/Admin'
+import Subscription from './pages/Subscription'
 import LoadingScreen from './components/LoadingScreen'
 
 function App() {
@@ -180,6 +181,7 @@ function App() {
           <Route path="/import-csv" element={<ImportCSV />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/subscription" element={<Subscription />} />
           {isAdmin() && <Route path="/admin" element={<Admin />} />}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

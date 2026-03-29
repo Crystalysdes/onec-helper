@@ -152,7 +152,7 @@ export default function Dashboard() {
                   <button
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border active:opacity-70 transition-opacity flex-shrink-0"
                     style={{ background: badge.bg, borderColor: badge.border }}
-                    onClick={() => navigate('/settings', { state: { tab: 'subscription' } })}
+                    onClick={() => navigate('/subscription')}
                   >
                     <badge.icon size={10} color={badge.color} />
                     <span className="text-[10px] font-bold" style={{ color: badge.color }}>
@@ -333,6 +333,33 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Subscription / Referral card ── */}
+      {subStatus && !subLoading && (
+        <div className="px-4 mb-2">
+          <button
+            className="w-full flex items-center gap-3 p-3.5 rounded-2xl active:opacity-70 transition-opacity text-left"
+            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)' }}
+            onClick={() => navigate('/subscription')}
+          >
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: 'rgba(99,102,241,0.15)' }}>
+              <Crown size={17} color="var(--tg-theme-button-color)" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <span className="font-medium text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
+                Подписка и рефералы
+              </span>
+              {subStatus.next_discount_percent > 0 && (
+                <p className="text-[11px] mt-0.5" style={{ color: '#22c55e' }}>
+                  🎁 Скидка {subStatus.next_discount_percent}% на след. оплату
+                </p>
+              )}
+            </div>
+            <ChevronRight size={14} style={{ color: 'var(--tg-theme-hint-color)', opacity: 0.6 }} />
+          </button>
         </div>
       )}
 

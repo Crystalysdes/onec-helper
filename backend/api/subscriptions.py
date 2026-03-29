@@ -4,7 +4,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 from loguru import logger
 
 from backend.database.connection import get_db
@@ -244,24 +244,32 @@ async def yookassa_webhook(
                 )
                 referrer_sub = referrer_sub_result.scalar_one_or_none()
                 if referrer_sub:
-                    referrer_sub.next_discount_percent = min(
-                        50, (referrer_sub.next_discount_percent or 0) + 20
+                    referrer_sub.next_discount_percent = max(
+                        referrer_sub.next_discount_percent or 0, 20
                     )
 
-                # Level 2: if the referrer was themselves referred, their referrer gets 10%
+                # Level 2: if the referrer was also referred by someone → 10% to level-2 referrer
                 level2_result = await db.execute(
-                    select(ReferralUse).where(ReferralUse.referee_id == referral_use.referrer_id)
+                    select(ReferralUse).where(
+                        ReferralUse.referee_id == referral_use.referrer_id,
+                    )
                 )
                 level2_use = level2_result.scalar_one_or_none()
                 if level2_use:
-                    level2_sub_result = await db.execute(
+                    l2_sub_result = await db.execute(
                         select(Subscription).where(Subscription.user_id == level2_use.referrer_id)
                     )
-                    level2_sub = level2_sub_result.scalar_one_or_none()
-                    if level2_sub:
-                        level2_sub.next_discount_percent = min(
-                            50, (level2_sub.next_discount_percent or 0) + 10
+                    l2_sub = l2_sub_result.scalar_one_or_none()
+                    if l2_sub:
+                        l2_sub.next_discount_percent = max(
+                            l2_sub.next_discount_percent or 0, 10
                         )
+                    l2_ref_result = await db.execute(
+                        select(ReferralCode).where(ReferralCode.user_id == level2_use.referrer_id)
+                    )
+                    l2_ref = l2_ref_result.scalar_one_or_none()
+                    if l2_ref:
+                        l2_ref.successful_referrals += 1
 
     elif event == "payment.canceled":
         payment.status = PaymentStatus.cancelled
@@ -291,32 +299,24 @@ async def get_referral_info(
     bot_username = settings.BOT_USERNAME
     link = f"https://t.me/{bot_username}?start=ref_{ref.code}"
 
-    # Detailed list of referred users with payment status
     uses_result = await db.execute(
         select(ReferralUse, User)
         .join(User, User.id == ReferralUse.referee_id)
         .where(ReferralUse.referrer_id == current_user.id)
         .order_by(ReferralUse.created_at.desc())
     )
-    uses_rows = uses_result.all()
-
-    referees = []
-    level2_earned = 0
-    for use, u in uses_rows:
-        # Count how many of this referee's own referrals have paid (level-2 rewards)
-        l2_count = (await db.execute(
-            select(func.count(ReferralUse.id)).where(
-                ReferralUse.referrer_id == u.id,
-                ReferralUse.discount_granted == True,
-            )
-        )).scalar() or 0
-        level2_earned += l2_count
-        referees.append({
-            "name": u.telegram_first_name or u.telegram_username or f"ID {u.telegram_id}",
-            "username": u.telegram_username,
+    referrals = []
+    for use, referred_user in uses_result.all():
+        name = (
+            referred_user.telegram_first_name
+            or (f"@{referred_user.telegram_username}" if referred_user.telegram_username else None)
+            or f"ID {referred_user.telegram_id}"
+        )
+        referrals.append({
+            "name": name,
+            "username": referred_user.telegram_username,
+            "joined_at": use.created_at,
             "paid": use.discount_granted,
-            "joined_at": use.created_at.isoformat() if use.created_at else None,
-            "level2_referrals": l2_count,
         })
 
     return {
@@ -324,8 +324,7 @@ async def get_referral_info(
         "link": link,
         "total_referrals": ref.total_referrals,
         "successful_referrals": ref.successful_referrals,
-        "referees": referees,
-        "level2_earned": level2_earned,
+        "referrals": referrals,
     }
 
 
