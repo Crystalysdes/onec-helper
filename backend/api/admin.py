@@ -746,11 +746,19 @@ async def admin_bulk_delete_products(
     if not body.ids:
         return {"deleted": 0}
     from uuid import UUID as _UUID
-    from sqlalchemy import text as _text
-    uuids = [str(_UUID(i)) if isinstance(i, str) else str(i) for i in body.ids]
+    from sqlalchemy import delete as _sa_delete
+    uuids = []
+    for i in body.ids:
+        try:
+            uuids.append(_UUID(str(i)))
+        except (ValueError, AttributeError):
+            pass
+    if not uuids:
+        return {"deleted": 0}
     result = await db.execute(
-        _text("DELETE FROM global_products WHERE id = ANY(:ids::uuid[]) RETURNING id"),
-        {"ids": uuids},
+        _sa_delete(GlobalProduct)
+        .where(GlobalProduct.id.in_(uuids))
+        .returning(GlobalProduct.id)
     )
     deleted = len(result.fetchall())
     await db.commit()
