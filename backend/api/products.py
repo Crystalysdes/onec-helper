@@ -740,10 +740,20 @@ async def upload_invoice(
             all_pdf = False
 
     ai_service = AIService()
-    if combined_text_parts and all_pdf:
-        products = await ai_service.parse_invoice("\n\n".join(combined_text_parts))
-    else:
-        products = await ai_service.parse_invoice_from_images(all_image_bytes)
+    try:
+        if combined_text_parts and all_pdf:
+            products = await ai_service.parse_invoice("\n\n".join(combined_text_parts))
+        else:
+            products = await ai_service.parse_invoice_from_images(all_image_bytes)
+    except Exception as exc:
+        err_str = str(exc)
+        if "402" in err_str or "credits" in err_str.lower() or "afford" in err_str.lower():
+            raise HTTPException(
+                status_code=402,
+                detail="Недостаточно кредитов AI. Пополните баланс на openrouter.ai и попробуйте снова.",
+            )
+        logger.error(f"Invoice AI error: {exc}")
+        raise HTTPException(status_code=503, detail="Ошибка сервиса AI. Попробуйте позже.")
 
     # DB matching — enrich each product from store products and global catalog
     for p in products:

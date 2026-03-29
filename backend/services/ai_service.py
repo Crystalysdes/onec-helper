@@ -62,17 +62,31 @@ class AIService:
         return r.content[0].text.strip()
 
     async def _call_invoice(self, messages: list, max_tokens: int = 8192) -> str:
-        """Call dedicated Claude Opus 4 model for invoice parsing."""
-        model = settings.OPENROUTER_INVOICE_MODEL if self._mode == "openai" else settings.CLAUDE_MODEL
-        if self._mode == "openai":
-            r = await self._client.chat.completions.create(
-                model=model, max_tokens=max_tokens, messages=messages
-            )
-            return r.choices[0].message.content.strip()
-        r = await self._client.messages.create(
-            model=model, max_tokens=max_tokens, messages=messages
-        )
-        return r.content[0].text.strip()
+        """Call dedicated Claude Opus 4 model for invoice parsing.
+        Falls back to fast model on 402 (insufficient credits)."""
+        primary = settings.OPENROUTER_INVOICE_MODEL if self._mode == "openai" else settings.CLAUDE_MODEL
+        fallback = self._fast_model
+
+        for attempt, (model, tokens) in enumerate([
+            (primary, max_tokens),
+            (fallback, min(max_tokens, 4096)),
+        ]):
+            try:
+                if self._mode == "openai":
+                    r = await self._client.chat.completions.create(
+                        model=model, max_tokens=tokens, messages=messages
+                    )
+                    return r.choices[0].message.content.strip()
+                r = await self._client.messages.create(
+                    model=model, max_tokens=tokens, messages=messages
+                )
+                return r.content[0].text.strip()
+            except Exception as e:
+                is_402 = "402" in str(e) or (hasattr(e, 'status_code') and getattr(e, 'status_code', 0) == 402)
+                if is_402 and attempt == 0:
+                    logger.warning(f"Invoice model {model} got 402 (credits), falling back to {fallback}")
+                    continue
+                raise
 
     async def parse_invoice(self, ocr_text: str) -> List[dict]:
         """Parse invoice text and extract product list using Claude."""

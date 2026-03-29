@@ -169,6 +169,7 @@ export default function UploadInvoice() {
         toast.error('Товары не распознаны — сделайте фото чётче и попробуйте снова')
         return
       }
+
       setProducts(list)
       setStep('review')
       const matched = list.filter(p => p._matched).length
