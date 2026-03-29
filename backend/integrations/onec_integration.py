@@ -318,13 +318,23 @@ class OneCClient:
         used_tabular = None     # confirmed correct tabular section name
         fallback_ref = None     # first accepted doc (unknown if correct) — last resort
         fallback_tab = None
+        _doc_entity_missing = False
         for tab_name in _tabular_names:
-            if not tab_name:
+            if not tab_name or _doc_entity_missing:
                 continue
             doc = {**doc_base, tab_name: [row]}
             ok, resp = await self._request(
                 "POST", "odata/standard.odata/Document_УстановкаЦенНоменклатуры", json=doc
             )
+            if not ok:
+                err_status = (resp or {}).get("status", 0) if isinstance(resp, dict) else 0
+                if err_status == 404:
+                    logger.warning(
+                        f"1C Document_УстановкаЦенНоменклатуры не опубликован в OData. "
+                        f"Откройте Настройку OData и поставьте галочку ‘Установка цен номенклатуры’"
+                    )
+                    _doc_entity_missing = True
+                continue
             if ok and isinstance(resp, dict) and resp.get("Ref_Key"):
                 rk = str(resp["Ref_Key"]).strip("{}")
                 rows_in_resp = resp.get(tab_name, [])
@@ -417,13 +427,18 @@ class OneCClient:
                     logger.info(f"1C price updated via IR ({register}): {onec_id} → {price}")
                     return True
 
+            # No existing record OR PATCH failed — try POST (create new record)
             for post_payload in [
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
-                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price, "ВидЦены_Key": vid_key},
+                 "ВидЦен_Key": vid_key, "ВидЦены_Key": vid_key,
+                 "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦен_Key": vid_key, "ВидЦены_Key": vid_key},
                 {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
-                 "ВидЦены_Key": vid_key, "Характеристика_Key": _zero, "Упаковка_Key": _zero},
-                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price, "ВидЦены_Key": vid_key},
+                 "ВидЦен_Key": vid_key, "ВидЦены_Key": vid_key,
+                 "Характеристика_Key": _zero, "Упаковка_Key": _zero},
+                {"Период": period0, "Номенклатура_Key": onec_id, "Цена": price,
+                 "ВидЦен_Key": vid_key, "ВидЦены_Key": vid_key},
             ]:
                 ok, resp = await self._request(
                     "POST", f"odata/standard.odata/{register}", json=post_payload
@@ -431,6 +446,10 @@ class OneCClient:
                 if ok:
                     logger.info(f"1C price created ({register}): {onec_id} → {price}")
                     return True
+                err_st = (resp or {}).get("status", 0) if isinstance(resp, dict) else 0
+                if err_st == 404:
+                    logger.warning(f"1C {register} не опубликован в OData (Реестр → Настройка OData → Цены номенклатуры)")
+                    break  # entity missing — no point retrying with other payloads
                 logger.warning(f"1C price POST ({register}, keys={list(post_payload)}): {resp}")
 
         logger.warning(f"1C price set failed for onec_id={onec_id}, price={price}")
