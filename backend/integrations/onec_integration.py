@@ -304,9 +304,15 @@ class OneCClient:
             doc_base["Организация_Key"] = org_key
 
         # Try multiple tabular section names; detect the correct one by checking the response
+        # "Товары" is the standard section for УстановкаЦен in all standard 1С configs.
+        # "Запасы" is a stock section — putting it first causes wrong detection.
+        _cached_tab = getattr(self, "_price_doc_tabular", None)
+        if _cached_tab == "Запасы":  # reset wrong cache from previous buggy detection
+            _cached_tab = None
+            self._price_doc_tabular = None
         _tabular_names = [
-            getattr(self, "_price_doc_tabular", None),  # cached correct name first
-            "Запасы", "Товары", "Номенклатура", "ТоварыУслуги",
+            _cached_tab,  # cached correct name first (if any)
+            "Товары", "ТоварыУслуги", "Номенклатура", "Запасы",
         ]
         doc_ref_key = None      # ref of confirmed-correct document
         used_tabular = None     # confirmed correct tabular section name
@@ -374,35 +380,42 @@ class OneCClient:
         period0 = "0001-01-01T00:00:00"
         registers = ("InformationRegister_ЦеныНоменклатуры", "InformationRegister_Цены")
         for register in registers:
-            filter_parts = [f"Номенклатура_Key eq guid'{onec_id}'"]
-            if price_type_key:
-                filter_parts.append(f"ВидЦены_Key eq guid'{price_type_key}'")
-            path = (
-                f"odata/standard.odata/{register}"
-                f"?$format=json&$filter={' and '.join(filter_parts)}&$top=1"
-            )
-            success, data = await self._request("GET", path)
-            if success:
-                items = data.get("value", []) if isinstance(data, dict) else []
-                if items:
-                    item = items[0]
-                    pt_key = item.get("ВидЦены_Key") or price_type_key
-                    old_period = item.get("Период", period)
-                    key_parts = [f"Период=datetime'{old_period}'",
-                                 f"Номенклатура_Key=guid'{onec_id}'"]
-                    if pt_key:
-                        key_parts.append(f"ВидЦены_Key=guid'{pt_key}'")
-                    patch_payload: dict = {"Цена": price, "Период": period}
-                    if item.get("Валюта_Key"):
-                        patch_payload["Валюта_Key"] = item["Валюта_Key"]
-                    ok, _ = await self._request(
-                        "PATCH",
-                        f"odata/standard.odata/{register}({','.join(key_parts)})",
-                        json=patch_payload,
-                    )
-                    if ok:
-                        logger.info(f"1C price updated ({register}): {onec_id} → {price}")
-                        return True
+            # Try both filter variants: ВидЦен_Key (Розница) and ВидЦены_Key (other configs)
+            _vid_field = None
+            _items: list = []
+            for _vf in ("ВидЦен_Key", "ВидЦены_Key"):
+                _fp = [f"Номенклатура_Key eq guid'{onec_id}'"]
+                if price_type_key:
+                    _fp.append(f"{_vf} eq guid'{price_type_key}'")
+                _path = (f"odata/standard.odata/{register}"
+                         f"?$format=json&$filter={' and '.join(_fp)}&$top=1")
+                _ok, _d = await self._request("GET", _path)
+                if _ok and isinstance(_d, dict):
+                    _items = _d.get("value", [])
+                    if _items:
+                        _vid_field = _vf
+                        break
+            if _items:
+                item = _items[0]
+                pt_key = (item.get("ВидЦен_Key") or item.get("ВидЦены_Key")
+                          or price_type_key)
+                _vf_use = _vid_field or "ВидЦен_Key"
+                old_period = item.get("Период", period)
+                key_parts = [f"Период=datetime'{old_period}'",
+                             f"Номенклатура_Key=guid'{onec_id}'"]
+                if pt_key:
+                    key_parts.append(f"{_vf_use}=guid'{pt_key}'")
+                patch_payload: dict = {"Цена": price, "Период": period}
+                if item.get("Валюта_Key"):
+                    patch_payload["Валюта_Key"] = item["Валюта_Key"]
+                ok, _ = await self._request(
+                    "PATCH",
+                    f"odata/standard.odata/{register}({','.join(key_parts)})",
+                    json=patch_payload,
+                )
+                if ok:
+                    logger.info(f"1C price updated via IR ({register}): {onec_id} → {price}")
+                    return True
 
             for post_payload in [
                 {"Период": period, "Номенклатура_Key": onec_id, "Цена": price,
