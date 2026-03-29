@@ -817,31 +817,12 @@ export default function Settings() {
                     </p>
                   </div>
 
-                  {/* Step 2: OData checklist with live link */}
-                  <div className="flex flex-col gap-2 p-3 rounded-xl text-xs"
-                    style={{ background: 'rgba(234,179,8,0.1)', color: 'var(--tg-theme-text-color)' }}>
-                    <p className="font-semibold">Шаг 2 — Настройка OData в 1С (один раз)</p>
-                    <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      <p><b style={{ color: 'var(--tg-theme-text-color)' }}>1.</b> Откройте настройку OData (кнопка ниже)</p>
-                      <p><b style={{ color: 'var(--tg-theme-text-color)' }}>2.</b> Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Загрузить метаданные»</b></p>
-                      <p><b style={{ color: 'var(--tg-theme-text-color)' }}>3.</b> Найдите и поставьте галочки:</p>
-                    </div>
-                    <div className="flex flex-col gap-1 pl-2">
-                      {[
-                        'Номенклатура',
-                        'Штрихкоды номенклатуры',
-                        'Цены номенклатуры',
-                        'Остатки товаров',
-                      ].map((name) => (
-                        <div key={name} className="flex items-center gap-1.5">
-                          <span className="font-bold" style={{ color: '#d97706' }}>✓</span>
-                          <span className="font-semibold">{name}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <p style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      <b style={{ color: 'var(--tg-theme-text-color)' }}>4.</b> Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Сохранить и закрыть»</b>
-                    </p>
+                  {/* Step 2: OData setup — two tabs */}
+                  <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
+                    style={{ background: 'rgba(234,179,8,0.08)', color: 'var(--tg-theme-text-color)' }}>
+                    <p className="font-semibold text-[13px]">Шаг 2 — Настройка OData в 1С (один раз)</p>
+
+                    {/* Open link */}
                     {(() => {
                       const url = intForm.watch('onec_url')
                       const link = url ? getSetupUrl(url) : null
@@ -850,28 +831,59 @@ export default function Settings() {
                           href={link}
                           target="_blank"
                           rel="noreferrer"
-                          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-white mt-1"
+                          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-semibold text-white"
                           style={{ background: 'var(--tg-theme-button-color)' }}
                         >
                           <ExternalLink size={13} />
                           Открыть настройку OData в 1С
                         </a>
                       ) : (
-                        <p className="text-center italic mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          ← Введите URL выше, чтобы появилась ссылка
+                        <p className="text-center py-2 rounded-xl italic"
+                          style={{ background: 'rgba(0,0,0,0.05)', color: 'var(--tg-theme-hint-color)' }}>
+                          Введите URL выше — появится ссылка
                         </p>
                       )
                     })()}
+
+                    {/* Tab: Авторизация */}
+                    <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
+                      <p className="font-semibold mb-0.5">📋 Вкладка «Авторизация»</p>
+                      <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        <p>1. Включите переключатель <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
+                        <p>2. Придумайте и введите <b style={{ color: 'var(--tg-theme-text-color)' }}>имя пользователя</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
+                        <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните их — они нужны для шага 3</p>
+                      </div>
+                    </div>
+
+                    {/* Tab: Состав */}
+                    <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
+                      <p className="font-semibold mb-0.5">📋 Вкладка «Состав»</p>
+                      <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        <p>1. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Загрузить метаданные»</b></p>
+                        <p>2. Найдите и поставьте галочки:</p>
+                      </div>
+                      <div className="flex flex-col gap-0.5 pl-3 mt-0.5">
+                        {['Номенклатура', 'Штрихкоды номенклатуры', 'Цены номенклатуры', 'Остатки товаров'].map((name) => (
+                          <div key={name} className="flex items-center gap-1.5">
+                            <span className="font-bold" style={{ color: '#d97706' }}>✓</span>
+                            <span className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>{name}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        3. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Сохранить и закрыть»</b>
+                      </p>
+                    </div>
                   </div>
 
-                  {/* Step 3: Login / Password */}
+                  {/* Step 3: Login / Password (from 1C Authorization tab) */}
                   <div className="flex flex-col gap-1.5">
                     <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Шаг 3 — Логин и пароль
+                      Шаг 3 — Введите логин и пароль из вкладки «Авторизация»
                     </p>
                     <input
                       className="input-field"
-                      placeholder="Имя пользователя *"
+                      placeholder="Имя пользователя (напр. odata.user) *"
                       {...intForm.register('onec_username', { required: true })}
                     />
                     <input
