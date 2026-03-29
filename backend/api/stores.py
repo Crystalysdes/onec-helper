@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, not_
+from sqlalchemy import select, not_, func as _func
 
 from backend.database.connection import get_db, AsyncSessionLocal
 from backend.database.models import User, Store, Integration, IntegrationStatus, ProductCache
@@ -414,15 +414,44 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         product.synced_at = datetime.now(timezone.utc)
                         total_updated += 1
                     else:
-                        product = ProductCache(
-                            store_id=store_id,
-                            onec_id=onec_id,
-                            name=name,
-                            article=p1c.get("article"),
-                            synced_at=datetime.now(timezone.utc),
-                        )
-                        db.add(product)
-                        total_added += 1
+                        # Before creating, check for orphan product by article or name (e.g. from invoice)
+                        article_1c = p1c.get("article", "").strip()
+                        orphan = None
+                        if article_1c:
+                            r2 = await db.execute(
+                                select(ProductCache).where(
+                                    ProductCache.store_id == store_id,
+                                    ProductCache.article == article_1c,
+                                    ProductCache.onec_id.is_(None),
+                                )
+                            )
+                            orphan = r2.scalar_one_or_none()
+                        if not orphan and name:
+                            r2 = await db.execute(
+                                select(ProductCache).where(
+                                    ProductCache.store_id == store_id,
+                                    _func.lower(ProductCache.name) == name.lower(),
+                                    ProductCache.onec_id.is_(None),
+                                )
+                            )
+                            orphan = r2.scalar_one_or_none()
+                        if orphan:
+                            orphan.onec_id = onec_id
+                            orphan.name = name
+                            orphan.article = article_1c or orphan.article
+                            orphan.synced_at = datetime.now(timezone.utc)
+                            product = orphan
+                            total_updated += 1
+                        else:
+                            product = ProductCache(
+                                store_id=store_id,
+                                onec_id=onec_id,
+                                name=name,
+                                article=p1c.get("article"),
+                                synced_at=datetime.now(timezone.utc),
+                            )
+                            db.add(product)
+                            total_added += 1
 
                     onec_id_to_product[str(onec_id)] = product
 
