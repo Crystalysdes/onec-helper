@@ -942,7 +942,7 @@ async def save_invoice_products(
                         ProductCache.is_active == True,
                     )
                 )
-                product = r.scalar_one_or_none()
+                product = r.scalars().first()
             if not product and p.name and p.name.strip():
                 r = await db.execute(
                     select(ProductCache).where(
@@ -951,7 +951,7 @@ async def save_invoice_products(
                         ProductCache.is_active == True,
                     )
                 )
-                product = r.scalar_one_or_none()
+                product = r.scalars().first()
 
         if product:
             # Update existing: add quantity, update purchase_price, fill missing fields
@@ -991,7 +991,7 @@ async def save_invoice_products(
                 Integration.status == IntegrationStatus.active,
             )
         )
-        integration = result.scalar_one_or_none()
+        integration = result.scalars().first()
         if integration:
             import asyncio as _aio
             from backend.integrations.onec_integration import OneCClient
