@@ -560,15 +560,22 @@ async def search_global_catalog(
         if len(results) >= limit:
             return results
 
-    # 2. GlobalProduct catalog (Open Food Facts / imported)
+    # 2. GlobalProduct catalog — exclude any product the user ever had (active OR deleted)
     remaining = limit - len(results)
     if remaining > 0:
         gp_rows = (await db.execute(_text(
-            "SELECT barcode, name, price, purchase_price, article, category, unit, description "
-            "FROM global_products "
-            "WHERE lower(name) LIKE lower(:q) AND is_excluded IS NOT TRUE "
-            "ORDER BY name LIMIT :lim"
-        ), {"q": f"%{q}%", "lim": remaining})).fetchall()
+            "SELECT gp.barcode, gp.name, gp.price, gp.purchase_price, gp.article, gp.category, gp.unit, gp.description "
+            "FROM global_products gp "
+            "WHERE lower(gp.name) LIKE lower(:q) "
+            "AND gp.is_excluded IS NOT TRUE "
+            "AND NOT EXISTS ("
+            "    SELECT 1 FROM products_cache pc "
+            "    JOIN stores s ON pc.store_id = s.id "
+            "    WHERE s.owner_id = :uid "
+            "    AND (pc.barcode = gp.barcode OR CONCAT('article:', pc.article) = gp.barcode)"
+            ") "
+            "ORDER BY gp.name LIMIT :lim"
+        ), {"q": f"%{q}%", "uid": uid, "lim": remaining})).fetchall()
         for r in gp_rows:
             nl = r[1].lower()
             if nl not in seen_names:
@@ -580,16 +587,24 @@ async def search_global_catalog(
                 })
                 seen_names.add(nl)
 
-    # 3. Cross-tenant products_cache (other users)
+    # 3. Cross-tenant products_cache — exclude products user ever had
     remaining = limit - len(results)
     if remaining > 0:
         pc_rows = (await db.execute(_text(
             "SELECT DISTINCT pc.barcode, pc.name, pc.price, pc.purchase_price, "
             "pc.article, pc.category, pc.unit, pc.description "
             "FROM products_cache pc "
-            "WHERE lower(pc.name) LIKE lower(:q) AND pc.is_active = :active "
+            "JOIN stores s ON pc.store_id = s.id "
+            "WHERE lower(pc.name) LIKE lower(:q) AND pc.is_active = TRUE "
+            "AND s.owner_id != :uid "
+            "AND NOT EXISTS ("
+            "    SELECT 1 FROM products_cache own "
+            "    JOIN stores os ON own.store_id = os.id "
+            "    WHERE os.owner_id = :uid "
+            "    AND (own.barcode = pc.barcode OR own.article = pc.article)"
+            ") "
             "LIMIT :lim"
-        ), {"q": f"%{q}%", "lim": remaining * 2, "active": True})).fetchall()
+        ), {"q": f"%{q}%", "uid": uid, "lim": remaining * 2})).fetchall()
         for r in pc_rows:
             nl = r[1].lower()
             if nl not in seen_names:
