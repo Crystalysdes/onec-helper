@@ -367,7 +367,7 @@ export default function Admin() {
               <div className="grid grid-cols-2 gap-3">
                 <StatCard icon="👤" label="Пользователей" value={stats.total_users} color="blue" />
                 <StatCard icon="🏪" label="Магазинов" value={stats.total_stores} color="green" />
-                <StatCard icon="📦" label="Товаров" value={stats.total_products} color="purple" />
+                <StatCard icon="📦" label="В базе бота" value={stats.global_catalog_count} color="purple" />
                 <StatCard icon="🔌" label="Интеграций" value={stats.total_integrations} color="orange" />
               </div>
 
