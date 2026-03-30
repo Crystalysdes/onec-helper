@@ -66,33 +66,45 @@ def _compress_image(image_bytes: bytes, max_px: int = 800) -> bytes:
 
 
 async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache):
-    """Insert or update the shared GlobalProduct catalog entry for this barcode.
+    """Insert or update the shared GlobalProduct catalog entry.
 
     Uses its OWN isolated DB session so that any failure never affects the
-    caller's transaction (avoids the 'aborted transaction' / savepoint bug).
-    Uses INSERT … ON CONFLICT DO UPDATE — no savepoints needed.
+    caller's transaction. Supports products with barcode OR article (no barcode).
+    Respects is_excluded=True — never overwrites admin-excluded entries.
     """
-    if not p.barcode or not p.barcode.strip():
-        return
     from backend.services.catalog_cleaner import (
         normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
     )
-    bc = p.barcode.strip()
-    if not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
+    from backend.database.connection import AsyncSessionLocal
+    from sqlalchemy import text as _text
+    import uuid as _uuid
+    from loguru import logger
+
+    barcode = (p.barcode or "").strip()
+    article = (p.article or "").strip()
+
+    if barcode and (not barcode.isdigit() or len(barcode) not in _VALID_BARCODE_LENGTHS):
+        barcode = ""
+
+    if not barcode and not article:
         return
+
+    bc_key = barcode if barcode else f"article:{article}"
     clean_name = normalize_name(p.name or "")
     if not clean_name:
         return
     clean_cat = translate_category(p.category) if p.category else None
     clean_unit = p.unit or detect_unit(clean_name) or "шт"
 
-    from backend.database.connection import AsyncSessionLocal
-    from sqlalchemy import text as _text
-    import uuid as _uuid
-    from loguru import logger
-
     async with AsyncSessionLocal() as sess:
         try:
+            existing = await sess.execute(
+                _text("SELECT is_excluded FROM global_products WHERE barcode = :bc"),
+                {"bc": bc_key}
+            )
+            row = existing.fetchone()
+            if row and row[0]:
+                return
             await sess.execute(_text("""
                 INSERT INTO global_products
                     (id, barcode, name, price, purchase_price, article, category, unit, description)
@@ -105,15 +117,16 @@ async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache):
                     article          = COALESCE(EXCLUDED.article,        global_products.article),
                     category         = COALESCE(EXCLUDED.category,       global_products.category),
                     unit             = COALESCE(EXCLUDED.unit,           global_products.unit)
+                WHERE global_products.is_excluded IS NOT TRUE
             """), {
-                "id": _uuid.uuid4(), "bc": bc, "name": clean_name,
+                "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
                 "price": p.price, "pp": p.purchase_price,
-                "article": p.article, "category": clean_cat,
+                "article": article or p.article, "category": clean_cat,
                 "unit": clean_unit, "desc": p.description,
             })
             await sess.commit()
         except Exception as exc:
-            logger.warning(f"_upsert_global_product failed for barcode={bc}: {exc}")
+            logger.warning(f"_upsert_global_product failed for key={bc_key}: {exc}")
 
 
 def _serialize_product(p: ProductCache) -> dict:

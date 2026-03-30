@@ -379,7 +379,9 @@ async def admin_list_global_catalog(
 ):
     from sqlalchemy import or_
     offset = (page - 1) * limit
-    q = select(GlobalProduct)
+    q = select(GlobalProduct).where(
+        (GlobalProduct.is_excluded == False) | (GlobalProduct.is_excluded.is_(None))
+    )
     if search:
         q = q.where(
             or_(
@@ -782,9 +784,11 @@ async def admin_bulk_delete_products(
             pass
     if not uuids:
         return {"deleted": 0}
+    from sqlalchemy import update as _sa_update
     result = await db.execute(
-        _sa_delete(GlobalProduct)
+        _sa_update(GlobalProduct)
         .where(GlobalProduct.id.in_(uuids))
+        .values(is_excluded=True)
         .returning(GlobalProduct.id)
     )
     deleted = len(result.fetchall())

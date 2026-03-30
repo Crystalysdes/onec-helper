@@ -164,6 +164,7 @@ class GlobalProduct(Base):
     category = Column(String(500), nullable=True)
     unit = Column(String(100), nullable=True, default="шт")
     description = Column(Text, nullable=True)
+    is_excluded = Column(Boolean, default=False, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

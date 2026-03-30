@@ -54,5 +54,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db():
     from backend.database.models import Base as ModelBase
+    from sqlalchemy import text as _text
     async with engine.begin() as conn:
         await conn.run_sync(ModelBase.metadata.create_all)
+        await conn.execute(_text(
+            "ALTER TABLE global_products ADD COLUMN IF NOT EXISTS is_excluded BOOLEAN DEFAULT FALSE"
+        ))
