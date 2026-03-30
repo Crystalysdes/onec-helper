@@ -1031,127 +1031,119 @@ export default function Admin() {
         </div>
       )}
 
-      {/* User Detail Modal */}
+      {/* User Detail — full screen page overlay */}
       {(userModal || userLoading) && (
-        <div
-          className="fixed inset-0 z-50"
-          style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', background: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setUserModal(null)}
-        >
-          <div
-            style={{
-              background: 'var(--tg-theme-bg-color)',
-              borderRadius: '24px 24px 0 0',
-              maxHeight: '88vh',
-              display: 'flex',
-              flexDirection: 'column',
-              width: '100%',
-              position: 'relative',
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Handle — tap to close */}
-            <div
-              style={{ flexShrink: 0, padding: '12px 0 8px', display: 'flex', justifyContent: 'center', cursor: 'pointer' }}
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 100,
+          background: 'var(--tg-theme-bg-color)',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          {/* Top bar */}
+          <div style={{
+            flexShrink: 0,
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: '12px 16px',
+            borderBottom: '1px solid var(--tg-theme-secondary-bg-color)',
+          }}>
+            <button
               onClick={() => setUserModal(null)}
+              style={{ background: 'var(--tg-theme-secondary-bg-color)', border: 'none', borderRadius: 10, padding: '6px 12px', fontSize: 14, color: 'var(--tg-theme-text-color)', cursor: 'pointer' }}
             >
-              <div style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--tg-theme-hint-color)', opacity: 0.35 }} />
-            </div>
+              ← Назад
+            </button>
+            <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--tg-theme-text-color)' }}>
+              {userModal ? (userModal.first_name || userModal.username || `ID ${userModal.telegram_id}`) : 'Загрузка...'}
+            </span>
+          </div>
 
-            {/* Scrollable content — minHeight:0 is critical for flex+overflow to work */}
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '0 20px 8px' }}>
-              {userLoading || !userModal ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {[1,2,3].map(i => <div key={i} className="skeleton h-10" />)}
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  {/* Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-                    <div>
-                      <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--tg-theme-text-color)', margin: 0 }}>
-                        {userModal.first_name || userModal.username || `ID ${userModal.telegram_id}`}
-                      </h2>
-                      <p style={{ fontSize: 13, color: 'var(--tg-theme-hint-color)', margin: '2px 0 0' }}>
-                        {userModal.username ? `@${userModal.username} · ` : ''}TG: {userModal.telegram_id}
-                      </p>
+          {/* Scrollable content fills all remaining space */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+            {userLoading || !userModal ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {[1,2,3,4].map(i => <div key={i} className="skeleton h-14" />)}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {/* TG info */}
+                <p style={{ fontSize: 13, color: 'var(--tg-theme-hint-color)', margin: 0 }}>
+                  {userModal.username ? `@${userModal.username} · ` : ''}TG: {userModal.telegram_id}
+                </p>
+
+                {/* Info grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  {[
+                    ['Статус', userModal.is_active ? '✅ Активен' : '🚫 Заблокирован'],
+                    ['Роль', userModal.is_admin ? '👑 Админ' : '👤 Пользователь'],
+                    ['Магазинов', userModal.stores?.length ?? 0],
+                    ['Зарегистрирован', new Date(userModal.created_at).toLocaleDateString('ru-RU')],
+                  ].map(([k, v]) => (
+                    <div key={k} className="card" style={{ padding: '10px 12px' }}>
+                      <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>{k}</p>
+                      <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--tg-theme-text-color)', margin: '2px 0 0' }}>{String(v)}</p>
                     </div>
-                    <button style={{ fontSize: 20, background: 'none', border: 'none', color: 'var(--tg-theme-hint-color)', cursor: 'pointer', flexShrink: 0 }} onClick={() => setUserModal(null)}>✕</button>
-                  </div>
+                  ))}
+                </div>
 
-                  {/* Info grid */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    {[
-                      ['Статус', userModal.is_active ? '✅ Активен' : '🚫 Заблокирован'],
-                      ['Роль', userModal.is_admin ? '👑 Админ' : '👤 Пользователь'],
-                      ['Магазинов', userModal.stores?.length ?? 0],
-                      ['Зарегистрирован', new Date(userModal.created_at).toLocaleDateString('ru-RU')],
-                    ].map(([k, v]) => (
-                      <div key={k} className="card" style={{ padding: '10px 12px' }}>
-                        <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>{k}</p>
-                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--tg-theme-text-color)', margin: '2px 0 0' }}>{String(v)}</p>
+                {/* Referrals */}
+                {(userModal.referral_code || userModal.referred_by) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--tg-theme-hint-color)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Рефералы</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      {userModal.referral_code && (
+                        <div className="card" style={{ padding: '10px 12px', gridColumn: '1 / -1' }}>
+                          <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Реферальный код</p>
+                          <p style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tg-theme-button-color)', margin: '2px 0 0' }}>{userModal.referral_code}</p>
+                        </div>
+                      )}
+                      <div className="card" style={{ padding: '10px 12px' }}>
+                        <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Привлёк</p>
+                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--tg-theme-text-color)', margin: '2px 0 0' }}>{userModal.total_referrals ?? 0}</p>
+                      </div>
+                      <div className="card" style={{ padding: '10px 12px' }}>
+                        <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Оплатили</p>
+                        <p style={{ fontSize: 13, fontWeight: 500, color: '#22c55e', margin: '2px 0 0' }}>{userModal.successful_referrals ?? 0}</p>
+                      </div>
+                      {userModal.referred_by && (
+                        <div className="card" style={{ padding: '10px 12px', gridColumn: '1 / -1' }}>
+                          <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Пришёл от</p>
+                          <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--tg-theme-text-color)', margin: '2px 0 0' }}>{userModal.referred_by}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Stores */}
+                {userModal.stores?.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--tg-theme-hint-color)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Магазины</p>
+                    {userModal.stores.map(s => (
+                      <div key={s.id} className="card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <p style={{ fontSize: 13, color: 'var(--tg-theme-text-color)', margin: 0 }}>{s.name}</p>
+                        <span style={{ fontSize: 12, color: s.is_active ? '#22c55e' : '#9ca3af' }}>{s.is_active ? 'Активен' : 'Неактивен'}</span>
                       </div>
                     ))}
                   </div>
+                )}
+              </div>
+            )}
+          </div>
 
-                  {/* Referrals */}
-                  {(userModal.referral_code || userModal.referred_by) && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--tg-theme-hint-color)', margin: 0 }}>РЕФЕРАЛЫ</p>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                        {userModal.referral_code && (
-                          <div className="card" style={{ padding: '10px 12px', gridColumn: '1 / -1' }}>
-                            <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Реферальный код</p>
-                            <p style={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: 'var(--tg-theme-button-color)', margin: '2px 0 0' }}>{userModal.referral_code}</p>
-                          </div>
-                        )}
-                        <div className="card" style={{ padding: '10px 12px' }}>
-                          <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Привлёк</p>
-                          <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--tg-theme-text-color)', margin: '2px 0 0' }}>{userModal.total_referrals ?? 0}</p>
-                        </div>
-                        <div className="card" style={{ padding: '10px 12px' }}>
-                          <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Оплатили</p>
-                          <p style={{ fontSize: 13, fontWeight: 500, color: '#22c55e', margin: '2px 0 0' }}>{userModal.successful_referrals ?? 0}</p>
-                        </div>
-                        {userModal.referred_by && (
-                          <div className="card" style={{ padding: '10px 12px', gridColumn: '1 / -1' }}>
-                            <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Пришёл по реферальной ссылке от</p>
-                            <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--tg-theme-text-color)', margin: '2px 0 0' }}>{userModal.referred_by}</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Stores */}
-                  {userModal.stores?.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--tg-theme-hint-color)', margin: 0 }}>МАГАЗИНЫ</p>
-                      {userModal.stores.map(s => (
-                        <div key={s.id} className="card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <p style={{ fontSize: 13, color: 'var(--tg-theme-text-color)', margin: 0 }}>{s.name}</p>
-                          <span style={{ fontSize: 12, color: s.is_active ? '#22c55e' : '#9ca3af' }}>{s.is_active ? 'Активен' : 'Неактивен'}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Action buttons — always visible, never inside scroll */}
+          {/* Action buttons — pinned to bottom, always visible */}
+          {userModal && (
             <div style={{
               flexShrink: 0,
-              display: 'flex',
-              gap: 8,
-              padding: '12px 20px',
+              display: 'flex', gap: 8,
+              padding: '12px 16px',
               paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
               borderTop: '1px solid var(--tg-theme-secondary-bg-color)',
+              background: 'var(--tg-theme-bg-color)',
             }}>
-              {!userLoading && userModal && !userModal.is_admin && (
+              {!userModal.is_admin && (
                 <button
-                  className="btn-secondary flex-1 text-sm"
-                  style={{ color: userModal.is_active ? '#ef4444' : '#22c55e' }}
+                  className="btn-secondary flex-1"
+                  style={{ color: userModal.is_active ? '#ef4444' : '#22c55e', fontSize: 14 }}
                   onClick={async () => {
                     try {
                       const res = await adminAPI.toggleUser(userModal.id)
@@ -1164,26 +1156,23 @@ export default function Admin() {
                   {userModal.is_active ? '🚫 Заблокировать' : '✅ Активировать'}
                 </button>
               )}
-              {!userLoading && userModal && (
-                <button
-                  className="btn-secondary flex-1 text-sm"
-                  style={{ color: userModal.is_admin ? '#f59e0b' : 'var(--tg-theme-hint-color)' }}
-                  onClick={async () => {
-                    const action = userModal.is_admin ? 'Забрать админку?' : 'Выдать админку?'
-                    if (!window.confirm(action)) return
-                    try {
-                      const r = await adminAPI.toggleAdmin(userModal.id)
-                      setUserModal(prev => ({ ...prev, is_admin: r.data.is_admin }))
-                      setUsers(prev => prev.map(u => u.id === userModal.id ? { ...u, is_admin: r.data.is_admin } : u))
-                      toast.success(r.data.is_admin ? 'Админка выдана' : 'Админка забрана')
-                    } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
-                  }}
-                >
-                  {userModal.is_admin ? '👑 Забрать админку' : '⭐ Выдать админку'}
-                </button>
-              )}
+              <button
+                className="btn-secondary flex-1"
+                style={{ color: userModal.is_admin ? '#f59e0b' : 'var(--tg-theme-hint-color)', fontSize: 14 }}
+                onClick={async () => {
+                  if (!window.confirm(userModal.is_admin ? 'Забрать админку?' : 'Выдать админку?')) return
+                  try {
+                    const r = await adminAPI.toggleAdmin(userModal.id)
+                    setUserModal(prev => ({ ...prev, is_admin: r.data.is_admin }))
+                    setUsers(prev => prev.map(u => u.id === userModal.id ? { ...u, is_admin: r.data.is_admin } : u))
+                    toast.success(r.data.is_admin ? 'Админка выдана' : 'Админка забрана')
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                }}
+              >
+                {userModal.is_admin ? '👑 Забрать админку' : '⭐ Выдать админку'}
+              </button>
             </div>
-          </div>
+          )}
         </div>
       )}
 
