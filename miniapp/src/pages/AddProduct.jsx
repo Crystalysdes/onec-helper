@@ -750,6 +750,30 @@ export default function AddProduct() {
   // ════════════════════════════════════════════════════════════════
   //  RENDER
   // ════════════════════════════════════════════════════════════════
+
+  // Guard: no 1C integration connected yet
+  if (currentStore && currentStore.has_integration === false) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[70vh] px-6 gap-5 text-center">
+        <div className="text-5xl">🔌</div>
+        <div>
+          <p className="text-base font-semibold mb-1" style={{ color: 'var(--tg-theme-text-color)' }}>
+            Подключите 1С
+          </p>
+          <p className="text-sm leading-snug" style={{ color: 'var(--tg-theme-hint-color)' }}>
+            Для создания товаров необходимо подключить интеграцию с 1С в настройках магазина
+          </p>
+        </div>
+        <button
+          className="btn-primary w-full max-w-xs"
+          onClick={() => navigate('/settings', { state: { tab: 'stores' } })}
+        >
+          Перейти в настройки
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col pb-28">
 

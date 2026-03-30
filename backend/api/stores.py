@@ -104,6 +104,18 @@ async def list_stores(
         select(Store).where(Store.owner_id == current_user.id)
     )
     stores = result.scalars().all()
+
+    # Collect store IDs that have at least one integration
+    if stores:
+        from sqlalchemy import text as _text
+        store_ids = [str(s.id) for s in stores]
+        int_rows = (await db.execute(_text(
+            "SELECT DISTINCT store_id::text FROM integrations WHERE store_id = ANY(:ids)"
+        ), {"ids": store_ids})).fetchall()
+        stores_with_integration = {r[0] for r in int_rows}
+    else:
+        stores_with_integration = set()
+
     return [
         {
             "id": str(s.id),
@@ -111,6 +123,7 @@ async def list_stores(
             "description": s.description,
             "is_active": s.is_active,
             "created_at": s.created_at,
+            "has_integration": str(s.id) in stores_with_integration,
         }
         for s in stores
     ]

@@ -649,6 +649,16 @@ async def create_product(
     store_id = UUID(payload.store_id)
     await _check_store_access(store_id, current_user, db)
 
+    # Require at least one 1C integration to create products
+    int_check = await db.execute(
+        select(Integration).where(Integration.store_id == store_id).limit(1)
+    )
+    if not int_check.scalars().first():
+        raise HTTPException(
+            status_code=403,
+            detail="Необходимо подключить 1С перед созданием товаров",
+        )
+
     product = ProductCache(
         store_id=store_id,
         name=payload.name,
