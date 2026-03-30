@@ -60,3 +60,6 @@ async def init_db():
         await conn.execute(_text(
             "ALTER TABLE global_products ADD COLUMN IF NOT EXISTS is_excluded BOOLEAN DEFAULT FALSE"
         ))
+        await conn.execute(_text(
+            "ALTER TABLE products_cache ADD COLUMN IF NOT EXISTS user_deleted_at TIMESTAMPTZ DEFAULT NULL"
+        ))

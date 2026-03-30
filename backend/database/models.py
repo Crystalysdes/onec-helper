@@ -125,6 +125,7 @@ class ProductCache(Base):
     description = Column(Text, nullable=True)
     image_url = Column(String(1000), nullable=True)
     is_active = Column(Boolean, default=True)
+    user_deleted_at = Column(DateTime(timezone=True), nullable=True)
     extra_data = Column(JSON, default={})
     synced_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

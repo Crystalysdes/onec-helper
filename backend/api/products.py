@@ -1619,10 +1619,11 @@ async def bulk_delete_products(
     if rows:
         matched_ids = [product.id for product, _ in rows]
         from sqlalchemy import update as _sa_update
+        from datetime import datetime, timezone as _tz
         await db.execute(
             _sa_update(ProductCache)
             .where(ProductCache.id.in_(matched_ids))
-            .values(is_active=False)
+            .values(is_active=False, user_deleted_at=datetime.now(_tz.utc))
         )
         await db.commit()
         # Re-fetch rows after update for 1C sync
