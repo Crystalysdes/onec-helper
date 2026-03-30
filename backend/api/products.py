@@ -138,6 +138,59 @@ async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache, for
             await _own.__aexit__(None, None, None)
 
 
+async def _upsert_global_product_from_dict(
+    barcode: Optional[str], article: Optional[str], name: Optional[str],
+    price=None, purchase_price=None, unit=None, category=None, description=None,
+):
+    """Background-task-safe global catalog upsert using its own isolated session."""
+    from backend.services.catalog_cleaner import (
+        normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
+    )
+    from backend.database.connection import AsyncSessionLocal
+    from sqlalchemy import text as _text
+    import uuid as _uuid
+    bc = (barcode or "").strip()
+    art = (article or "").strip()
+    if bc and (not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS):
+        bc = ""
+    if not bc and not art:
+        return
+    bc_key = bc if bc else f"article:{art}"
+    clean_name = normalize_name(name or "")
+    if not clean_name:
+        return
+    clean_cat = translate_category(category) if category else None
+    clean_unit = unit or detect_unit(clean_name) or "шт"
+    try:
+        async with AsyncSessionLocal() as sess:
+            row = (await sess.execute(
+                _text("SELECT is_excluded FROM global_products WHERE barcode = :bc"),
+                {"bc": bc_key}
+            )).fetchone()
+            if row and row[0]:
+                return
+            await sess.execute(_text("""
+                INSERT INTO global_products
+                    (id, barcode, name, price, purchase_price, article, category, unit)
+                VALUES (:id, :bc, :name, :price, :pp, :article, :cat, :unit)
+                ON CONFLICT (barcode) DO UPDATE SET
+                    name           = EXCLUDED.name,
+                    price          = COALESCE(EXCLUDED.price,         global_products.price),
+                    purchase_price = COALESCE(EXCLUDED.purchase_price,global_products.purchase_price),
+                    article        = COALESCE(EXCLUDED.article,       global_products.article),
+                    category       = COALESCE(EXCLUDED.category,      global_products.category),
+                    unit           = COALESCE(EXCLUDED.unit,          global_products.unit)
+                WHERE global_products.is_excluded IS NOT TRUE
+            """), {
+                "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
+                "price": price, "pp": purchase_price,
+                "article": art or article, "cat": clean_cat, "unit": clean_unit,
+            })
+            await sess.commit()
+    except Exception as exc:
+        logger.warning(f"_upsert_global_product_from_dict failed key={bc_key}: {exc}")
+
+
 def _serialize_product(p: ProductCache) -> dict:
     return {
         "id": str(p.id),
@@ -918,6 +971,7 @@ async def save_invoice_products(
     sync_to_onec: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks,
 ):
     from sqlalchemy import func as _func
     store_id_uuid = UUID(store_id)
@@ -928,6 +982,8 @@ async def save_invoice_products(
         if not p.name or not p.name.strip():
             continue
         product = None
+
+        # 1) Look up by explicit id
         if p.existing_id:
             try:
                 r = await db.execute(
@@ -935,35 +991,35 @@ async def save_invoice_products(
                         ProductCache.id == UUID(p.existing_id),
                         ProductCache.store_id == store_id_uuid,
                         ProductCache.is_active == True,
-                    )
+                    ).limit(1)
                 )
                 product = r.scalar_one_or_none()
             except Exception:
                 product = None
 
-        if not product:
-            # Fallback dedup: check by article then by name before creating
-            if p.article and p.article.strip():
-                r = await db.execute(
-                    select(ProductCache).where(
-                        ProductCache.store_id == store_id_uuid,
-                        ProductCache.article == p.article.strip(),
-                        ProductCache.is_active == True,
-                    )
-                )
-                product = r.scalars().first()
-            if not product and p.name and p.name.strip():
-                r = await db.execute(
-                    select(ProductCache).where(
-                        ProductCache.store_id == store_id_uuid,
-                        _func.lower(ProductCache.name) == p.name.strip().lower(),
-                        ProductCache.is_active == True,
-                    )
-                )
-                product = r.scalars().first()
+        # 2) Dedup by article
+        if not product and p.article and p.article.strip():
+            r = await db.execute(
+                select(ProductCache).where(
+                    ProductCache.store_id == store_id_uuid,
+                    ProductCache.article == p.article.strip(),
+                    ProductCache.is_active == True,
+                ).limit(1)
+            )
+            product = r.scalar_one_or_none()
+
+        # 3) Dedup by name (case-insensitive)
+        if not product and p.name and p.name.strip():
+            r = await db.execute(
+                select(ProductCache).where(
+                    ProductCache.store_id == store_id_uuid,
+                    _func.lower(ProductCache.name) == p.name.strip().lower(),
+                    ProductCache.is_active == True,
+                ).limit(1)
+            )
+            product = r.scalar_one_or_none()
 
         if product:
-            # Update existing: add quantity, update purchase_price, fill missing fields
             if p.quantity is not None:
                 product.quantity = (product.quantity or 0) + p.quantity
             if p.purchase_price is not None:
@@ -993,16 +1049,20 @@ async def save_invoice_products(
             await db.flush()
         saved.append(product)
 
+    # Serialize BEFORE commit to avoid expired-object issues
+    serialized = [_serialize_product(p) for p in saved]
+
+    # Collect 1C push data BEFORE commit (while ORM objects are fresh)
+    onec_push_list = []
     if sync_to_onec and saved:
-        result = await db.execute(
+        r2 = await db.execute(
             select(Integration).where(
                 Integration.store_id == store_id_uuid,
                 Integration.status == IntegrationStatus.active,
-            )
+            ).limit(1)
         )
-        integration = result.scalars().first()
+        integration = r2.scalar_one_or_none()
         if integration:
-            import asyncio as _aio
             from backend.integrations.onec_integration import OneCClient
             from backend.core.security import decrypt_password
             client = OneCClient(
@@ -1021,7 +1081,7 @@ async def save_invoice_products(
                             onec_id = str(data["Ref_Key"]).strip("{}")
                             product.onec_id = onec_id
                     if onec_id:
-                        _aio.ensure_future(_push_barcode_and_prices(
+                        onec_push_list.append(dict(
                             onec_url=integration.onec_url,
                             onec_username=integration.onec_username,
                             onec_password_enc=integration.onec_password_encrypted,
@@ -1033,17 +1093,26 @@ async def save_invoice_products(
                             article=product.article,
                             quantity=float(product.quantity) if product.quantity else None,
                             use_accounting=use_accounting,
-                            delay=5,
                         ))
                 except Exception as e:
                     logger.warning(f"1C sync failed for {product.name}: {e}")
 
-    serialized = [_serialize_product(p) for p in saved]
-
+    # Single commit
     await db.commit()
 
-    for product in saved:
-        await _upsert_global_product(db, product, force=True)
+    # Schedule 1C pushes as background tasks (after commit, no ORM objects needed)
+    for kwargs in onec_push_list:
+        background_tasks.add_task(_push_barcode_and_prices, **kwargs, delay=5)
+
+    # Upsert global catalog in background (no DB session issues)
+    for s in serialized:
+        if s.get("barcode") or s.get("article"):
+            background_tasks.add_task(
+                _upsert_global_product_from_dict,
+                s.get("barcode"), s.get("article"), s.get("name"),
+                s.get("price"), s.get("purchase_price"),
+                s.get("unit"), s.get("category"), s.get("description"),
+            )
 
     return {"saved": len(saved), "products": serialized}
 
