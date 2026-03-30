@@ -160,8 +160,33 @@ export default function UploadInvoice() {
   const [previews, setPreviews] = useState([])
   const [products, setProducts] = useState([])
   const [syncToOnec, setSyncToOnec] = useState(false)
+  const [markup, setMarkup] = useState('')
+  const [roundPrices, setRoundPrices] = useState(false)
   const fileRef = useRef()
   const cameraRef = useRef()
+
+  const applyMarkup = () => {
+    const pct = parseFloat(markup)
+    if (isNaN(pct)) return toast.error('Введите процент наценки')
+    let applied = 0
+    setProducts(prev => prev.map(p => {
+      const base = p.purchase_price
+      if (base == null || base === '') return p
+      let price = base * (1 + pct / 100)
+      if (roundPrices) {
+        // Smart rounding: to nearest 10 for prices ≥ 50, else to nearest 1
+        const step = price >= 50 ? 10 : 1
+        price = Math.round(price / step) * step
+        if (price <= 0) price = step
+      } else {
+        price = Math.round(price * 100) / 100
+      }
+      applied++
+      return { ...p, price }
+    }))
+    if (applied === 0) return toast.error('Нет товаров с закупочной ценой')
+    toast.success(`Наценка ${pct}% применена к ${applied} товарам${roundPrices ? ', цены округлены' : ''}`)
+  }
 
   const addFiles = (fileList) => {
     const newFiles = Array.from(fileList)
@@ -428,6 +453,46 @@ export default function UploadInvoice() {
                 Нажмите ▶ на товар чтобы раскрыть и отредактировать
               </p>
             </div>
+          </div>
+
+          {/* ── Bulk markup panel ── */}
+          <div className="rounded-2xl p-3 flex flex-col gap-2.5"
+            style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+            <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Наценка на все товары</p>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center rounded-xl overflow-hidden flex-1"
+                style={{ border: '1px solid rgba(128,128,128,0.2)', background: 'rgba(0,0,0,0.05)' }}>
+                <input
+                  type="number" min="0" max="9999" step="0.1"
+                  placeholder="10"
+                  value={markup}
+                  onChange={e => setMarkup(e.target.value)}
+                  className="flex-1 text-sm bg-transparent outline-none py-2 pl-3 pr-0.5"
+                  style={{ color: 'var(--tg-theme-text-color)' }}
+                />
+                <span className="text-sm pr-2.5" style={{ color: 'var(--tg-theme-hint-color)' }}>%</span>
+              </div>
+              <button
+                className="btn-primary px-4 py-2 text-sm flex-shrink-0 rounded-xl"
+                onClick={applyMarkup}
+              >
+                Применить
+              </button>
+            </div>
+            <button
+              type="button"
+              className="flex items-center gap-2.5 active:opacity-70"
+              onClick={() => setRoundPrices(v => !v)}
+            >
+              <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0"
+                style={{
+                  background: roundPrices ? 'var(--tg-theme-button-color)' : 'transparent',
+                  border: roundPrices ? 'none' : '1.5px solid rgba(128,128,128,0.4)',
+                }}>
+                {roundPrices && <Check size={12} color="white" />}
+              </div>
+              <span className="text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Округлять цену (до 10 ₽)</span>
+            </button>
           </div>
 
           {products.map((p, i) => (
