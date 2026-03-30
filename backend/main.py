@@ -86,7 +86,8 @@ async def root():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    import traceback as _tb
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}\n{''.join(_tb.format_tb(exc.__traceback__))}")
     return JSONResponse(
         status_code=500,
         content={"detail": "Внутренняя ошибка сервера"},
