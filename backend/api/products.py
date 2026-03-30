@@ -440,23 +440,22 @@ async def check_barcode_global(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Check barcode: own stores first (raw SQL), then any other store (cross-tenant)."""
+    """Check barcode: own active stores first, then shared global catalog."""
     from sqlalchemy import text as _text
     from backend.database.connection import _is_sqlite
-    # asyncpg (PostgreSQL) requires uuid.UUID objects for UUID columns; SQLite needs hex string
     uid = str(current_user.id).replace('-', '') if _is_sqlite else current_user.id
     bc = barcode.strip()
 
-    # 1. Own stores — raw SQL, no ORM
+    # 1. Own active stores
     own = (await db.execute(_text(
         "SELECT pc.id, pc.store_id, pc.onec_id, pc.barcode, pc.name, pc.price, "
         "pc.purchase_price, pc.quantity, pc.unit, pc.article, pc.category, "
         "pc.description, pc.is_active, s.name AS store_name "
         "FROM products_cache pc "
         "JOIN stores s ON pc.store_id = s.id "
-        "WHERE s.owner_id = :uid AND pc.barcode = :bc AND pc.is_active = :active "
+        "WHERE s.owner_id = :uid AND pc.barcode = :bc AND pc.is_active = TRUE "
         "LIMIT 1"
-    ), {"uid": uid, "bc": bc, "active": True})).fetchone()
+    ), {"uid": uid, "bc": bc})).fetchone()
 
     if own:
         return {
@@ -472,41 +471,19 @@ async def check_barcode_global(
             },
         }
 
-    # 2. Any other user's store — raw SQL cross-tenant search
-    other = (await db.execute(_text(
-        "SELECT pc.barcode, pc.name, pc.price, pc.purchase_price, "
-        "pc.article, pc.category, pc.unit, pc.description "
-        "FROM products_cache pc "
-        "JOIN stores s ON pc.store_id = s.id "
-        "WHERE s.owner_id != :uid AND pc.barcode = :bc AND pc.is_active = :active "
-        "LIMIT 1"
-    ), {"uid": uid, "bc": bc, "active": True})).fetchone()
-
-    if other:
-        return {
-            "found": True,
-            "source": "global",
-            "store_name": "Общий каталог",
-            "product": {
-                "id": None, "store_id": None,
-                "barcode": other[0], "name": other[1], "price": other[2],
-                "purchase_price": other[3], "article": other[4],
-                "category": other[5], "unit": other[6], "description": other[7],
-                "quantity": 0, "is_active": True,
-            },
-        }
-
-    # 3. GlobalProduct catalog (Open Food Facts imports)
+    # 2. Shared global catalog (populated from all users' 1C syncs + manual adds)
     gp = (await db.execute(_text(
         "SELECT barcode, name, price, purchase_price, article, category, unit, description "
-        "FROM global_products WHERE barcode = :bc AND is_excluded IS NOT TRUE LIMIT 1"
+        "FROM global_products "
+        "WHERE barcode = :bc AND (is_excluded IS NULL OR is_excluded = FALSE) "
+        "LIMIT 1"
     ), {"bc": bc})).fetchone()
 
     if gp:
         return {
             "found": True,
             "source": "catalog",
-            "store_name": "База товаров",
+            "store_name": "База бота",
             "product": {
                 "id": None, "store_id": None,
                 "barcode": gp[0], "name": gp[1], "price": gp[2],
@@ -526,7 +503,13 @@ async def search_global_catalog(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Autocomplete: ONLY the user's own active products from products_cache."""
+    """
+    Autocomplete search:
+    1. User's own ACTIVE products (all their stores) — always first.
+    2. Shared global catalog — only items the user doesn't already have active
+       (matched by barcode or name). Deleted products stay in global catalog
+       so other users can still find them.
+    """
     from sqlalchemy import text as _text
     from backend.database.connection import _is_sqlite
     uid = str(current_user.id).replace('-', '') if _is_sqlite else current_user.id
@@ -534,7 +517,11 @@ async def search_global_catalog(
     if len(q) < 2:
         return []
 
-    rows = (await db.execute(_text(
+    results: list[dict] = []
+    seen_names: set[str] = set()
+
+    # ── Step 1: user's own ACTIVE products (all stores) ─────────────────────
+    own_rows = (await db.execute(_text(
         "SELECT pc.id, pc.store_id, pc.barcode, pc.name, pc.price, pc.purchase_price, "
         "       pc.article, pc.category, pc.unit, pc.description, pc.quantity "
         "FROM products_cache pc "
@@ -545,15 +532,53 @@ async def search_global_catalog(
         "ORDER BY pc.name LIMIT :lim"
     ), {"uid": uid, "q": f"%{q}%", "lim": limit})).fetchall()
 
-    return [
-        {
+    own_barcodes: set[str] = set()
+    for r in own_rows:
+        nl = r[3].lower()
+        results.append({
             "id": str(r[0]), "store_id": str(r[1]), "barcode": r[2], "name": r[3],
             "price": r[4], "purchase_price": r[5], "article": r[6],
             "category": r[7], "unit": r[8], "description": r[9],
             "quantity": r[10] or 0, "source": "own_store",
-        }
-        for r in rows
-    ]
+        })
+        seen_names.add(nl)
+        if r[2]:
+            own_barcodes.add(r[2].strip())
+
+    # ── Step 2: shared global catalog (excluding user's active items) ────────
+    remaining = limit - len(results)
+    if remaining > 0:
+        gp_rows = (await db.execute(_text(
+            "SELECT gp.barcode, gp.name, gp.price, gp.purchase_price, "
+            "       gp.article, gp.category, gp.unit, gp.description "
+            "FROM global_products gp "
+            "WHERE lower(gp.name) LIKE lower(:q) "
+            "  AND (gp.is_excluded IS NULL OR gp.is_excluded = FALSE) "
+            "  AND NOT EXISTS ( "
+            "    SELECT 1 FROM products_cache pc "
+            "    JOIN stores s ON pc.store_id = s.id "
+            "    WHERE s.owner_id = :uid AND pc.is_active = TRUE "
+            "      AND (lower(pc.name) = lower(gp.name) "
+            "           OR (gp.barcode IS NOT NULL AND pc.barcode = gp.barcode)) "
+            "  ) "
+            "ORDER BY gp.name LIMIT :lim"
+        ), {"uid": uid, "q": f"%{q}%", "lim": remaining * 3})).fetchall()
+
+        for r in gp_rows:
+            if len(results) >= limit:
+                break
+            nl = r[1].lower()
+            if nl in seen_names:
+                continue
+            results.append({
+                "id": None, "store_id": None, "barcode": r[0], "name": r[1],
+                "price": r[2], "purchase_price": r[3], "article": r[4],
+                "category": r[5], "unit": r[6], "description": r[7],
+                "quantity": 0, "source": "catalog",
+            })
+            seen_names.add(nl)
+
+    return results
 
 
 @router.get("/{store_id}")
@@ -1493,21 +1518,6 @@ async def delete_product(
     product.is_active = False
     await db.commit()
 
-    # Hard-delete from global catalog (remove completely so it never shows in autocomplete)
-    from sqlalchemy import text as _text
-    bc_key = _barcode.strip() if _barcode and _barcode.strip() else (f"article:{_article.strip()}" if _article and _article.strip() else None)
-    if bc_key:
-        await db.execute(_text("""
-            DELETE FROM global_products
-            WHERE barcode = :bc
-            AND NOT EXISTS (
-                SELECT 1 FROM products_cache
-                WHERE (barcode = :bc OR (barcode IS NULL AND CONCAT('article:', article) = :bc))
-                  AND is_active = TRUE
-            )
-        """), {"bc": bc_key})
-        await db.commit()
-
     if _onec_id:
         integ_r = await db.execute(
             select(Integration).where(Integration.store_id == _store_id)
@@ -1708,28 +1718,6 @@ async def bulk_delete_products(
             .values(is_active=False, user_deleted_at=datetime.now(_tz.utc))
         )
         await db.commit()
-
-        # Hard-delete from global catalog for all deleted products
-        from sqlalchemy import text as _text
-        bc_keys = []
-        for product, _ in rows:
-            bc = (product.barcode or "").strip()
-            art = (product.article or "").strip()
-            key = bc if bc else (f"article:{art}" if art else None)
-            if key:
-                bc_keys.append(key)
-        if bc_keys:
-            await db.execute(_text("""
-                DELETE FROM global_products
-                WHERE barcode = ANY(:bcs)
-                AND NOT EXISTS (
-                    SELECT 1 FROM products_cache
-                    WHERE (barcode = global_products.barcode
-                        OR CONCAT('article:', products_cache.article) = global_products.barcode)
-                    AND is_active = TRUE
-                )
-            """), {"bcs": bc_keys})
-            await db.commit()
 
         # Re-fetch rows after update for 1C sync
         re_result = await db.execute(

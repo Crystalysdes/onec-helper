@@ -297,17 +297,16 @@ export default function AddProduct() {
         return
       }
       try {
-        // Only search current store's active products
-        const storeRes = currentStore
-          ? await productsAPI.list(currentStore.id, { search: name, limit: 8 })
-          : { data: [] }
+        // Own active products first, then shared global catalog (via search-global endpoint)
+        const globalRes = await productsAPI.searchGlobal(name)
+        const suggestions = Array.isArray(globalRes.data) ? globalRes.data : []
 
-        const storeArr = Array.isArray(storeRes.data) ? storeRes.data : []
+        setNameSuggestions(suggestions)
 
-        setNameSuggestions(storeArr)
-
-        // Check for exact duplicate in own store
-        const exact = storeArr.find(p => p.name.toLowerCase() === name.toLowerCase())
+        // Check for exact duplicate in own store results
+        const exact = suggestions.find(
+          p => p.source === 'own_store' && p.name.toLowerCase() === name.toLowerCase()
+        )
         setManualDuplicate(exact
           ? { product: exact, storeName: currentStore?.name, status: 'found', code: exact.barcode }
           : null)
