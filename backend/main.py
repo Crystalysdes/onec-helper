@@ -42,6 +42,26 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(backfill_global_products(), timeout=20)
     except Exception as e:
         logger.warning(f"backfill skipped: {e}")
+    try:
+        from backend.database.connection import AsyncSessionLocal
+        from sqlalchemy import text as _text
+        async with AsyncSessionLocal() as _sess:
+            res = await _sess.execute(_text("""
+                UPDATE global_products SET is_excluded = TRUE
+                WHERE is_excluded IS NOT TRUE
+                AND NOT EXISTS (
+                    SELECT 1 FROM products_cache
+                    WHERE is_active = TRUE
+                    AND (
+                        products_cache.barcode = global_products.barcode
+                        OR CONCAT('article:', products_cache.article) = global_products.barcode
+                    )
+                )
+            """))
+            await _sess.commit()
+            logger.info(f"Startup: excluded {res.rowcount} orphaned global_products entries")
+    except Exception as e:
+        logger.warning(f"Startup global_products cleanup skipped: {e}")
     task = asyncio.create_task(renewal_loop())
     stock_task = asyncio.create_task(stock_alert_loop())
     sync_task = asyncio.create_task(auto_sync_loop())

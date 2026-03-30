@@ -1538,8 +1538,25 @@ async def delete_product(
     _store_id = product.store_id
     _onec_id = product.onec_id
     _name = product.name
+    _barcode = product.barcode
+    _article = product.article
     product.is_active = False
     await db.commit()
+
+    # Exclude from global catalog if no other active store has this product
+    from sqlalchemy import text as _text
+    bc_key = _barcode.strip() if _barcode and _barcode.strip() else (f"article:{_article.strip()}" if _article and _article.strip() else None)
+    if bc_key:
+        await db.execute(_text("""
+            UPDATE global_products SET is_excluded = TRUE
+            WHERE barcode = :bc
+            AND NOT EXISTS (
+                SELECT 1 FROM products_cache
+                WHERE (barcode = :bc OR (barcode IS NULL AND article = :art))
+                  AND is_active = TRUE
+            )
+        """), {"bc": bc_key, "art": _article or ""})
+        await db.commit()
 
     if _onec_id:
         integ_r = await db.execute(
@@ -1741,6 +1758,29 @@ async def bulk_delete_products(
             .values(is_active=False, user_deleted_at=datetime.now(_tz.utc))
         )
         await db.commit()
+
+        # Exclude from global catalog if no other active store has each product
+        from sqlalchemy import text as _text
+        bc_keys = []
+        for product, _ in rows:
+            bc = (product.barcode or "").strip()
+            art = (product.article or "").strip()
+            key = bc if bc else (f"article:{art}" if art else None)
+            if key:
+                bc_keys.append(key)
+        if bc_keys:
+            await db.execute(_text("""
+                UPDATE global_products SET is_excluded = TRUE
+                WHERE barcode = ANY(:bcs)
+                AND NOT EXISTS (
+                    SELECT 1 FROM products_cache
+                    WHERE (barcode = global_products.barcode
+                        OR (barcode IS NULL AND CONCAT('article:', article) = global_products.barcode))
+                    AND is_active = TRUE
+                )
+            """), {"bcs": bc_keys})
+            await db.commit()
+
         # Re-fetch rows after update for 1C sync
         re_result = await db.execute(
             select(ProductCache, Store)
