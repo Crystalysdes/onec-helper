@@ -1037,7 +1037,7 @@ export default function Admin() {
           <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.4)' }} />
           <div
             className="relative w-full rounded-t-3xl p-5 flex flex-col gap-4"
-            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '85vh', overflowY: 'auto' }}
+            style={{ background: 'var(--tg-theme-bg-color)', maxHeight: '85vh', overflowY: 'auto', paddingBottom: 'calc(env(safe-area-inset-bottom) + 24px)' }}
             onClick={e => e.stopPropagation()}
           >
             <div className="w-10 h-1 rounded-full mx-auto" style={{ background: 'var(--tg-theme-hint-color)', opacity: 0.3 }} />
