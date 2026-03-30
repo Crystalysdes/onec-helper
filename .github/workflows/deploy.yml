@@ -15,8 +15,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /opt/onec-helper
+            cd /app
             git pull origin main
-            docker compose -f docker-compose.prod.yml build app
-            docker compose -f docker-compose.prod.yml up -d
+            docker compose -f docker-compose.timeweb.yml up -d --build
             docker image prune -f

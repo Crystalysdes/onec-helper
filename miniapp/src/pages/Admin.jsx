@@ -495,8 +495,8 @@ export default function Admin() {
                         }}
                       />
                       <button
-                        className="text-[11px] px-2 py-1.5 rounded-lg active:opacity-70 flex-shrink-0"
-                        style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
+                        className="text-[11px] px-2.5 py-1.5 rounded-lg active:opacity-70 flex-shrink-0 font-medium"
+                        style={{ background: proxyTesting === idx ? 'var(--tg-theme-secondary-bg-color)' : 'rgba(34,197,94,0.12)', color: proxyTesting === idx ? 'var(--tg-theme-hint-color)' : '#22c55e' }}
                         disabled={proxyTesting === idx}
                         onClick={async () => {
                           const url = detectAndNormalizeProxy(px)
@@ -509,7 +509,7 @@ export default function Admin() {
                           finally { setProxyTesting(null) }
                         }}
                       >
-                        {proxyTesting === idx ? '...' : '✔'}
+                        {proxyTesting === idx ? '...' : 'Тест'}
                       </button>
                       <button
                         className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-70 flex-shrink-0"
