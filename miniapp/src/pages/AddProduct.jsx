@@ -297,36 +297,19 @@ export default function AddProduct() {
         return
       }
       try {
-        // Search own store and global catalog in parallel
-        const [storeRes, globalRes] = await Promise.allSettled([
-          currentStore
-            ? productsAPI.list(currentStore.id, { search: name, limit: 6 })
-            : Promise.resolve({ data: [] }),
-          productsAPI.searchGlobal(name),
-        ])
+        // Only search current store's active products
+        const storeRes = currentStore
+          ? await productsAPI.list(currentStore.id, { search: name, limit: 8 })
+          : { data: [] }
 
-        const storeArr = storeRes.status === 'fulfilled'
-          ? (Array.isArray(storeRes.value.data) ? storeRes.value.data : [])
-          : []
-        const globalArr = globalRes.status === 'fulfilled'
-          ? (Array.isArray(globalRes.value.data) ? globalRes.value.data : [])
-          : []
+        const storeArr = Array.isArray(storeRes.data) ? storeRes.data : []
 
-        // Merge: own store first, then global (skip names already in store results)
-        const storeNames = new Set(storeArr.map(p => p.name.toLowerCase()))
-        const merged = [
-          ...storeArr,
-          ...globalArr.filter(p => !storeNames.has(p.name.toLowerCase())),
-        ].slice(0, 8)
+        setNameSuggestions(storeArr)
 
-        setNameSuggestions(merged)
-
-        // Check for exact duplicate — own store first, then global
-        const exactOwn = storeArr.find(p => p.name.toLowerCase() === name.toLowerCase())
-        const exactGlobal = globalArr.find(p => p.name.toLowerCase() === name.toLowerCase())
-        const exact = exactOwn || exactGlobal
+        // Check for exact duplicate in own store
+        const exact = storeArr.find(p => p.name.toLowerCase() === name.toLowerCase())
         setManualDuplicate(exact
-          ? { product: exact, storeName: exactOwn ? currentStore?.name : 'Общий каталог', status: 'found', code: exact.barcode }
+          ? { product: exact, storeName: currentStore?.name, status: 'found', code: exact.barcode }
           : null)
       } catch {
         setNameSuggestions([])
