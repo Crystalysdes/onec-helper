@@ -82,7 +82,50 @@ _GARBAGE_PATTERNS = [
 ]
 
 _GARBAGE_WORDS = {'null', 'none', 'n/a', 'na', 'test', 'unknown', 'no name', 'noname',
-                  'товар', 'product', 'item', 'undefined', 'не определено'}
+                  'товар', 'product', 'item', 'undefined', 'не определено',
+                  'новый товар', 'new product', 'образец', 'sample', 'temp',
+                  'временный', 'заглушка', 'placeholder', 'stub', 'xxx',
+                  'test product', 'тест', 'тестовый товар', 'name', 'имя'}
+
+
+def _ean_checksum_valid(bc: str) -> bool:
+    """Validate EAN-8 or EAN-13 (also UPC-A as 12-digit) checksum.
+    Returns True for valid checksums OR for lengths we don't validate (ITF-14).
+    """
+    if len(bc) == 13:
+        digits = [int(c) for c in bc]
+        check = (10 - sum(d * (3 if i % 2 else 1) for i, d in enumerate(digits[:12])) % 10) % 10
+        return check == digits[12]
+    if len(bc) == 8:
+        digits = [int(c) for c in bc]
+        check = (10 - sum(d * (3 if i % 2 else 1) for i, d in enumerate(digits[:7])) % 10) % 10
+        return check == digits[7]
+    if len(bc) == 12:
+        digits = [int(c) for c in bc]
+        check = (10 - sum(d * (1 if i % 2 else 3) for i, d in enumerate(digits[:11])) % 10) % 10
+        return check == digits[11]
+    return True  # ITF-14 and others: skip checksum validation
+
+
+def _is_stub_barcode(bc: str) -> bool:
+    """Return True for obviously fake / placeholder / store-internal barcodes."""
+    if not bc or not bc.isdigit():
+        return True
+    # All same digit: 0000000, 1111111, 9999999, etc.
+    if len(set(bc)) == 1:
+        return True
+    # Simple ascending/descending sequences
+    if bc in ('1234567890', '12345678', '1234567890123', '0987654321', '9876543210'):
+        return True
+    # GS1 prefixes 02 and 20-29: store/weight/internal barcodes — not globally unique
+    if len(bc) == 13 and bc[0] == '2':
+        return True
+    if len(bc) == 13 and bc[:2] == '02':
+        return True
+    # Invalid EAN checksum (catches random digit strings)
+    if not _ean_checksum_valid(bc):
+        return True
+    return False
 
 # Characters allowed in a clean product name
 _ALLOWED_CHARS_RE = re.compile(

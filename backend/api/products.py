@@ -142,17 +142,25 @@ async def _upsert_global_product_from_dict(
     barcode: Optional[str], article: Optional[str], name: Optional[str],
     price=None, purchase_price=None, unit=None, category=None, description=None,
 ):
-    """Background-task-safe global catalog upsert. Only valid EAN barcodes are accepted."""
+    """Background-task-safe global catalog upsert.
+    Guards:
+    - Only valid EAN barcodes (digits, correct length, valid checksum, non-stub).
+    - Name passes normalize_name quality filter.
+    - No cross-barcode name duplicates.
+    - On conflict: name is only updated if the new one is *better* (longer + has Russian chars).
+    """
     from backend.services.catalog_cleaner import (
-        normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
+        normalize_name, translate_category, detect_unit,
+        _VALID_BARCODE_LENGTHS, _is_stub_barcode,
     )
     from backend.database.connection import AsyncSessionLocal
     from sqlalchemy import text as _text
     import uuid as _uuid
     bc = (barcode or "").strip()
-    # Only products with a valid EAN barcode enter the shared catalog.
-    # Article-only / custom products are store-specific and must not pollute the global base.
+    # Valid EAN length, all digits, non-stub (checksum, prefix, pattern checks)
     if not bc or not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
+        return
+    if _is_stub_barcode(bc):
         return
     clean_name = normalize_name(name or "")
     if not clean_name or len(clean_name) < 3:
@@ -163,10 +171,10 @@ async def _upsert_global_product_from_dict(
         async with AsyncSessionLocal() as sess:
             # Skip if barcode is excluded
             existing = (await sess.execute(
-                _text("SELECT is_excluded FROM global_products WHERE barcode = :bc"),
+                _text("SELECT id, name, is_excluded FROM global_products WHERE barcode = :bc"),
                 {"bc": bc}
             )).fetchone()
-            if existing and existing[0]:
+            if existing and existing[2]:  # is_excluded
                 return
             # Skip if same name already exists under a DIFFERENT barcode (name-level dedup)
             if not existing:
@@ -176,6 +184,18 @@ async def _upsert_global_product_from_dict(
                 )).fetchone()
                 if name_dup:
                     return
+            # Name update strategy on conflict:
+            # Only replace the stored name if the new one is meaningfully better
+            # (has Russian chars AND is longer than what's stored).
+            # This prevents a poorly-named user product from overwriting a good catalog entry.
+            if existing:
+                stored_name = existing[1] or ""
+                import re as _re
+                new_has_ru = bool(_re.search(r'[а-яёА-ЯЁ]', clean_name))
+                stored_has_ru = bool(_re.search(r'[а-яёА-ЯЁ]', stored_name))
+                # Keep stored name unless new is clearly better
+                if stored_has_ru and not (new_has_ru and len(clean_name) > len(stored_name)):
+                    clean_name = stored_name  # preserve existing quality name
             await sess.execute(_text("""
                 INSERT INTO global_products
                     (id, barcode, name, price, purchase_price, article, category, unit)
