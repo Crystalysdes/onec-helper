@@ -1049,9 +1049,6 @@ async def save_invoice_products(
             await db.flush()
         saved.append(product)
 
-    # Serialize BEFORE commit to avoid expired-object issues
-    serialized = [_serialize_product(p) for p in saved]
-
     # Collect 1C push data BEFORE commit (while ORM objects are fresh)
     onec_push_list = []
     if sync_to_onec and saved:
@@ -1097,8 +1094,12 @@ async def save_invoice_products(
                 except Exception as e:
                     logger.warning(f"1C sync failed for {product.name}: {e}")
 
-    # Single commit
+    # Commit, then refresh to get server-set columns (created_at, updated_at)
     await db.commit()
+    for product in saved:
+        await db.refresh(product)
+
+    serialized = [_serialize_product(p) for p in saved]
 
     # Schedule 1C pushes as background tasks (after commit, no ORM objects needed)
     for kwargs in onec_push_list:
