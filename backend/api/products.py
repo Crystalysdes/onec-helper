@@ -526,12 +526,7 @@ async def search_global_catalog(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Autocomplete search:
-    1. User's OWN active products (all their stores) — always first.
-    2. Global catalog — only products whose name was NEVER in any of the
-       user's stores (active or deleted). Cross-tenant source removed entirely.
-    """
+    """Autocomplete: ONLY the user's own active products from products_cache."""
     from sqlalchemy import text as _text
     from backend.database.connection import _is_sqlite
     uid = str(current_user.id).replace('-', '') if _is_sqlite else current_user.id
@@ -539,11 +534,7 @@ async def search_global_catalog(
     if len(q) < 2:
         return []
 
-    results: list[dict] = []
-    seen_names: set[str] = set()
-
-    # ── Step 1: user's own ACTIVE products ──────────────────────────────────
-    own_rows = (await db.execute(_text(
+    rows = (await db.execute(_text(
         "SELECT pc.id, pc.store_id, pc.barcode, pc.name, pc.price, pc.purchase_price, "
         "       pc.article, pc.category, pc.unit, pc.description, pc.quantity "
         "FROM products_cache pc "
@@ -554,56 +545,15 @@ async def search_global_catalog(
         "ORDER BY pc.name LIMIT :lim"
     ), {"uid": uid, "q": f"%{q}%", "lim": limit})).fetchall()
 
-    for r in own_rows:
-        nl = r[3].lower()
-        if nl not in seen_names:
-            results.append({
-                "id": str(r[0]), "store_id": str(r[1]), "barcode": r[2], "name": r[3],
-                "price": r[4], "purchase_price": r[5], "article": r[6],
-                "category": r[7], "unit": r[8], "description": r[9],
-                "quantity": r[10] or 0, "source": "own_store",
-            })
-            seen_names.add(nl)
-        if len(results) >= limit:
-            return results
-
-    # ── Step 2: global catalog — skip anything the user ever had (by name) ──
-    # Collect every lowercase name the user has EVER had (active + deleted)
-    user_names_rows = (await db.execute(_text(
-        "SELECT DISTINCT lower(pc.name) "
-        "FROM products_cache pc "
-        "JOIN stores s ON pc.store_id = s.id "
-        "WHERE s.owner_id = :uid"
-    ), {"uid": uid})).fetchall()
-    user_name_set: set[str] = {r[0] for r in user_names_rows}
-
-    remaining = limit - len(results)
-    if remaining > 0:
-        gp_rows = (await db.execute(_text(
-            "SELECT barcode, name, price, purchase_price, article, category, unit, description "
-            "FROM global_products "
-            "WHERE lower(name) LIKE lower(:q) "
-            "  AND is_excluded IS NOT TRUE "
-            "ORDER BY name LIMIT :lim"
-        ), {"q": f"%{q}%", "lim": remaining + len(user_name_set)})).fetchall()
-
-        for r in gp_rows:
-            if len(results) >= limit:
-                break
-            nl = r[1].lower()
-            # Skip if user ever had a product with this name (active or deleted)
-            if nl in user_name_set:
-                continue
-            if nl not in seen_names:
-                results.append({
-                    "id": None, "store_id": None, "barcode": r[0], "name": r[1],
-                    "price": r[2], "purchase_price": r[3], "article": r[4],
-                    "category": r[5], "unit": r[6], "description": r[7],
-                    "quantity": 0, "source": "catalog",
-                })
-                seen_names.add(nl)
-
-    return results
+    return [
+        {
+            "id": str(r[0]), "store_id": str(r[1]), "barcode": r[2], "name": r[3],
+            "price": r[4], "purchase_price": r[5], "article": r[6],
+            "category": r[7], "unit": r[8], "description": r[9],
+            "quantity": r[10] or 0, "source": "own_store",
+        }
+        for r in rows
+    ]
 
 
 @router.get("/{store_id}")
