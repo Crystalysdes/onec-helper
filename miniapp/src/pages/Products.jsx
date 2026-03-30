@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
 import { productsAPI } from '../services/api'
 import ProductCard from '../components/ProductCard'
+import SwipeToDelete from '../components/SwipeToDelete'
 
 export default function Products() {
   const navigate = useNavigate()
@@ -192,10 +193,22 @@ export default function Products() {
               </button>
             )}
             <div className="flex-1 min-w-0">
-              <ProductCard
-                product={p}
-                onClick={() => selectMode ? toggleSelect(p.id) : navigate(`/products/${p.id}`)}
-              />
+              <SwipeToDelete
+                disabled={selectMode}
+                onDelete={async () => {
+                  try {
+                    await productsAPI.delete(p.id)
+                    setProducts(prev => prev.filter(x => x.id !== p.id))
+                    setTotalCount(prev => Math.max(0, prev - 1))
+                    toast.success('Товар удалён')
+                  } catch { toast.error('Ошибка удаления') }
+                }}
+              >
+                <ProductCard
+                  product={p}
+                  onClick={() => selectMode ? toggleSelect(p.id) : navigate(`/products/${p.id}`)}
+                />
+              </SwipeToDelete>
             </div>
           </div>
         ))}

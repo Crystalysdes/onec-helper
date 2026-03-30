@@ -9,6 +9,7 @@ import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
 import { adminAPI, productsAPI } from '../services/api'
 import StatCard from '../components/StatCard'
+import SwipeToDelete from '../components/SwipeToDelete'
 
 const TABS = [
   { id: 'stats', label: 'Обзор' },
@@ -675,21 +676,30 @@ export default function Admin() {
                       : <Square size={20} style={{ color: 'var(--tg-theme-hint-color)' }} />}
                   </button>
                 )}
-                <div
-                  className="flex-1 card py-2.5 flex items-center gap-2 active:opacity-70 cursor-pointer"
-                  onClick={() => dbSelectMode ? toggleDbSelect(p.id) : setCatItemModal(p)}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
-                    <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      {[p.barcode, p.category, p.unit].filter(Boolean).join(' · ')}
-                    </p>
-                  </div>
-                  {p.article && (
-                    <span className="text-[11px] px-2 py-0.5 rounded-lg flex-shrink-0" style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
-                      {p.article}
-                    </span>
-                  )}
+                <div className="flex-1 min-w-0">
+                  <SwipeToDelete
+                    disabled={dbSelectMode}
+                    onDelete={async () => {
+                      try {
+                        await adminAPI.bulkDeleteProducts([p.id])
+                        setDbProducts(prev => prev.filter(x => x.id !== p.id))
+                        setDbTotal(prev => prev - 1)
+                        toast.success('Товар удалён')
+                      } catch { toast.error('Ошибка удаления') }
+                    }}
+                  >
+                    <div
+                      className="card py-2.5 flex items-center gap-2 active:opacity-70 cursor-pointer overflow-hidden"
+                      onClick={() => dbSelectMode ? toggleDbSelect(p.id) : setCatItemModal(p)}
+                    >
+                      <div className="flex-1 min-w-0 overflow-hidden">
+                        <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>{p.name}</p>
+                        <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          {[p.article ? `art:${p.article}` : null, p.barcode, p.category, p.unit].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+                    </div>
+                  </SwipeToDelete>
                 </div>
               </div>
             ))
