@@ -46,12 +46,36 @@ async def lifespan(app: FastAPI):
         from backend.database.connection import AsyncSessionLocal
         from sqlalchemy import text as _text
         async with AsyncSessionLocal() as _sess:
-            res = await _sess.execute(_text("""
-                UPDATE global_products SET is_excluded = TRUE
-                WHERE is_excluded IS NOT TRUE
+            # Delete global_products entries that were explicitly deleted by a user
+            res1 = await _sess.execute(_text("""
+                DELETE FROM global_products
+                WHERE barcode IN (
+                    SELECT CASE
+                        WHEN barcode IS NOT NULL AND barcode != '' THEN barcode
+                        WHEN article IS NOT NULL AND article != '' THEN CONCAT('article:', article)
+                        ELSE NULL
+                    END
+                    FROM products_cache
+                    WHERE user_deleted_at IS NOT NULL
+                      AND is_active = FALSE
+                )
                 AND NOT EXISTS (
                     SELECT 1 FROM products_cache
                     WHERE is_active = TRUE
+                    AND user_deleted_at IS NULL
+                    AND (
+                        products_cache.barcode = global_products.barcode
+                        OR CONCAT('article:', products_cache.article) = global_products.barcode
+                    )
+                )
+            """))
+            # Also delete any that have no active match at all
+            res2 = await _sess.execute(_text("""
+                DELETE FROM global_products
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM products_cache
+                    WHERE is_active = TRUE
+                    AND user_deleted_at IS NULL
                     AND (
                         products_cache.barcode = global_products.barcode
                         OR CONCAT('article:', products_cache.article) = global_products.barcode
@@ -59,7 +83,7 @@ async def lifespan(app: FastAPI):
                 )
             """))
             await _sess.commit()
-            logger.info(f"Startup: excluded {res.rowcount} orphaned global_products entries")
+            logger.info(f"Startup: removed {res1.rowcount + res2.rowcount} orphaned global_products entries")
     except Exception as e:
         logger.warning(f"Startup global_products cleanup skipped: {e}")
     task = asyncio.create_task(renewal_loop())
