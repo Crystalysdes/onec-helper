@@ -163,21 +163,46 @@ async def _check_store_access(store_id: UUID, user: User, db: AsyncSession) -> S
 
 async def _mark_deleted_in_onec(
     onec_url: str, onec_username: str, onec_password_enc: str,
-    onec_id: str, name: str,
+    onec_id: str, name: str, article: str = "",
 ):
-    """Mark product as deleted in 1C (ПометкаУдаления=True on Catalog_Номенклатура)."""
+    """Mark product as deleted in 1C.
+
+    Marks by onec_id AND by article (to catch original/duplicate pairs).
+    """
     from backend.integrations.onec_integration import OneCClient
     from backend.core.security import decrypt_password
     from loguru import logger
+    import urllib.parse
     try:
         client = OneCClient(onec_url, onec_username, decrypt_password(onec_password_enc))
+
+        ids_to_mark = set()
+
         clean_id = str(onec_id).strip("{}")
-        ok, resp = await client._request(
-            "PATCH",
-            f"odata/standard.odata/Catalog_Номенклатура(guid'{clean_id}')",
-            json={"ПометкаУдаления": True},
-        )
-        logger.info(f"[1C DEL] '{name}' onec_id={clean_id} ok={ok} resp={str(resp)[:120]}")
+        if clean_id:
+            ids_to_mark.add(clean_id)
+
+        if article and article.strip():
+            art = article.strip()
+            q = urllib.parse.quote(art.replace("'", "''"))
+            ok2, data2 = await client._request_silent(
+                "GET",
+                f"odata/standard.odata/Catalog_Номенклатура?$format=json"
+                f"&$filter=Артикул eq '{q}'&$select=Ref_Key&$top=20"
+            )
+            if ok2 and isinstance(data2, dict):
+                for item in data2.get("value", []):
+                    ref = str(item.get("Ref_Key", "")).strip("{}")
+                    if ref:
+                        ids_to_mark.add(ref)
+
+        for ref_id in ids_to_mark:
+            ok, resp = await client._request(
+                "PATCH",
+                f"odata/standard.odata/Catalog_Номенклатура(guid'{ref_id}')",
+                json={"ПометкаУдаления": True},
+            )
+            logger.info(f"[1C DEL] '{name}' id={ref_id} ok={ok}")
     except Exception as e:
         from loguru import logger as _log
         _log.error(f"[1C DEL] EXCEPTION for '{name}': {e}", exc_info=True)
@@ -1639,7 +1664,7 @@ async def bulk_delete_products(
     import asyncio as _aio
     store_integrations: dict = {}
     for product, store in rows:
-        if not product.onec_id:
+        if not product.onec_id and not product.article:
             continue
         sid = str(store.id)
         if sid not in store_integrations:
@@ -1654,7 +1679,8 @@ async def bulk_delete_products(
                 onec_url=integration.onec_url,
                 onec_username=integration.onec_username,
                 onec_password_enc=integration.onec_password_encrypted,
-                onec_id=product.onec_id,
+                onec_id=product.onec_id or "",
                 name=product.name,
+                article=product.article or "",
             ))
     return {"deleted": len(rows)}
