@@ -65,12 +65,12 @@ def _compress_image(image_bytes: bytes, max_px: int = 800) -> bytes:
         return image_bytes  # fallback: return original if PIL not available
 
 
-async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache):
+async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache, force: bool = False):
     """Insert or update the shared GlobalProduct catalog entry.
 
     Uses its OWN isolated DB session so that any failure never affects the
     caller's transaction. Supports products with barcode OR article (no barcode).
-    Respects is_excluded=True — never overwrites admin-excluded entries.
+    force=True: re-adds even if is_excluded (manual add/invoice). force=False: skips excluded (sync).
     """
     from backend.services.catalog_cleaner import (
         normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
@@ -103,7 +103,7 @@ async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache):
                 {"bc": bc_key}
             )
             row = existing.fetchone()
-            if row and row[0]:
+            if row and row[0] and not force:
                 return
             await sess.execute(_text("""
                 INSERT INTO global_products
@@ -116,8 +116,8 @@ async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache):
                     purchase_price   = COALESCE(EXCLUDED.purchase_price, global_products.purchase_price),
                     article          = COALESCE(EXCLUDED.article,        global_products.article),
                     category         = COALESCE(EXCLUDED.category,       global_products.category),
-                    unit             = COALESCE(EXCLUDED.unit,           global_products.unit)
-                WHERE global_products.is_excluded IS NOT TRUE
+                    unit             = COALESCE(EXCLUDED.unit,           global_products.unit),
+                    is_excluded      = FALSE
             """), {
                 "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
                 "price": p.price, "pp": p.purchase_price,
@@ -437,7 +437,7 @@ async def check_barcode_global(
     # 3. GlobalProduct catalog (Open Food Facts imports)
     gp = (await db.execute(_text(
         "SELECT barcode, name, price, purchase_price, article, category, unit, description "
-        "FROM global_products WHERE barcode = :bc LIMIT 1"
+        "FROM global_products WHERE barcode = :bc AND is_excluded IS NOT TRUE LIMIT 1"
     ), {"bc": bc})).fetchone()
 
     if gp:
@@ -504,7 +504,7 @@ async def search_global_catalog(
         gp_rows = (await db.execute(_text(
             "SELECT barcode, name, price, purchase_price, article, category, unit, description "
             "FROM global_products "
-            "WHERE lower(name) LIKE lower(:q) "
+            "WHERE lower(name) LIKE lower(:q) AND is_excluded IS NOT TRUE "
             "ORDER BY name LIMIT :lim"
         ), {"q": f"%{q}%", "lim": remaining})).fetchall()
         for r in gp_rows:
@@ -620,7 +620,7 @@ async def create_product(
     db.add(product)
     await db.flush()
 
-    await _upsert_global_product(db, product)
+    await _upsert_global_product(db, product, force=True)
 
     log = Log(
         user_id=current_user.id,
@@ -1034,7 +1034,7 @@ async def save_invoice_products(
     await db.commit()
 
     for product in saved:
-        await _upsert_global_product(db, product)
+        await _upsert_global_product(db, product, force=True)
 
     return {"saved": len(saved), "products": serialized}
 
@@ -1134,7 +1134,7 @@ async def quick_add_product(
     await db.flush()
     result = _serialize_product(product)
     await db.commit()
-    await _upsert_global_product(db, product)
+    await _upsert_global_product(db, product, force=True)
     # 1C push runs in background — does not block response
     import asyncio
     asyncio.ensure_future(_push_to_onec_bg(
@@ -1191,7 +1191,7 @@ async def update_product(
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(product, field, value)
 
-    await _upsert_global_product(db, product)
+    await _upsert_global_product(db, product, force=True)
     result = _serialize_product(product)
     await db.commit()
     quantity_changed = payload.model_dump(exclude_none=True).get("quantity") is not None
@@ -1609,7 +1609,7 @@ async def import_csv(
             p.barcode = r[1]; p.name = r[2]; p.price = r[3]
             p.purchase_price = r[4]; p.article = r[5]
             p.category = r[6]; p.unit = r[7]; p.description = r[8]
-            await _upsert_global_product(db, p)
+            await _upsert_global_product(db, p, force=True)
         await db.commit()
     except Exception as _e:
         _log.warning(f"CSV import global upsert failed: {_e}")
