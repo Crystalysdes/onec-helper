@@ -167,24 +167,22 @@ export default function UploadInvoice() {
   const applyMarkup = () => {
     const pct = parseFloat(markup)
     if (isNaN(pct)) return toast.error('Введите процент наценки')
-    let applied = 0
+    const eligible = products.filter(p => p.purchase_price != null && p.purchase_price !== '').length
+    if (eligible === 0) return toast.error('Нет товаров с закупочной ценой')
     setProducts(prev => prev.map(p => {
       const base = p.purchase_price
       if (base == null || base === '') return p
       let price = base * (1 + pct / 100)
       if (roundPrices) {
-        // Smart rounding: to nearest 10 for prices ≥ 50, else to nearest 1
         const step = price >= 50 ? 10 : 1
         price = Math.round(price / step) * step
         if (price <= 0) price = step
       } else {
         price = Math.round(price * 100) / 100
       }
-      applied++
       return { ...p, price }
     }))
-    if (applied === 0) return toast.error('Нет товаров с закупочной ценой')
-    toast.success(`Наценка ${pct}% применена к ${applied} товарам${roundPrices ? ', цены округлены' : ''}`)
+    toast.success(`Наценка ${pct}% применена к ${eligible} товарам${roundPrices ? ', цены округлены' : ''}`)
   }
 
   const addFiles = (fileList) => {
