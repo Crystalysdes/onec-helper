@@ -1543,19 +1543,19 @@ async def delete_product(
     product.is_active = False
     await db.commit()
 
-    # Exclude from global catalog if no other active store has this product
+    # Hard-delete from global catalog (remove completely so it never shows in autocomplete)
     from sqlalchemy import text as _text
     bc_key = _barcode.strip() if _barcode and _barcode.strip() else (f"article:{_article.strip()}" if _article and _article.strip() else None)
     if bc_key:
         await db.execute(_text("""
-            UPDATE global_products SET is_excluded = TRUE
+            DELETE FROM global_products
             WHERE barcode = :bc
             AND NOT EXISTS (
                 SELECT 1 FROM products_cache
-                WHERE (barcode = :bc OR (barcode IS NULL AND article = :art))
+                WHERE (barcode = :bc OR (barcode IS NULL AND CONCAT('article:', article) = :bc))
                   AND is_active = TRUE
             )
-        """), {"bc": bc_key, "art": _article or ""})
+        """), {"bc": bc_key})
         await db.commit()
 
     if _onec_id:
@@ -1759,7 +1759,7 @@ async def bulk_delete_products(
         )
         await db.commit()
 
-        # Exclude from global catalog if no other active store has each product
+        # Hard-delete from global catalog for all deleted products
         from sqlalchemy import text as _text
         bc_keys = []
         for product, _ in rows:
@@ -1770,12 +1770,12 @@ async def bulk_delete_products(
                 bc_keys.append(key)
         if bc_keys:
             await db.execute(_text("""
-                UPDATE global_products SET is_excluded = TRUE
+                DELETE FROM global_products
                 WHERE barcode = ANY(:bcs)
                 AND NOT EXISTS (
                     SELECT 1 FROM products_cache
                     WHERE (barcode = global_products.barcode
-                        OR (barcode IS NULL AND CONCAT('article:', article) = global_products.barcode))
+                        OR CONCAT('article:', products_cache.article) = global_products.barcode)
                     AND is_active = TRUE
                 )
             """), {"bcs": bc_keys})
