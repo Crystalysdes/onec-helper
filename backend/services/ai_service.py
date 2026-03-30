@@ -1,4 +1,5 @@
 import json
+import os
 import base64
 from typing import List, Optional
 from loguru import logger
@@ -18,74 +19,124 @@ def _strip_json(content: str) -> str:
 _PROXY_FILE = "/app/data/proxy.txt"
 
 
-def _get_proxy_url() -> Optional[str]:
-    """Return proxy URL: file override takes priority over env setting."""
+def _get_proxy_list() -> List[Optional[str]]:
+    """Return list of proxy URLs. File overrides env. Returns [None] if none configured."""
     try:
-        import os
         if os.path.exists(_PROXY_FILE):
-            url = open(_PROXY_FILE).read().strip()
-            if url:
-                return url
+            raw = open(_PROXY_FILE).read().strip()
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, list):
+                        proxies = [p.strip() for p in data if p and str(p).strip()]
+                        return proxies if proxies else [None]
+                    elif isinstance(data, str) and data.strip():
+                        return [data.strip()]
+                except (json.JSONDecodeError, TypeError):
+                    return [raw]  # old plain-text format
     except Exception:
         pass
-    return settings.ANTHROPIC_PROXY_URL.strip() or None
+    env_proxy = (settings.ANTHROPIC_PROXY_URL or "").strip() or None
+    return [env_proxy] if env_proxy else [None]
+
+
+def _is_proxy_error(exc) -> bool:
+    """True if the exception looks like a proxy / connectivity failure."""
+    try:
+        import httpx
+        if isinstance(exc, (httpx.ConnectError, httpx.ProxyError,
+                            httpx.ConnectTimeout, httpx.RemoteProtocolError)):
+            return True
+    except ImportError:
+        pass
+    msg = str(exc).lower()
+    return any(k in msg for k in ("proxy", "connect", "tunnel", "socks", "eof", "connection refused"))
 
 
 class AIService:
     def __init__(self):
+        import httpx
+        proxies = _get_proxy_list()  # e.g. ["socks5://...", "http://..."] or [None]
+        self._active_idx = 0
+
         if settings.OPENROUTER_API_KEY:
             from openai import AsyncOpenAI
             self._mode = "openai"
-            proxy_url = _get_proxy_url()
-            import httpx as _httpx
-            client_kwargs = {
-                "api_key": settings.OPENROUTER_API_KEY,
-                "base_url": "https://openrouter.ai/api/v1",
-                "default_headers": {"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
-                "timeout": 90.0,
-            }
-            if proxy_url:
-                client_kwargs["http_client"] = _httpx.AsyncClient(proxy=proxy_url, timeout=90.0)
-            self._client = AsyncOpenAI(**client_kwargs)
             self._model = settings.OPENROUTER_MODEL
             self._fast_model = settings.OPENROUTER_FAST_MODEL
             self._vision_model = getattr(settings, 'OPENROUTER_VISION_MODEL', settings.OPENROUTER_FAST_MODEL)
-            proxy_info = f" via proxy={proxy_url}" if proxy_url else ""
-            logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}{proxy_info}")
+            self._clients = []
+            for p in proxies:
+                kw = {
+                    "api_key": settings.OPENROUTER_API_KEY,
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "default_headers": {"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
+                    "timeout": 90.0,
+                }
+                if p:
+                    kw["http_client"] = httpx.AsyncClient(proxy=p, timeout=90.0)
+                self._clients.append(AsyncOpenAI(**kw))
+            proxy_info = f" proxies={proxies}" if proxies != [None] else ""
+            logger.info(f"AIService: OpenRouter mode, model={self._model}{proxy_info}")
         else:
             import anthropic
-            import httpx
             self._mode = "anthropic"
-            proxy_url = _get_proxy_url()
-            http_client = httpx.AsyncClient(proxy=proxy_url, timeout=90.0) if proxy_url else None
-            client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY, "timeout": 90.0}
-            if http_client:
-                client_kwargs["http_client"] = http_client
-            self._client = anthropic.AsyncAnthropic(**client_kwargs)
             self._fast_model = settings.CLAUDE_MODEL
             self._vision_model = settings.CLAUDE_MODEL
             self._model = settings.CLAUDE_MODEL
-            proxy_info = f" via proxy={proxy_url}" if proxy_url else ""
+            self._clients = []
+            for p in proxies:
+                kw = {"api_key": settings.ANTHROPIC_API_KEY, "timeout": 90.0}
+                if p:
+                    kw["http_client"] = httpx.AsyncClient(proxy=p, timeout=90.0)
+                self._clients.append(anthropic.AsyncAnthropic(**kw))
+            proxy_info = f" proxies={proxies}" if proxies != [None] else ""
             logger.info(f"AIService: Anthropic direct mode, model={self._model}{proxy_info}")
+
+        # keep self._client as alias for the current active client
+        self._client = self._clients[0]
 
     def _img_block(self, b64: str) -> dict:
         if self._mode == "openai":
             return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
         return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
 
+    async def _do_call_openai(self, client, model: str, max_tokens: int, msgs: list) -> str:
+        r = await client.chat.completions.create(model=model, max_tokens=max_tokens, messages=msgs)
+        return r.choices[0].message.content.strip()
+
+    async def _do_call_anthropic(self, client, model: str, max_tokens: int, messages: list, system: str = None) -> str:
+        kw = {"model": model, "max_tokens": max_tokens, "messages": messages}
+        if system:
+            kw["system"] = system
+        r = await client.messages.create(**kw)
+        return r.content[0].text.strip()
+
     async def _call(self, messages: list, system: str = None, max_tokens: int = 1024, fast: bool = False) -> str:
         model = self._fast_model if fast else self._model
-        if self._mode == "openai":
-            msgs = ([{"role": "system", "content": system}] if system else []) + messages
-            r = await self._client.chat.completions.create(
-                model=model, max_tokens=max_tokens, messages=msgs
-            )
-            return r.choices[0].message.content.strip()
-        kwargs = {"model": model, "max_tokens": max_tokens, "messages": messages}
-        if system:
-            kwargs["system"] = system
-        r = await self._client.messages.create(**kwargs)
-        return r.content[0].text.strip()
+        last_exc = None
+        n = len(self._clients)
+        for i in range(n):
+            idx = (self._active_idx + i) % n
+            client = self._clients[idx]
+            try:
+                if self._mode == "openai":
+                    msgs = ([{"role": "system", "content": system}] if system else []) + messages
+                    result = await self._do_call_openai(client, model, max_tokens, msgs)
+                else:
+                    result = await self._do_call_anthropic(client, model, max_tokens, messages, system)
+                if idx != self._active_idx:
+                    logger.info(f"AIService: switched to proxy index {idx}")
+                    self._active_idx = idx
+                    self._client = client
+                return result
+            except Exception as e:
+                if _is_proxy_error(e) and n > 1:
+                    logger.warning(f"AIService: proxy[{idx}] failed ({e}), trying next")
+                    last_exc = e
+                    continue
+                raise
+        raise last_exc or RuntimeError("All proxies exhausted")
 
     async def _call_invoice(self, messages: list, max_tokens: int = 8192) -> str:
         """Call dedicated Claude Opus 4 model for invoice parsing.
@@ -97,22 +148,35 @@ class AIService:
             (primary, max_tokens),
             (fallback, min(max_tokens, 4096)),
         ]):
-            try:
-                if self._mode == "openai":
-                    r = await self._client.chat.completions.create(
-                        model=model, max_tokens=tokens, messages=messages
-                    )
-                    return r.choices[0].message.content.strip()
-                r = await self._client.messages.create(
-                    model=model, max_tokens=tokens, messages=messages
-                )
-                return r.content[0].text.strip()
-            except Exception as e:
-                is_402 = "402" in str(e) or (hasattr(e, 'status_code') and getattr(e, 'status_code', 0) == 402)
-                if is_402 and attempt == 0:
-                    logger.warning(f"Invoice model {model} got 402 (credits), falling back to {fallback}")
-                    continue
-                raise
+            n = len(self._clients)
+            last_exc = None
+            for pi in range(n):
+                idx = (self._active_idx + pi) % n
+                client = self._clients[idx]
+                try:
+                    if self._mode == "openai":
+                        r = await self._do_call_openai(client, model, tokens, messages)
+                    else:
+                        r = await self._do_call_anthropic(client, model, tokens, messages)
+                    if idx != self._active_idx:
+                        self._active_idx = idx
+                        self._client = client
+                    return r
+                except Exception as e:
+                    is_402 = "402" in str(e) or (hasattr(e, 'status_code') and getattr(e, 'status_code', 0) == 402)
+                    if is_402 and attempt == 0:
+                        logger.warning(f"Invoice model {model} got 402, falling back to {fallback}")
+                        last_exc = None
+                        break  # try next (model, tokens) pair
+                    if _is_proxy_error(e) and n > 1:
+                        logger.warning(f"AIService invoice: proxy[{idx}] failed, trying next")
+                        last_exc = e
+                        continue
+                    raise
+            if last_exc is None and attempt == 0:
+                continue  # 402 fallback to next model
+        if last_exc:
+            raise last_exc
 
     async def parse_invoice(self, ocr_text: str) -> List[dict]:
         """Parse invoice text and extract product list using Claude."""

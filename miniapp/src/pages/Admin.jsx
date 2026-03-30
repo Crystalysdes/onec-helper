@@ -78,10 +78,13 @@ export default function Admin() {
   const [userModal, setUserModal] = useState(null)
   const [userLoading, setUserLoading] = useState(false)
   const [catItemModal, setCatItemModal] = useState(null)
-  const [proxyUrl, setProxyUrl] = useState('')
+  const [proxies, setProxies] = useState([])
   const [proxySource, setProxySource] = useState('none')
-  const [proxyTesting, setProxyTesting] = useState(false)
+  const [proxyTesting, setProxyTesting] = useState(null)  // index being tested
   const [proxySaving, setProxySaving] = useState(false)
+  const [subsSearch, setSubsSearch] = useState('')
+  const [subsPage, setSubsPage] = useState(1)
+  const [subsTotal, setSubsTotal] = useState(0)
 
   // helpers to start polling loops
   const startCatPoll = (onDone) => {
@@ -167,8 +170,11 @@ export default function Admin() {
         const res = await adminAPI.users()
         setUsers(res.data)
       } else if (t === 'subscriptions') {
-        const res = await adminAPI.subscriptions()
-        setSubs(res.data)
+        const res = await adminAPI.subscriptions(1, '')
+        setSubs(res.data.items || [])
+        setSubsTotal(res.data.total || 0)
+        setSubsPage(1)
+        setSubsSearch('')
       } else if (t === 'logs') {
         const res = await adminAPI.logs()
         setLogs(res.data)
@@ -259,7 +265,7 @@ export default function Admin() {
       await adminAPI.grantSubscription(userId, grantDays)
       toast.success(`Подписка выдана на ${grantDays} дней`)
       setGrantUserId(null)
-      loadTab('subscriptions')
+      loadSubs(subsSearch, subsPage)
     } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
   }
 
@@ -300,10 +306,21 @@ export default function Admin() {
     return s
   }
 
+  const loadSubs = async (search = subsSearch, page = subsPage) => {
+    setLoading(true)
+    try {
+      const res = await adminAPI.subscriptions(page, search)
+      setSubs(res.data.items || [])
+      setSubsTotal(res.data.total || 0)
+      setSubsPage(page)
+    } catch { toast.error('Ошибка загрузки') }
+    finally { setLoading(false) }
+  }
+
   const loadProxyConfig = async () => {
     try {
       const r = await adminAPI.getProxyConfig()
-      setProxyUrl(r.data.proxy_url || '')
+      setProxies(r.data.proxies || [])
       setProxySource(r.data.source || 'none')
     } catch {}
   }
@@ -313,7 +330,7 @@ export default function Admin() {
     try {
       await adminAPI.revokeSubscription(userId)
       toast.success('Подписка отозвана')
-      loadTab('subscriptions')
+      loadSubs(subsSearch, subsPage)
     } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
   }
 
@@ -432,84 +449,104 @@ export default function Admin() {
               </button>
 
 
-              {/* ── Proxy config ── */}
+              {/* ── Proxy config (multi-proxy list) ── */}
               <div className="card flex flex-col gap-3 mt-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-base">🔐</span>
-                  <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Прокси для AI</p>
-                  {proxySource !== 'none' && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-                      style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
-                      {proxySource === 'file' ? 'Файл' : 'ENV'}
-                    </span>
-                  )}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🔐</span>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Прокси для AI</p>
+                    {proxySource !== 'none' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                        style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+                        {proxies.length} шт.
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    className="text-xs px-2.5 py-1 rounded-lg active:opacity-70"
+                    style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
+                    onClick={() => setProxies(prev => [...prev, ''])}
+                  >
+                    + Добавить
+                  </button>
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <textarea
-                    className="input-field text-xs font-mono resize-none"
-                    rows={2}
-                    placeholder="socks5://user:pass@host:port&#10;или host:port:user:pass (формат Dolphin)"
-                    value={proxyUrl}
-                    onChange={e => setProxyUrl(e.target.value)}
-                    onPaste={e => {
-                      const raw = e.clipboardData.getData('text')
-                      e.preventDefault()
-                      setProxyUrl(detectAndNormalizeProxy(raw))
-                    }}
-                  />
-                  <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Вставьте в любом формате — автоматически определится
+
+                {proxies.length === 0 && (
+                  <p className="text-xs text-center py-2" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    Нет проксий — AI работает напрямую
                   </p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    className="flex-1 text-sm py-2 rounded-xl active:opacity-70"
-                    style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
-                    disabled={proxyTesting || !proxyUrl.trim()}
-                    onClick={async () => {
-                      setProxyTesting(true)
-                      try {
-                        const normalized = detectAndNormalizeProxy(proxyUrl)
-                        const r = await adminAPI.testProxy(normalized)
-                        toast.success(r.data.ok ? 'Прокси работает ✅' : `HTTP ${r.data.status_code}`)
-                      } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка прокси') }
-                      finally { setProxyTesting(false) }
-                    }}
-                  >
-                    {proxyTesting ? 'Проверяю...' : 'Проверить'}
-                  </button>
-                  <button
-                    className="flex-1 btn-primary text-sm py-2"
-                    disabled={proxySaving}
-                    onClick={async () => {
-                      setProxySaving(true)
-                      try {
-                        const normalized = detectAndNormalizeProxy(proxyUrl)
-                        setProxyUrl(normalized)
-                        await adminAPI.setProxyConfig(normalized)
-                        setProxySource('file')
-                        toast.success('Прокси сохранён, AI перезапущен')
-                      } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
-                      finally { setProxySaving(false) }
-                    }}
-                  >
-                    {proxySaving ? 'Сохраняю...' : 'Сохранить'}
-                  </button>
-                </div>
-                {proxySource !== 'none' && (
-                  <button
-                    className="text-xs text-center active:opacity-70"
-                    style={{ color: 'var(--tg-theme-hint-color)' }}
-                    onClick={async () => {
-                      await adminAPI.setProxyConfig('')
-                      setProxyUrl('')
-                      setProxySource('none')
-                      toast.success('Прокси удалён')
-                    }}
-                  >
-                    Удалить прокси
-                  </button>
                 )}
+
+                {proxies.map((px, idx) => (
+                  <div key={idx} className="flex flex-col gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] w-4 text-center flex-shrink-0 font-bold"
+                        style={{ color: 'var(--tg-theme-hint-color)' }}>{idx + 1}</span>
+                      <input
+                        className="input-field text-xs font-mono flex-1 py-1.5"
+                        placeholder="socks5://user:pass@host:port"
+                        value={px}
+                        onChange={e => setProxies(prev => prev.map((p, i) => i === idx ? e.target.value : p))}
+                        onPaste={e => {
+                          const raw = e.clipboardData.getData('text')
+                          e.preventDefault()
+                          setProxies(prev => prev.map((p, i) => i === idx ? detectAndNormalizeProxy(raw) : p))
+                        }}
+                      />
+                      <button
+                        className="text-[11px] px-2 py-1.5 rounded-lg active:opacity-70 flex-shrink-0"
+                        style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
+                        disabled={proxyTesting === idx}
+                        onClick={async () => {
+                          const url = detectAndNormalizeProxy(px)
+                          if (!url.trim()) return toast.error('Введите URL')
+                          setProxyTesting(idx)
+                          try {
+                            const r = await adminAPI.testProxy(url)
+                            toast.success(r.data.ok ? `Прокси #${idx+1} ✅` : `HTTP ${r.data.status_code}`)
+                          } catch (e) { toast.error(e.response?.data?.detail || `Прокси #${idx+1} ❌`) }
+                          finally { setProxyTesting(null) }
+                        }}
+                      >
+                        {proxyTesting === idx ? '...' : '✔'}
+                      </button>
+                      <button
+                        className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-70 flex-shrink-0"
+                        style={{ background: 'rgba(239,68,68,0.1)' }}
+                        onClick={() => setProxies(prev => prev.filter((_, i) => i !== idx))}
+                      >
+                        <X size={13} color="#ef4444" />
+                      </button>
+                    </div>
+                    {idx === 0 && proxies.length > 1 && (
+                      <p className="text-[10px] pl-5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        ↑ главный — при ошибке автопереключение на следующий
+                      </p>
+                    )}
+                  </div>
+                ))}
+
+                <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                  Вставьте в любом формате (Dolphin: host:port:user:pass) — автоопределение
+                </p>
+
+                <button
+                  className="btn-primary text-sm py-2"
+                  disabled={proxySaving}
+                  onClick={async () => {
+                    setProxySaving(true)
+                    try {
+                      const normalized = proxies.map(p => detectAndNormalizeProxy(p)).filter(Boolean)
+                      setProxies(normalized)
+                      await adminAPI.setProxyConfig(normalized)
+                      setProxySource(normalized.length ? 'file' : 'none')
+                      toast.success(`${normalized.length} прокси сохранено, AI перезапущен`)
+                    } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                    finally { setProxySaving(false) }
+                  }}
+                >
+                  {proxySaving ? 'Сохраняю...' : 'Сохранить все прокси'}
+                </button>
               </div>
 
               {/* CSV import for user stores */}
@@ -736,16 +773,6 @@ export default function Admin() {
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                   <button
-                    className="text-[10px] px-2 py-1 rounded-lg active:opacity-70 flex-shrink-0"
-                    style={{
-                      background: u.is_admin ? 'rgba(245,158,11,0.15)' : 'var(--tg-theme-secondary-bg-color)',
-                      color: u.is_admin ? '#f59e0b' : 'var(--tg-theme-hint-color)',
-                    }}
-                    onClick={() => handleToggleAdmin(u.id, u.is_admin)}
-                  >
-                    {u.is_admin ? 'Адм' : '☆'}
-                  </button>
-                  <button
                     className="active:opacity-60 transition-opacity"
                     onClick={() => toggleUser(u.id)}
                     disabled={u.is_admin}
@@ -766,9 +793,30 @@ export default function Admin() {
       {/* Tab: Subscriptions */}
       {tab === 'subscriptions' && (
         <div className="px-4 flex flex-col gap-2">
-          <p className="section-title px-0">{subs.length} пользователей</p>
+          {/* Search */}
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--tg-theme-hint-color)' }} />
+            <input
+              className="input-field text-sm py-2 w-full"
+              style={{ paddingLeft: '2.2rem' }}
+              placeholder="Поиск по никнейму / имени..."
+              value={subsSearch}
+              onChange={e => { setSubsSearch(e.target.value); loadSubs(e.target.value, 1) }}
+            />
+            {subsSearch && (
+              <button className="absolute right-2 top-1/2 -translate-y-1/2" onClick={() => { setSubsSearch(''); loadSubs('', 1) }}>
+                <X size={14} style={{ color: 'var(--tg-theme-hint-color)' }} />
+              </button>
+            )}
+          </div>
+          <p className="section-title px-0">{subsTotal} пользователей</p>
           {loading ? (
             [1, 2, 3].map((i) => <div key={i} className="skeleton h-20" />)
+          ) : subs.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-12">
+              <span className="text-4xl">💳</span>
+              <p className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>Не найдено</p>
+            </div>
           ) : subs.map((row) => (
             <div key={row.user_id} className="card flex flex-col gap-2">
               <div className="flex items-center gap-3">
@@ -832,6 +880,26 @@ export default function Admin() {
               )}
             </div>
           ))}
+
+          {/* Pagination */}
+          {subsTotal > 20 && (
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                className="btn-secondary text-sm flex-1 py-2"
+                onClick={() => loadSubs(subsSearch, subsPage - 1)}
+                disabled={subsPage <= 1 || loading}
+              >← Назад</button>
+              <span className="text-xs px-3 py-2 rounded-xl flex-shrink-0"
+                style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}>
+                {subsPage} / {Math.ceil(subsTotal / 20)}
+              </span>
+              <button
+                className="btn-secondary text-sm flex-1 py-2"
+                onClick={() => loadSubs(subsSearch, subsPage + 1)}
+                disabled={subsPage >= Math.ceil(subsTotal / 20) || loading}
+              >Вперёд →</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1059,22 +1127,40 @@ export default function Admin() {
                   </div>
                 )}
 
-                {!userModal.is_admin && (
+                <div className="flex gap-2">
+                  {!userModal.is_admin && (
+                    <button
+                      className="btn-secondary flex-1 text-sm"
+                      style={{ color: userModal.is_active ? '#ef4444' : '#22c55e' }}
+                      onClick={async () => {
+                        try {
+                          const res = await adminAPI.toggleUser(userModal.id)
+                          setUserModal(prev => ({ ...prev, is_active: res.data.is_active }))
+                          setUsers(prev => prev.map(u => u.id === userModal.id ? { ...u, is_active: res.data.is_active } : u))
+                          toast.success(res.data.is_active ? 'Активирован' : 'Заблокирован')
+                        } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                      }}
+                    >
+                      {userModal.is_active ? '🚫 Заблокировать' : '✅ Активировать'}
+                    </button>
+                  )}
                   <button
-                    className="btn-secondary text-sm"
-                    style={{ color: userModal.is_active ? '#ef4444' : '#22c55e' }}
+                    className="btn-secondary flex-1 text-sm"
+                    style={{ color: userModal.is_admin ? '#f59e0b' : 'var(--tg-theme-hint-color)' }}
                     onClick={async () => {
+                      const action = userModal.is_admin ? 'Забрать админку?' : 'Выдать админку?'
+                      if (!window.confirm(action)) return
                       try {
-                        const res = await adminAPI.toggleUser(userModal.id)
-                        setUserModal(prev => ({ ...prev, is_active: res.data.is_active }))
-                        setUsers(prev => prev.map(u => u.id === userModal.id ? { ...u, is_active: res.data.is_active } : u))
-                        toast.success(res.data.is_active ? 'Пользователь активирован' : 'Заблокирован')
+                        const r = await adminAPI.toggleAdmin(userModal.id)
+                        setUserModal(prev => ({ ...prev, is_admin: r.data.is_admin }))
+                        setUsers(prev => prev.map(u => u.id === userModal.id ? { ...u, is_admin: r.data.is_admin } : u))
+                        toast.success(r.data.is_admin ? 'Админка выдана' : 'Админка забрана')
                       } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
                     }}
                   >
-                    {userModal.is_active ? '🚫 Заблокировать' : '✅ Активировать'}
+                    {userModal.is_admin ? '👑 Забрать админку' : '⭐ Выдать админку'}
                   </button>
-                )}
+                </div>
               </>
             )}
           </div>

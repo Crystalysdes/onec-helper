@@ -137,7 +137,7 @@ export const adminAPI = {
   getUser: (id) => api.get(`/admin/users/${id}`),
   toggleUser: (id) => api.patch(`/admin/users/${id}/toggle`),
   logs: (level, page) => api.get('/admin/logs', { params: { level, page } }),
-  subscriptions: (page) => api.get('/admin/subscriptions', { params: { page } }),
+  subscriptions: (page, search) => api.get('/admin/subscriptions', { params: { page, search, limit: 20 } }),
   getUserSubscription: (userId) => api.get(`/admin/subscriptions/${userId}`),
   grantSubscription: (userId, days = 30) =>
     api.post(`/admin/subscriptions/${userId}/grant`, { days }),
@@ -160,7 +160,7 @@ export const adminAPI = {
   wipeAll: () => api.delete('/admin/wipe-all'),
   dedupCatalog: () => api.post('/admin/dedup-catalog'),
   getProxyConfig: () => api.get('/admin/proxy-config'),
-  setProxyConfig: (proxy_url) => api.post('/admin/proxy-config', { proxy_url }),
+  setProxyConfig: (proxies) => api.post('/admin/proxy-config', { proxies }),
   testProxy: (proxy_url) => api.post('/admin/test-proxy', { proxy_url }),
   toggleAdmin: (userId) => api.patch(`/admin/users/${userId}/toggle-admin`),
   cleanGarbled: () => api.post('/admin/clean-garbled', null, { timeout: 120000 }),

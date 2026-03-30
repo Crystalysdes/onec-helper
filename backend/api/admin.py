@@ -249,26 +249,38 @@ def _sub_dict(sub: Subscription | None) -> dict:
 async def list_subscriptions(
     page: int = 1,
     limit: int = 50,
+    search: str = "",
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(User, Subscription)
-        .outerjoin(Subscription, Subscription.user_id == User.id)
-        .order_by(User.created_at.desc())
-        .offset((page - 1) * limit).limit(limit)
-    )
-    rows = result.all()
-    return [
-        {
-            "user_id": str(u.id),
-            "telegram_id": u.telegram_id,
-            "username": u.telegram_username,
-            "first_name": u.telegram_first_name,
-            "subscription": _sub_dict(s),
-        }
-        for u, s in rows
-    ]
+    from sqlalchemy import text as _text, or_
+    q = select(User, Subscription).outerjoin(Subscription, Subscription.user_id == User.id)
+    if search.strip():
+        pattern = f"%{search.strip()}%"
+        q = q.where(or_(
+            User.telegram_username.ilike(pattern),
+            User.telegram_first_name.ilike(pattern),
+            User.telegram_last_name.ilike(pattern),
+        ))
+    total_q = select(func.count()).select_from(q.subquery())
+    total = (await db.execute(total_q)).scalar() or 0
+    q = q.order_by(User.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    rows = (await db.execute(q)).all()
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "items": [
+            {
+                "user_id": str(u.id),
+                "telegram_id": u.telegram_id,
+                "username": u.telegram_username,
+                "first_name": u.telegram_first_name,
+                "subscription": _sub_dict(s),
+            }
+            for u, s in rows
+        ],
+    }
 
 
 class GrantSubRequest(BaseModel):
@@ -844,18 +856,31 @@ def _write_proxy_file(url: str):
 
 
 class ProxyConfigRequest(BaseModel):
-    proxy_url: str  # e.g. socks5://user:pass@host:port
+    proxies: Optional[list] = None  # list of proxy URL strings
+    proxy_url: Optional[str] = None  # legacy single-proxy compat
 
 
 @router.get("/proxy-config")
 async def get_proxy_config(current_user: User = Depends(get_current_admin)):
-    """Return current Anthropic proxy URL (from file override or env)."""
+    """Return current proxy list (from file override or env)."""
+    import json as _json
     from backend.config import settings
-    file_proxy = _read_proxy_file()
-    return {
-        "proxy_url": file_proxy or settings.ANTHROPIC_PROXY_URL or "",
-        "source": "file" if file_proxy else ("env" if settings.ANTHROPIC_PROXY_URL else "none"),
-    }
+    raw = _read_proxy_file()
+    if raw:
+        try:
+            data = _json.loads(raw)
+            if isinstance(data, list):
+                proxies = [p for p in data if p and str(p).strip()]
+            else:
+                proxies = [raw] if raw else []
+        except Exception:
+            proxies = [raw] if raw else []
+        source = "file"
+    else:
+        env = (settings.ANTHROPIC_PROXY_URL or "").strip()
+        proxies = [env] if env else []
+        source = "env" if env else "none"
+    return {"proxies": proxies, "source": source}
 
 
 @router.post("/proxy-config")
@@ -863,15 +888,22 @@ async def set_proxy_config(
     body: ProxyConfigRequest,
     current_user: User = Depends(get_current_admin),
 ):
-    """Save proxy URL to file and reload AI service."""
-    _write_proxy_file(body.proxy_url)
-    # Reload global AI service singleton so new proxy takes effect
+    """Save proxy list to file and reload AI service."""
+    import json as _json
+    # Accept both new list format and legacy single proxy_url
+    if body.proxies is not None:
+        proxies = [str(p).strip() for p in body.proxies if p and str(p).strip()]
+    elif body.proxy_url is not None:
+        proxies = [body.proxy_url.strip()] if body.proxy_url.strip() else []
+    else:
+        proxies = []
+    _write_proxy_file(_json.dumps(proxies))
     try:
         from backend.services import ai_service as _ais
         _ais.reload_ai_service()
     except Exception as e:
         logger.warning(f"AI service reload after proxy change: {e}")
-    return {"status": "saved", "proxy_url": body.proxy_url}
+    return {"status": "saved", "proxies": proxies}
 
 
 @router.post("/test-proxy")
@@ -882,7 +914,7 @@ async def test_proxy(
     """Test a proxy URL by making a minimal Anthropic API call through it."""
     import httpx
     from backend.config import settings
-    proxy_url = body.proxy_url.strip()
+    proxy_url = (body.proxy_url or (body.proxies[0] if body.proxies else "") or "").strip()
     if not proxy_url:
         raise HTTPException(status_code=400, detail="Укажите URL прокси")
     try:
