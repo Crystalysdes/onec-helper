@@ -198,10 +198,8 @@ async def _mark_deleted_in_onec(
 
         for ref_id in ids_to_mark:
             ok, resp = await client._request(
-                "PATCH",
-                f"odata/standard.odata/Catalog_Номенклатура(guid'{ref_id}')?$format=json",
-                extra_headers={"Content-Type": "application/json"},
-                json={"DeletionMark": True},
+                "DELETE",
+                f"odata/standard.odata/Catalog_Номенклатура(guid'{ref_id}')",
             )
             logger.info(f"[1C DEL] '{name}' id={ref_id} ok={ok} resp={str(resp)[:80]}")
     except Exception as e:

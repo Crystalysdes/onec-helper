@@ -412,8 +412,8 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         product.name = name
                         product.article = p1c.get("article") or product.article
                         product.synced_at = datetime.now(timezone.utc)
-                        if not product.user_deleted_at:
-                            product.is_active = True
+                        product.is_active = True
+                        product.user_deleted_at = None
                         total_updated += 1
                     else:
                         # Before creating, check for orphan product by article or name (e.g. from invoice)
