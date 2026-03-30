@@ -427,7 +427,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                                     ProductCache.onec_id.is_(None),
                                 )
                             )
-                            orphan = r2.scalar_one_or_none()
+                            orphan = r2.scalars().first()
                         if not orphan and name:
                             r2 = await db.execute(
                                 select(ProductCache).where(
@@ -436,7 +436,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                                     ProductCache.onec_id.is_(None),
                                 )
                             )
-                            orphan = r2.scalar_one_or_none()
+                            orphan = r2.scalars().first()
                         if orphan:
                             orphan.onec_id = onec_id
                             orphan.name = name
