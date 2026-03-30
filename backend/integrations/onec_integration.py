@@ -49,6 +49,21 @@ class OneCClient:
             logger.error(f"1C request error: {e}")
             return False, {"error": str(e)}
 
+    async def _request_silent(self, method: str, path: str, **kwargs) -> Tuple[bool, Optional[dict]]:
+        """Like _request but treats 404/420 as empty success (no warning log)."""
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        headers = {**self._headers, **self._get_auth_header()}
+        try:
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                response = await client.request(method, url, headers=headers, **kwargs)
+                if response.status_code in (200, 201, 204):
+                    return True, response.json() if response.content else {}
+                if response.status_code in (404, 420):
+                    return True, {"value": []}
+                return False, {"error": response.text[:600], "status": response.status_code}
+        except Exception:
+            return False, {}
+
     async def test_connection(self) -> Tuple[bool, str]:
         """Test connection to 1C system."""
         success, data = await self._request("GET", "odata/standard.odata/")
@@ -552,7 +567,7 @@ class OneCClient:
         """Search 1C Catalog_Номенклатура by Description, return Ref_Key GUID or None."""
         import urllib.parse
         q = urllib.parse.quote(name.replace("'", "''"))
-        ok, data = await self._request(
+        ok, data = await self._request_silent(
             "GET",
             f"odata/standard.odata/Catalog_Номенклатура?$format=json&$filter=Description eq '{q}' and DeletionMark eq false&$select=Ref_Key&$top=1"
         )
@@ -566,7 +581,7 @@ class OneCClient:
         """Search 1C Catalog_Номенклатура by Артикул, return Ref_Key GUID or None."""
         import urllib.parse
         q = urllib.parse.quote(article.replace("'", "''"))
-        ok, data = await self._request(
+        ok, data = await self._request_silent(
             "GET",
             f"odata/standard.odata/Catalog_Номенклатура?$format=json&$filter=Артикул eq '{q}' and DeletionMark eq false&$select=Ref_Key&$top=1"
         )

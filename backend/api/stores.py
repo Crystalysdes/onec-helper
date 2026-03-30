@@ -536,7 +536,7 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
 
             # ── Step 6: push products to global catalog ──
             for product in onec_id_to_product.values():
-                if product.barcode:
+                if product.barcode or product.article:
                     await _upsert_global_product(db, product)
 
             integration.last_sync_at = datetime.now(timezone.utc)
