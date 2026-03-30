@@ -455,42 +455,92 @@ export default function UploadInvoice() {
           </div>
 
           {/* ── Bulk markup panel ── */}
-          <div className="rounded-2xl p-3 flex flex-col gap-2.5"
-            style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-            <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Наценка на все товары</p>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center rounded-xl overflow-hidden flex-1"
-                style={{ border: '1px solid rgba(128,128,128,0.2)', background: 'rgba(0,0,0,0.05)' }}>
+          <div style={{ background: 'var(--tg-theme-secondary-bg-color)', borderRadius: 20, padding: '16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Title */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 10, background: 'var(--tg-theme-button-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: 0.9 }}>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>%</span>
+              </div>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--tg-theme-text-color)', margin: 0 }}>Наценка на все товары</p>
+                <p style={{ fontSize: 11, color: 'var(--tg-theme-hint-color)', margin: 0 }}>Задайте % и нажмите «Применить»</p>
+              </div>
+            </div>
+
+            {/* Stepper input */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--tg-theme-bg-color)', borderRadius: 14, padding: '6px 6px' }}>
+              <button
+                onClick={() => setMarkup(v => String(Math.max(0, (parseFloat(v) || 0) - 1)))}
+                style={{ width: 40, height: 40, borderRadius: 10, border: 'none', background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)', fontSize: 22, fontWeight: 300, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >−</button>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                 <input
-                  type="number" min="0" max="9999" step="0.1"
-                  placeholder="10"
+                  type="number" min="0" max="9999" step="1"
+                  placeholder="0"
                   value={markup}
                   onChange={e => setMarkup(e.target.value)}
-                  className="flex-1 text-sm bg-transparent outline-none py-2 pl-3 pr-0.5"
-                  style={{ color: 'var(--tg-theme-text-color)' }}
+                  style={{
+                    width: '80px', textAlign: 'center', fontSize: 28, fontWeight: 700,
+                    background: 'transparent', border: 'none', outline: 'none',
+                    color: 'var(--tg-theme-text-color)',
+                    MozAppearance: 'textfield',
+                  }}
                 />
-                <span className="text-sm pr-2.5" style={{ color: 'var(--tg-theme-hint-color)' }}>%</span>
+                <span style={{ fontSize: 20, fontWeight: 600, color: 'var(--tg-theme-button-color)' }}>%</span>
               </div>
               <button
-                className="btn-primary px-4 py-2 text-sm flex-shrink-0 rounded-xl"
-                onClick={applyMarkup}
-              >
-                Применить
-              </button>
+                onClick={() => setMarkup(v => String((parseFloat(v) || 0) + 1))}
+                style={{ width: 40, height: 40, borderRadius: 10, border: 'none', background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)', fontSize: 22, fontWeight: 300, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >+</button>
             </div>
+
+            {/* Quick presets */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[5, 10, 20, 30, 50].map(pct => (
+                <button
+                  key={pct}
+                  onClick={() => setMarkup(String(pct))}
+                  style={{
+                    flex: 1, padding: '7px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                    background: String(markup) === String(pct) ? 'var(--tg-theme-button-color)' : 'var(--tg-theme-bg-color)',
+                    color: String(markup) === String(pct) ? 'white' : 'var(--tg-theme-hint-color)',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                >
+                  {pct}%
+                </button>
+              ))}
+            </div>
+
+            {/* Round toggle (iOS style) */}
             <button
               type="button"
-              className="flex items-center gap-2.5 active:opacity-70"
               onClick={() => setRoundPrices(v => !v)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
-              <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0"
-                style={{
-                  background: roundPrices ? 'var(--tg-theme-button-color)' : 'transparent',
-                  border: roundPrices ? 'none' : '1.5px solid rgba(128,128,128,0.4)',
-                }}>
-                {roundPrices && <Check size={12} color="white" />}
+              <span style={{ fontSize: 13, color: 'var(--tg-theme-text-color)' }}>Округлять цену до 10 ₽</span>
+              <div style={{
+                width: 44, height: 26, borderRadius: 13, position: 'relative', flexShrink: 0,
+                background: roundPrices ? 'var(--tg-theme-button-color)' : 'rgba(120,120,128,0.32)',
+                transition: 'background 0.2s',
+              }}>
+                <div style={{
+                  position: 'absolute', top: 3, width: 20, height: 20, borderRadius: '50%', background: 'white',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+                  left: roundPrices ? 21 : 3,
+                  transition: 'left 0.2s cubic-bezier(0.25,0.46,0.45,0.94)',
+                }} />
               </div>
-              <span className="text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Округлять цену (до 10 ₽)</span>
+            </button>
+
+            {/* Apply button */}
+            <button
+              className="btn-primary"
+              style={{ borderRadius: 14, padding: '13px', fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+              onClick={applyMarkup}
+            >
+              <Check size={17} strokeWidth={2.5} />
+              Применить наценку
             </button>
           </div>
 
