@@ -32,7 +32,7 @@ async def get_platform_stats(
 ):
     total_users = await db.execute(select(func.count(User.id)))
     total_stores = await db.execute(select(func.count(Store.id)))
-    total_products = await db.execute(select(func.count(ProductCache.id)))
+    total_products = await db.execute(select(func.count(ProductCache.id)).where(ProductCache.is_active == True))
     total_integrations = await db.execute(select(func.count(Integration.id)))
 
     # Check if global catalog needs to be created/populated (raw SQL avoids mapper issues)
