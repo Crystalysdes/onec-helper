@@ -485,10 +485,11 @@ export default function Admin() {
                 className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70"
                 style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
                 onClick={async () => {
-                  if (!window.confirm(`Удалить все ${dbTotal.toLocaleString('ru-RU')} записей из каталога? Это нельзя отменить.`)) return
+                  if (!window.confirm('Стереть ВСЕ товары из ВСЕХ баз (products_cache + global_products)? Это нельзя отменить!')) return
+                  if (!window.confirm('Вы уверены? Все товары всех магазинов будут удалены безвозвратно.')) return
                   try {
-                    const r = await adminAPI.clearCatalog()
-                    toast.success(`Каталог очищен (${(r.data.deleted || 0).toLocaleString('ru-RU')} записей)`)
+                    const r = await adminAPI.wipeAll()
+                    toast.success(`Стёрто: товаров магазинов — ${r.data.products_cache_deleted}, каталог — ${r.data.global_products_deleted}`)
                     setDbProducts([])
                     setDbTotal(0)
                     setDbPage(1)
@@ -496,7 +497,7 @@ export default function Admin() {
                 }}
               >
                 <Trash2 size={12} />
-                Удалить всё
+                Стереть всё
               </button>
             </div>
           </div>

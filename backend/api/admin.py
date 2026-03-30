@@ -587,15 +587,31 @@ async def clean_garbled_catalog(current_user: User = Depends(get_current_admin))
 
 @router.delete("/clear-catalog")
 async def clear_catalog(current_user: User = Depends(get_current_admin)):
-    """Soft-delete all global_products (is_excluded=True) so sync won't re-add them."""
+    """Hard-delete all global_products entries."""
     from sqlalchemy import text as _text
     from backend.database.connection import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        result = await db.execute(_text("SELECT COUNT(*) FROM global_products WHERE is_excluded IS NOT TRUE"))
+        result = await db.execute(_text("SELECT COUNT(*) FROM global_products"))
         count = result.scalar()
-        await db.execute(_text("UPDATE global_products SET is_excluded=TRUE"))
+        await db.execute(_text("DELETE FROM global_products"))
         await db.commit()
     return {"status": "cleared", "deleted": count}
+
+
+@router.delete("/wipe-all")
+async def wipe_all_products(current_user: User = Depends(get_current_admin)):
+    """Nuclear option: hard-delete ALL rows from products_cache AND global_products."""
+    from sqlalchemy import text as _text
+    from backend.database.connection import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        pc_res = await db.execute(_text("SELECT COUNT(*) FROM products_cache"))
+        pc_count = pc_res.scalar() or 0
+        gp_res = await db.execute(_text("SELECT COUNT(*) FROM global_products"))
+        gp_count = gp_res.scalar() or 0
+        await db.execute(_text("DELETE FROM products_cache"))
+        await db.execute(_text("DELETE FROM global_products"))
+        await db.commit()
+    return {"status": "wiped", "products_cache_deleted": pc_count, "global_products_deleted": gp_count}
 
 
 class DownloadCatalogRequest(BaseModel):
