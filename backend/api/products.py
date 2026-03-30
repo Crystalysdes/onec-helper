@@ -142,7 +142,7 @@ async def _upsert_global_product_from_dict(
     barcode: Optional[str], article: Optional[str], name: Optional[str],
     price=None, purchase_price=None, unit=None, category=None, description=None,
 ):
-    """Background-task-safe global catalog upsert using its own isolated session."""
+    """Background-task-safe global catalog upsert. Only valid EAN barcodes are accepted."""
     from backend.services.catalog_cleaner import (
         normalize_name, translate_category, detect_unit, _VALID_BARCODE_LENGTHS
     )
@@ -150,25 +150,32 @@ async def _upsert_global_product_from_dict(
     from sqlalchemy import text as _text
     import uuid as _uuid
     bc = (barcode or "").strip()
-    art = (article or "").strip()
-    if bc and (not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS):
-        bc = ""
-    if not bc and not art:
+    # Only products with a valid EAN barcode enter the shared catalog.
+    # Article-only / custom products are store-specific and must not pollute the global base.
+    if not bc or not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
         return
-    bc_key = bc if bc else f"article:{art}"
     clean_name = normalize_name(name or "")
-    if not clean_name:
+    if not clean_name or len(clean_name) < 3:
         return
     clean_cat = translate_category(category) if category else None
     clean_unit = unit or detect_unit(clean_name) or "шт"
     try:
         async with AsyncSessionLocal() as sess:
-            row = (await sess.execute(
+            # Skip if barcode is excluded
+            existing = (await sess.execute(
                 _text("SELECT is_excluded FROM global_products WHERE barcode = :bc"),
-                {"bc": bc_key}
+                {"bc": bc}
             )).fetchone()
-            if row and row[0]:
+            if existing and existing[0]:
                 return
+            # Skip if same name already exists under a DIFFERENT barcode (name-level dedup)
+            if not existing:
+                name_dup = (await sess.execute(
+                    _text("SELECT 1 FROM global_products WHERE lower(name) = lower(:n) AND barcode != :bc LIMIT 1"),
+                    {"n": clean_name, "bc": bc}
+                )).fetchone()
+                if name_dup:
+                    return
             await sess.execute(_text("""
                 INSERT INTO global_products
                     (id, barcode, name, price, purchase_price, article, category, unit)
@@ -182,13 +189,13 @@ async def _upsert_global_product_from_dict(
                     unit           = COALESCE(EXCLUDED.unit,          global_products.unit)
                 WHERE global_products.is_excluded IS NOT TRUE
             """), {
-                "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
+                "id": _uuid.uuid4(), "bc": bc, "name": clean_name,
                 "price": price, "pp": purchase_price,
-                "article": art or article, "cat": clean_cat, "unit": clean_unit,
+                "article": (article or "").strip() or None, "cat": clean_cat, "unit": clean_unit,
             })
             await sess.commit()
     except Exception as exc:
-        logger.warning(f"_upsert_global_product_from_dict failed key={bc_key}: {exc}")
+        logger.warning(f"_upsert_global_product_from_dict failed bc={bc}: {exc}")
 
 
 def _serialize_product(p: ProductCache) -> dict:

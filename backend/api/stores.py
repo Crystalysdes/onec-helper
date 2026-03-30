@@ -409,13 +409,11 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                     product = existing.scalar_one_or_none()
 
                     if product:
-                        # Respect explicit user deletion — never re-activate
-                        if product.user_deleted_at is not None:
-                            continue
                         product.name = name
                         product.article = p1c.get("article") or product.article
                         product.synced_at = datetime.now(timezone.utc)
                         product.is_active = True
+                        product.user_deleted_at = None
                         total_updated += 1
                     else:
                         # Before creating, check for orphan product by article or name (e.g. from invoice)
@@ -427,7 +425,6 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                                     ProductCache.store_id == store_id,
                                     ProductCache.article == article_1c,
                                     ProductCache.onec_id.is_(None),
-                                    ProductCache.user_deleted_at.is_(None),
                                 )
                             )
                             orphan = r2.scalars().first()
@@ -437,7 +434,6 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                                     ProductCache.store_id == store_id,
                                     _func.lower(ProductCache.name) == name.lower(),
                                     ProductCache.onec_id.is_(None),
-                                    ProductCache.user_deleted_at.is_(None),
                                 )
                             )
                             orphan = r2.scalars().first()

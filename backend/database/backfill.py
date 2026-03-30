@@ -38,22 +38,28 @@ async def backfill_global_products() -> None:
                 if bc not in seen or (seen[bc][2] is None and row[2] is not None):
                     seen[bc] = row
 
-            # Fetch already-existing barcodes
-            existing = {r[0] for r in (await db.execute(
-                text("SELECT barcode FROM global_products")
-            )).fetchall()}
+            # Fetch already-existing barcodes AND names (for name-level dedup)
+            gp_rows = (await db.execute(
+                text("SELECT barcode, lower(name) FROM global_products")
+            )).fetchall()
+            existing_barcodes = {r[0] for r in gp_rows}
+            existing_names = {r[1] for r in gp_rows}
 
             new_entries = 0
             skipped = 0
             for bc, row in seen.items():
-                if bc in existing:
+                if bc in existing_barcodes:
                     continue
-                # Apply same quality filters as catalog import
+                # Only valid EAN barcodes — skip article-only / test products
                 if not bc.isdigit() or len(bc) not in _VALID_BARCODE_LENGTHS:
                     skipped += 1
                     continue
                 clean_name = normalize_name(row[1] or "")
-                if not clean_name:
+                if not clean_name or len(clean_name) < 3:
+                    skipped += 1
+                    continue
+                # Skip if a different barcode already carries this name (name dedup)
+                if clean_name.lower() in existing_names:
                     skipped += 1
                     continue
                 clean_cat = translate_category(row[5]) if row[5] else None

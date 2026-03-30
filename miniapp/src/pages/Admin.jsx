@@ -483,6 +483,20 @@ export default function Admin() {
               ) : null}
               <button
                 className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70"
+                style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                onClick={async () => {
+                  try {
+                    const r = await adminAPI.dedupCatalog()
+                    const d = r.data
+                    toast.success(`Очищено: дублей — ${d.removed_duplicates}, коротких — ${d.removed_short_names}, тест-ключей — ${d.removed_article_keys}`)
+                    loadDbProducts('', 1)
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                }}
+              >
+                Дедупликация
+              </button>
+              <button
+                className="text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 active:opacity-70"
                 style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}
                 onClick={async () => {
                   if (!window.confirm('Стереть ВСЕ товары из ВСЕХ баз (products_cache + global_products)? Это нельзя отменить!')) return

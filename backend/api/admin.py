@@ -598,6 +598,52 @@ async def clear_catalog(current_user: User = Depends(get_current_admin)):
     return {"status": "cleared", "deleted": count}
 
 
+@router.post("/dedup-catalog")
+async def dedup_catalog(current_user: User = Depends(get_current_admin)):
+    """
+    Clean global_products:
+    1. Remove article-based keys (article:...) — store-specific, not real EAN barcodes.
+    2. Remove entries with very short names (< 3 chars after strip).
+    3. Remove duplicate names — keep the entry with the best data (non-null price first, then oldest).
+    """
+    from sqlalchemy import text as _text
+    from backend.database.connection import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        # Step 1: remove article-based keys
+        r1 = await db.execute(_text("DELETE FROM global_products WHERE barcode LIKE 'article:%'"))
+        removed_article = r1.rowcount
+
+        # Step 2: remove too-short names
+        r2 = await db.execute(_text("DELETE FROM global_products WHERE length(trim(name)) < 3"))
+        removed_short = r2.rowcount
+
+        # Step 3: remove duplicate names — keep best row per lower(name)
+        # "Best" = has price (non-null) preferred, then by ctid (oldest physical row)
+        r3 = await db.execute(_text("""
+            DELETE FROM global_products
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY lower(name)
+                               ORDER BY (price IS NOT NULL) DESC, id
+                           ) AS rn
+                    FROM global_products
+                ) ranked
+                WHERE rn > 1
+            )
+        """))
+        removed_dupes = r3.rowcount
+
+        await db.commit()
+    return {
+        "status": "ok",
+        "removed_article_keys": removed_article,
+        "removed_short_names": removed_short,
+        "removed_duplicates": removed_dupes,
+    }
+
+
 @router.delete("/wipe-all")
 async def wipe_all_products(current_user: User = Depends(get_current_admin)):
     """Nuclear option: hard-delete ALL rows from products_cache AND global_products."""
