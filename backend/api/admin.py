@@ -38,14 +38,10 @@ async def get_platform_stats(
     # Check if global catalog needs to be created/populated (raw SQL avoids mapper issues)
     try:
         from sqlalchemy import text as _text
-        global_count_res = await db.execute(_text("SELECT COUNT(*) FROM global_products"))
+        global_count_res = await db.execute(_text("SELECT COUNT(*) FROM global_products WHERE is_excluded IS NOT TRUE"))
         global_count = global_count_res.scalar() or 0
     except Exception:
         global_count = -1  # table doesn't exist yet
-
-    if global_count <= 0:
-        from backend.database.backfill import backfill_global_products
-        background_tasks.add_task(backfill_global_products)
 
     return {
         "total_users": total_users.scalar(),
@@ -591,13 +587,13 @@ async def clean_garbled_catalog(current_user: User = Depends(get_current_admin))
 
 @router.delete("/clear-catalog")
 async def clear_catalog(current_user: User = Depends(get_current_admin)):
-    """Truncate global_products to free DB space before re-import."""
+    """Soft-delete all global_products (is_excluded=True) so sync won't re-add them."""
     from sqlalchemy import text as _text
     from backend.database.connection import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        result = await db.execute(_text("SELECT COUNT(*) FROM global_products"))
+        result = await db.execute(_text("SELECT COUNT(*) FROM global_products WHERE is_excluded IS NOT TRUE"))
         count = result.scalar()
-        await db.execute(_text("TRUNCATE TABLE global_products RESTART IDENTITY CASCADE"))
+        await db.execute(_text("UPDATE global_products SET is_excluded=TRUE"))
         await db.commit()
     return {"status": "cleared", "deleted": count}
 
