@@ -968,10 +968,10 @@ async def upload_invoice(
 async def save_invoice_products(
     store_id: str,
     products: List[InvoiceProductSave],
+    background_tasks: BackgroundTasks,
     sync_to_onec: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    background_tasks: BackgroundTasks,
 ):
     from sqlalchemy import func as _func
     store_id_uuid = UUID(store_id)
