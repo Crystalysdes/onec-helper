@@ -910,6 +910,7 @@ async def save_invoice_products(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from sqlalchemy import func as _func
     store_id_uuid = UUID(store_id)
     await _check_store_access(store_id_uuid, current_user, db)
 
