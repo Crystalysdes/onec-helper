@@ -201,7 +201,16 @@ async def _mark_deleted_in_onec(
                 "DELETE",
                 f"odata/standard.odata/Catalog_Номенклатура(guid'{ref_id}')",
             )
-            logger.info(f"[1C DEL] '{name}' id={ref_id} ok={ok} resp={str(resp)[:80]}")
+            if ok:
+                logger.info(f"[1C DEL] '{name}' id={ref_id} physically deleted")
+            else:
+                ok2, resp2 = await client._request(
+                    "PATCH",
+                    f"odata/standard.odata/Catalog_Номенклатура(guid'{ref_id}')?$format=json",
+                    extra_headers={"Content-Type": "application/json"},
+                    json={"DeletionMark": True},
+                )
+                logger.info(f"[1C DEL] '{name}' id={ref_id} marked ok={ok2} resp={str(resp2)[:60]}")
     except Exception as e:
         from loguru import logger as _log
         _log.error(f"[1C DEL] EXCEPTION for '{name}': {e}", exc_info=True)
