@@ -78,6 +78,10 @@ export default function Admin() {
   const [userModal, setUserModal] = useState(null)
   const [userLoading, setUserLoading] = useState(false)
   const [catItemModal, setCatItemModal] = useState(null)
+  const [proxyUrl, setProxyUrl] = useState('')
+  const [proxySource, setProxySource] = useState('none')
+  const [proxyTesting, setProxyTesting] = useState(false)
+  const [proxySaving, setProxySaving] = useState(false)
 
   // helpers to start polling loops
   const startCatPoll = (onDone) => {
@@ -117,6 +121,7 @@ export default function Admin() {
       return
     }
     loadTab('stats')
+    loadProxyConfig()
     // Resume import polling if it was running before navigation
     ;(async () => {
       try {
@@ -270,6 +275,39 @@ export default function Admin() {
     }
   }
 
+  const handleToggleAdmin = async (userId, currentIsAdmin) => {
+    const action = currentIsAdmin ? 'Забрать админку?' : 'Выдать админку?'
+    if (!window.confirm(action)) return
+    try {
+      const r = await adminAPI.toggleAdmin(userId)
+      toast.success(r.data.is_admin ? 'Админка выдана' : 'Админка забрана')
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, is_admin: r.data.is_admin } : u))
+    } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+  }
+
+  const detectAndNormalizeProxy = (raw) => {
+    const s = raw.trim()
+    if (!s) return s
+    // Already a full URL
+    if (/^(https?|socks[45]):\/\//.test(s)) return s
+    // host:port:user:pass  (Dolphin format)
+    const parts = s.split(':')
+    if (parts.length === 4 && !isNaN(parts[1])) {
+      return `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`
+    }
+    // user:pass@host:port
+    if (s.includes('@')) return `http://${s}`
+    return s
+  }
+
+  const loadProxyConfig = async () => {
+    try {
+      const r = await adminAPI.getProxyConfig()
+      setProxyUrl(r.data.proxy_url || '')
+      setProxySource(r.data.source || 'none')
+    } catch {}
+  }
+
   const handleRevokeSub = async (userId) => {
     if (!window.confirm('Отозвать подписку?')) return
     try {
@@ -393,6 +431,86 @@ export default function Admin() {
                 </div>
               </button>
 
+
+              {/* ── Proxy config ── */}
+              <div className="card flex flex-col gap-3 mt-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🔐</span>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Прокси для AI</p>
+                  {proxySource !== 'none' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                      style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
+                      {proxySource === 'file' ? 'Файл' : 'ENV'}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <textarea
+                    className="input-field text-xs font-mono resize-none"
+                    rows={2}
+                    placeholder="socks5://user:pass@host:port&#10;или host:port:user:pass (формат Dolphin)"
+                    value={proxyUrl}
+                    onChange={e => setProxyUrl(e.target.value)}
+                    onPaste={e => {
+                      const raw = e.clipboardData.getData('text')
+                      e.preventDefault()
+                      setProxyUrl(detectAndNormalizeProxy(raw))
+                    }}
+                  />
+                  <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    Вставьте в любом формате — автоматически определится
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    className="flex-1 text-sm py-2 rounded-xl active:opacity-70"
+                    style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+                    disabled={proxyTesting || !proxyUrl.trim()}
+                    onClick={async () => {
+                      setProxyTesting(true)
+                      try {
+                        const normalized = detectAndNormalizeProxy(proxyUrl)
+                        const r = await adminAPI.testProxy(normalized)
+                        toast.success(r.data.ok ? 'Прокси работает ✅' : `HTTP ${r.data.status_code}`)
+                      } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка прокси') }
+                      finally { setProxyTesting(false) }
+                    }}
+                  >
+                    {proxyTesting ? 'Проверяю...' : 'Проверить'}
+                  </button>
+                  <button
+                    className="flex-1 btn-primary text-sm py-2"
+                    disabled={proxySaving}
+                    onClick={async () => {
+                      setProxySaving(true)
+                      try {
+                        const normalized = detectAndNormalizeProxy(proxyUrl)
+                        setProxyUrl(normalized)
+                        await adminAPI.setProxyConfig(normalized)
+                        setProxySource('file')
+                        toast.success('Прокси сохранён, AI перезапущен')
+                      } catch (e) { toast.error(e.response?.data?.detail || 'Ошибка') }
+                      finally { setProxySaving(false) }
+                    }}
+                  >
+                    {proxySaving ? 'Сохраняю...' : 'Сохранить'}
+                  </button>
+                </div>
+                {proxySource !== 'none' && (
+                  <button
+                    className="text-xs text-center active:opacity-70"
+                    style={{ color: 'var(--tg-theme-hint-color)' }}
+                    onClick={async () => {
+                      await adminAPI.setProxyConfig('')
+                      setProxyUrl('')
+                      setProxySource('none')
+                      toast.success('Прокси удалён')
+                    }}
+                  >
+                    Удалить прокси
+                  </button>
+                )}
+              </div>
 
               {/* CSV import for user stores */}
               <div className="card flex flex-col gap-3 mt-1">
@@ -617,6 +735,16 @@ export default function Admin() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                  <button
+                    className="text-[10px] px-2 py-1 rounded-lg active:opacity-70 flex-shrink-0"
+                    style={{
+                      background: u.is_admin ? 'rgba(245,158,11,0.15)' : 'var(--tg-theme-secondary-bg-color)',
+                      color: u.is_admin ? '#f59e0b' : 'var(--tg-theme-hint-color)',
+                    }}
+                    onClick={() => handleToggleAdmin(u.id, u.is_admin)}
+                  >
+                    {u.is_admin ? 'Адм' : '☆'}
+                  </button>
                   <button
                     className="active:opacity-60 transition-opacity"
                     onClick={() => toggleUser(u.id)}

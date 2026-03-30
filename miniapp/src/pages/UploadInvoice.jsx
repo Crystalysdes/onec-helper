@@ -159,7 +159,6 @@ export default function UploadInvoice() {
   const [photos, setPhotos] = useState([])
   const [previews, setPreviews] = useState([])
   const [products, setProducts] = useState([])
-  const [syncToOnec, setSyncToOnec] = useState(false)
   const [markup, setMarkup] = useState('')
   const [roundPrices, setRoundPrices] = useState(false)
   const fileRef = useRef()
@@ -263,8 +262,8 @@ export default function UploadInvoice() {
         category: p.category || null,
         existing_id: p._existing_id || null,
       }))
-      await productsAPI.saveInvoice(currentStore.id, payload, syncToOnec)
-      toast.success(`Сохранено ${valid.length} товаров!${syncToOnec ? ' Отправлено в 1С.' : ''}`)
+      await productsAPI.saveInvoice(currentStore.id, payload, true)
+      toast.success(`Сохранено ${valid.length} товаров! Отправлено в 1С.`)
       setStep('done')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка сохранения')
@@ -508,25 +507,6 @@ export default function UploadInvoice() {
             <Plus size={16} style={{ color: 'var(--tg-theme-hint-color)' }} />
             <span className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>Добавить товар вручную</span>
           </button>
-
-          {/* 1C sync toggle */}
-          <div className="card flex items-center justify-between gap-3 py-3">
-            <div>
-              <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Отправить в 1С</p>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                Создать / обновить товары и остатки в 1С
-              </p>
-            </div>
-            <button
-              type="button"
-              className="w-12 h-7 rounded-full transition-all relative flex-shrink-0"
-              style={{ background: syncToOnec ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.3)' }}
-              onClick={() => setSyncToOnec(v => !v)}
-            >
-              <span className="absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all"
-                style={{ left: syncToOnec ? 'calc(100% - 22px)' : '2px' }} />
-            </button>
-          </div>
 
           <div className="flex gap-3">
             <button className="btn-secondary flex-1" onClick={() => setStep('scan')}>Назад</button>

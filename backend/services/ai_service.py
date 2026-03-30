@@ -15,26 +15,48 @@ def _strip_json(content: str) -> str:
     return content.strip()
 
 
+_PROXY_FILE = "/app/data/proxy.txt"
+
+
+def _get_proxy_url() -> Optional[str]:
+    """Return proxy URL: file override takes priority over env setting."""
+    try:
+        import os
+        if os.path.exists(_PROXY_FILE):
+            url = open(_PROXY_FILE).read().strip()
+            if url:
+                return url
+    except Exception:
+        pass
+    return settings.ANTHROPIC_PROXY_URL.strip() or None
+
+
 class AIService:
     def __init__(self):
         if settings.OPENROUTER_API_KEY:
             from openai import AsyncOpenAI
             self._mode = "openai"
-            self._client = AsyncOpenAI(
-                api_key=settings.OPENROUTER_API_KEY,
-                base_url="https://openrouter.ai/api/v1",
-                default_headers={"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
-                timeout=90.0,
-            )
+            proxy_url = _get_proxy_url()
+            import httpx as _httpx
+            client_kwargs = {
+                "api_key": settings.OPENROUTER_API_KEY,
+                "base_url": "https://openrouter.ai/api/v1",
+                "default_headers": {"HTTP-Referer": "https://net1c.ru", "X-Title": "1C Helper"},
+                "timeout": 90.0,
+            }
+            if proxy_url:
+                client_kwargs["http_client"] = _httpx.AsyncClient(proxy=proxy_url, timeout=90.0)
+            self._client = AsyncOpenAI(**client_kwargs)
             self._model = settings.OPENROUTER_MODEL
             self._fast_model = settings.OPENROUTER_FAST_MODEL
             self._vision_model = getattr(settings, 'OPENROUTER_VISION_MODEL', settings.OPENROUTER_FAST_MODEL)
-            logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}, vision={self._vision_model}")
+            proxy_info = f" via proxy={proxy_url}" if proxy_url else ""
+            logger.info(f"AIService: OpenRouter mode, model={self._model}, fast={self._fast_model}{proxy_info}")
         else:
             import anthropic
             import httpx
             self._mode = "anthropic"
-            proxy_url = settings.ANTHROPIC_PROXY_URL.strip() if settings.ANTHROPIC_PROXY_URL else None
+            proxy_url = _get_proxy_url()
             http_client = httpx.AsyncClient(proxy=proxy_url, timeout=90.0) if proxy_url else None
             client_kwargs = {"api_key": settings.ANTHROPIC_API_KEY, "timeout": 90.0}
             if http_client:
@@ -471,3 +493,21 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         except Exception as e:
             logger.error(f"AI text extraction error: {e}")
             return {"name": text[:100]}
+
+
+# ── Global singleton ──────────────────────────────────────────────────────────
+_ai_service_instance: Optional["AIService"] = None
+
+
+def get_ai_service() -> "AIService":
+    global _ai_service_instance
+    if _ai_service_instance is None:
+        _ai_service_instance = AIService()
+    return _ai_service_instance
+
+
+def reload_ai_service() -> "AIService":
+    global _ai_service_instance
+    _ai_service_instance = AIService()
+    logger.info("AIService singleton reloaded (proxy config change)")
+    return _ai_service_instance

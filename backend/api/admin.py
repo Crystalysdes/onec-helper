@@ -824,6 +824,110 @@ async def _run_ai_cleanup():
         _ai_cleanup_status.update({"running": False, "done": True, "error": str(e)})
 
 
+_PROXY_FILE = "/app/data/proxy.txt"
+
+
+def _read_proxy_file() -> str:
+    try:
+        os.makedirs(os.path.dirname(_PROXY_FILE), exist_ok=True)
+        if os.path.exists(_PROXY_FILE):
+            return open(_PROXY_FILE).read().strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _write_proxy_file(url: str):
+    os.makedirs(os.path.dirname(_PROXY_FILE), exist_ok=True)
+    with open(_PROXY_FILE, "w") as f:
+        f.write(url.strip())
+
+
+class ProxyConfigRequest(BaseModel):
+    proxy_url: str  # e.g. socks5://user:pass@host:port
+
+
+@router.get("/proxy-config")
+async def get_proxy_config(current_user: User = Depends(get_current_admin)):
+    """Return current Anthropic proxy URL (from file override or env)."""
+    from backend.config import settings
+    file_proxy = _read_proxy_file()
+    return {
+        "proxy_url": file_proxy or settings.ANTHROPIC_PROXY_URL or "",
+        "source": "file" if file_proxy else ("env" if settings.ANTHROPIC_PROXY_URL else "none"),
+    }
+
+
+@router.post("/proxy-config")
+async def set_proxy_config(
+    body: ProxyConfigRequest,
+    current_user: User = Depends(get_current_admin),
+):
+    """Save proxy URL to file and reload AI service."""
+    _write_proxy_file(body.proxy_url)
+    # Reload global AI service singleton so new proxy takes effect
+    try:
+        from backend.services import ai_service as _ais
+        _ais.reload_ai_service()
+    except Exception as e:
+        logger.warning(f"AI service reload after proxy change: {e}")
+    return {"status": "saved", "proxy_url": body.proxy_url}
+
+
+@router.post("/test-proxy")
+async def test_proxy(
+    body: ProxyConfigRequest,
+    current_user: User = Depends(get_current_admin),
+):
+    """Test a proxy URL by making a minimal Anthropic API call through it."""
+    import httpx
+    from backend.config import settings
+    proxy_url = body.proxy_url.strip()
+    if not proxy_url:
+        raise HTTPException(status_code=400, detail="Укажите URL прокси")
+    try:
+        if settings.OPENROUTER_API_KEY:
+            # Test via OpenRouter: just check connectivity to the host
+            async with httpx.AsyncClient(proxy=proxy_url, timeout=10) as client:
+                r = await client.get("https://openrouter.ai/api/v1/models",
+                                     headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"})
+                return {"ok": r.status_code < 500, "status_code": r.status_code}
+        else:
+            import anthropic
+            http_client = httpx.AsyncClient(proxy=proxy_url, timeout=15.0)
+            client = anthropic.AsyncAnthropic(
+                api_key=settings.ANTHROPIC_API_KEY,
+                http_client=http_client,
+            )
+            # Minimal test: count tokens (cheapest call)
+            resp = await client.messages.count_tokens(
+                model="claude-haiku-4-5",
+                messages=[{"role": "user", "content": "test"}],
+            )
+            await http_client.aclose()
+            return {"ok": True, "input_tokens": resp.input_tokens}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Прокси не работает: {e}")
+
+
+@router.patch("/users/{user_id}/toggle-admin")
+async def toggle_admin(
+    user_id: UUID,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grant or revoke admin rights for a user."""
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Нельзя изменить свои права")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    user.is_admin = not user.is_admin
+    await db.commit()
+    return {"id": str(user.id), "is_admin": user.is_admin}
+
+
 @router.delete("/products/bulk-delete")
 async def admin_bulk_delete_products(
     body: AdminBulkDeleteRequest,

@@ -159,6 +159,10 @@ export const adminAPI = {
   clearCatalog: () => api.delete('/admin/clear-catalog'),
   wipeAll: () => api.delete('/admin/wipe-all'),
   dedupCatalog: () => api.post('/admin/dedup-catalog'),
+  getProxyConfig: () => api.get('/admin/proxy-config'),
+  setProxyConfig: (proxy_url) => api.post('/admin/proxy-config', { proxy_url }),
+  testProxy: (proxy_url) => api.post('/admin/test-proxy', { proxy_url }),
+  toggleAdmin: (userId) => api.patch(`/admin/users/${userId}/toggle-admin`),
   cleanGarbled: () => api.post('/admin/clean-garbled', null, { timeout: 120000 }),
   globalCatalog: (params) => api.get('/admin/global-catalog', { params }),
 }
