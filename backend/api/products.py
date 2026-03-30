@@ -96,37 +96,46 @@ async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache, for
     clean_cat = translate_category(p.category) if p.category else None
     clean_unit = p.unit or detect_unit(clean_name) or "шт"
 
-    async with AsyncSessionLocal() as sess:
-        try:
-            existing = await sess.execute(
-                _text("SELECT is_excluded FROM global_products WHERE barcode = :bc"),
-                {"bc": bc_key}
-            )
-            row = existing.fetchone()
-            if row and row[0] and not force:
-                return
-            await sess.execute(_text("""
-                INSERT INTO global_products
-                    (id, barcode, name, price, purchase_price, article, category, unit, description)
-                VALUES
-                    (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)
-                ON CONFLICT (barcode) DO UPDATE SET
-                    name             = EXCLUDED.name,
-                    price            = COALESCE(EXCLUDED.price,          global_products.price),
-                    purchase_price   = COALESCE(EXCLUDED.purchase_price, global_products.purchase_price),
-                    article          = COALESCE(EXCLUDED.article,        global_products.article),
-                    category         = COALESCE(EXCLUDED.category,       global_products.category),
-                    unit             = COALESCE(EXCLUDED.unit,           global_products.unit),
-                    is_excluded      = FALSE
-            """), {
-                "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
-                "price": p.price, "pp": p.purchase_price,
-                "article": article or p.article, "category": clean_cat,
-                "unit": clean_unit, "desc": p.description,
-            })
+    sess = _ignored_db
+    use_own = sess is None
+    if use_own:
+        from backend.database.connection import AsyncSessionLocal
+        _own = AsyncSessionLocal()
+        sess = await _own.__aenter__()
+    try:
+        existing = await sess.execute(
+            _text("SELECT is_excluded FROM global_products WHERE barcode = :bc"),
+            {"bc": bc_key}
+        )
+        row = existing.fetchone()
+        if row and row[0] and not force:
+            return
+        await sess.execute(_text("""
+            INSERT INTO global_products
+                (id, barcode, name, price, purchase_price, article, category, unit, description)
+            VALUES
+                (:id, :bc, :name, :price, :pp, :article, :category, :unit, :desc)
+            ON CONFLICT (barcode) DO UPDATE SET
+                name             = EXCLUDED.name,
+                price            = COALESCE(EXCLUDED.price,          global_products.price),
+                purchase_price   = COALESCE(EXCLUDED.purchase_price, global_products.purchase_price),
+                article          = COALESCE(EXCLUDED.article,        global_products.article),
+                category         = COALESCE(EXCLUDED.category,       global_products.category),
+                unit             = COALESCE(EXCLUDED.unit,           global_products.unit),
+                is_excluded      = FALSE
+        """), {
+            "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
+            "price": p.price, "pp": p.purchase_price,
+            "article": article or p.article, "category": clean_cat,
+            "unit": clean_unit, "desc": p.description,
+        })
+        if use_own:
             await sess.commit()
-        except Exception as exc:
-            logger.warning(f"_upsert_global_product failed for key={bc_key}: {exc}")
+    except Exception as exc:
+        logger.warning(f"_upsert_global_product failed for key={bc_key}: {exc}")
+    finally:
+        if use_own:
+            await _own.__aexit__(None, None, None)
 
 
 def _serialize_product(p: ProductCache) -> dict:
