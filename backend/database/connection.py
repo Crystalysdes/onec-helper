@@ -11,8 +11,10 @@ _engine_kwargs = dict(
     pool_pre_ping=not _is_sqlite,
 )
 if not _is_sqlite:
-    _engine_kwargs["pool_size"] = 5
-    _engine_kwargs["max_overflow"] = 5
+    _engine_kwargs["pool_size"] = 10
+    _engine_kwargs["max_overflow"] = 20
+    _engine_kwargs["pool_recycle"] = 1800
+    _engine_kwargs["pool_timeout"] = 10
     _db_url = _raw_url.split("?")[0]
     # Only use SSL for remote/cloud databases (Neon, Supabase).
     # Skip SSL for local Docker postgres (hostname = 'db', 'localhost', '127.0.0.1').
