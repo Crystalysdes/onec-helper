@@ -17,6 +17,36 @@ def _strip_json(content: str) -> str:
 
 
 _PROXY_FILE = "/app/data/proxy.txt"
+_MAX_IMAGE_BYTES = 3_500_000  # ~3.5 MB raw keeps base64 under Anthropic's 5 MB limit
+
+
+def _compress_image(image_bytes: bytes, max_bytes: int = _MAX_IMAGE_BYTES) -> bytes:
+    """Resize/compress image so raw size stays under max_bytes."""
+    if len(image_bytes) <= max_bytes:
+        return image_bytes
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+        for quality in (85, 70, 55, 40, 25):
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=quality)
+            if buf.tell() <= max_bytes:
+                logger.debug(f"Image compressed: {len(image_bytes)//1024}KB → {buf.tell()//1024}KB (q={quality})")
+                return buf.getvalue()
+        # Still too large — scale down
+        scale = (max_bytes / len(image_bytes)) ** 0.5
+        new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+        img = img.resize(new_size, Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=70)
+        logger.debug(f"Image resized to {new_size}: {buf.tell()//1024}KB")
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning(f"Image compression failed ({e}), using original")
+        return image_bytes
 
 
 def _get_proxy_list() -> List[Optional[str]]:
@@ -336,7 +366,7 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         )
         return "\n".join(lines)
 
-    async def parse_invoice_from_images(self, images_bytes: List[bytes]) -> List[dict]:
+    async def parse_invoice_from_images(self, images_bytes: List[bytes], _compress: bool = True) -> List[dict]:
         """
         Smart 2-pass invoice parsing using Claude Opus 4.
 
@@ -348,6 +378,9 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         """
         if not images_bytes:
             return []
+
+        if _compress:
+            images_bytes = [_compress_image(b) for b in images_bytes]
 
         multi = len(images_bytes) > 1
 
@@ -422,6 +455,7 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
 
     async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
         """Parse invoice by sending image directly to Claude vision (when OCR is unavailable)."""
+        image_bytes = _compress_image(image_bytes)
         base64_image = base64.standard_b64encode(image_bytes).decode("utf-8")
         prompt = """Ты — система обработки накладных для розничного магазина.
 На изображении — накладная, товарный чек или счёт-фактура.
