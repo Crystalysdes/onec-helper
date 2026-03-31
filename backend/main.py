@@ -21,7 +21,7 @@ logger.add(
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<8} | {name}:{function}:{line} - {message}",
     enqueue=True,
 )
-from backend.database.connection import init_db
+from backend.database.connection import init_db, engine
 from backend.database.backfill import backfill_global_products
 from backend.api import api_router
 from backend.tasks.auto_renewal import renewal_loop
@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
     stock_task.cancel()
     sync_task.cancel()
     fast_stock_task.cancel()
+    await engine.dispose()
     logger.info("Shutting down 1С Helper API...")
 
 
