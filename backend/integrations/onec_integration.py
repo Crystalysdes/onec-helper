@@ -82,11 +82,34 @@ class OneCClient:
                 ("InformationRegister_ЦеныНоменклатуры", "Цены номенклатуры"),
             ]
             missing = [label for name, label in _REQUIRED if name not in entity_names]
+            # Штрихкоды — несколько возможных имён
+            _BARCODE_NAMES = {
+                "InformationRegister_ШтрихкодыНоменклатуры",
+                "Catalog_ШтрихкодыНоменклатуры",
+                "Catalog_НоменклатураШтрихкоды",
+                "InformationRegister_Штрихкоды",
+            }
+            if not (entity_names & _BARCODE_NAMES):
+                missing.append("Штрихкоды номенклатуры")
+            # Остатки товаров — несколько возможных имён
+            _STOCK_NAMES = {
+                "InformationRegister_ОстаткиТоваров",
+                "AccumulationRegister_ЗапасыНаСкладах",
+                "AccumulationRegister_ТоварыНаСкладах",
+                "AccumulationRegister_ЗапасыКПоступлениюНаСклады",
+            }
+            missing_stock = not (entity_names & _STOCK_NAMES)
             if missing:
                 return True, (
                     f"Подключение установлено ({len(entities)} объектов), "
                     f"но не опубликованы в OData: {', '.join(missing)}. "
                     f"Загрузите метаданные и поставьте нужные галочки."
+                )
+            if missing_stock:
+                return True, (
+                    f"Подключение установлено ({len(entities)} объектов), "
+                    f"но не опубликованы Остатки товаров — синхронизация остатков работать не будет. "
+                    f"Рекомендуется поставить галочку в OData."
                 )
             return True, f"Подключение к 1С успешно установлено. Доступно объектов: {len(entities)}"
         error = data.get("error", "Неизвестная ошибка") if data else "Нет ответа"
