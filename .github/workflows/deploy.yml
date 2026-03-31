@@ -17,5 +17,6 @@ jobs:
           script: |
             cd /app
             git pull origin main
+            cd miniapp && npm ci && npm run build && cd ..
             docker compose -f docker-compose.timeweb.yml up -d --build
             docker image prune -f
