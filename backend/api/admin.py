@@ -925,19 +925,12 @@ async def test_proxy(
                                      headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"})
                 return {"ok": r.status_code < 500, "status_code": r.status_code}
         else:
-            import anthropic
-            http_client = httpx.AsyncClient(proxy=proxy_url, timeout=15.0)
-            client = anthropic.AsyncAnthropic(
-                api_key=settings.ANTHROPIC_API_KEY,
-                http_client=http_client,
-            )
-            # Minimal test: count tokens (cheapest call)
-            resp = await client.messages.count_tokens(
-                model="claude-haiku-4-5",
-                messages=[{"role": "user", "content": "test"}],
-            )
-            await http_client.aclose()
-            return {"ok": True, "input_tokens": resp.input_tokens}
+            async with httpx.AsyncClient(proxy=proxy_url, timeout=15.0) as http_client:
+                r = await http_client.get(
+                    "https://api.anthropic.com",
+                    headers={"x-api-key": settings.ANTHROPIC_API_KEY},
+                )
+                return {"ok": r.status_code < 500, "status_code": r.status_code}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Прокси не работает: {e}")
 
