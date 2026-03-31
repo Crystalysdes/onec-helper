@@ -36,6 +36,7 @@ export default function Settings() {
   const [payLoading, setPayLoading] = useState(false)
 
   const [editingIntegration, setEditingIntegration] = useState(null)
+  const [onecMode, setOnecMode] = useState('cloud')
 
   const storeForm = useForm()
   const intForm = useForm({ defaultValues: { name: '1C Integration' } })
@@ -792,44 +793,85 @@ export default function Settings() {
                     Подключить 1С
                   </p>
 
-                  {/* Step 1: App ID */}
+                  {/* Mode selector */}
+                  <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                    {[['cloud', '☁️ 1С Фреш'], ['local', '🖥️ Локальная 1С']].map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className="flex-1 py-2 text-xs font-semibold rounded-lg transition-all"
+                        style={{
+                          background: onecMode === mode ? 'var(--tg-theme-bg-color)' : 'transparent',
+                          color: onecMode === mode ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
+                          boxShadow: onecMode === mode ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                        }}
+                        onClick={() => { setOnecMode(mode); intForm.setValue('onec_url', ''); setFormTestResult(null) }}
+                      >{label}</button>
+                    ))}
+                  </div>
+
+                  {/* Step 1 */}
                   <div className="flex flex-col gap-1.5">
                     <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Шаг 1 — ID приложения 1СФреш
+                      {onecMode === 'cloud' ? 'Шаг 1 — ID приложения 1СФреш' : 'Шаг 1 — URL опубликованной базы'}
                     </p>
                     <input
                       className="input-field"
-                      placeholder="ID приложения (напр. 3941876) *"
+                      placeholder={onecMode === 'cloud' ? 'ID приложения (напр. 3941876) *' : 'http://192.168.1.10/trade *'}
                       {...intForm.register('onec_url', {
                         required: true,
                         onChange: () => setFormTestResult(null),
                       })}
                     />
-                    <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Цифровой код из адреса браузера 1СФреш — напр. <span className="font-mono">3941876</span> или <span className="font-mono">msk2/3941876</span>
-                    </p>
+                    {onecMode === 'cloud' ? (
+                      <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        Цифровой код из адреса браузера 1СФреш — напр. <span className="font-mono">3941876</span> или <span className="font-mono">msk2/3941876</span>
+                      </p>
+                    ) : (
+                      <div className="flex flex-col gap-1 text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        <p>Полный URL базы: <span className="font-mono">http://IP/имя_базы</span> или туннель <span className="font-mono">https://xxx.ngrok.io/имя_базы</span></p>
+                        <p style={{ color: '#d97706' }}>⚠️ Бот должен иметь доступ к этому URL из интернета. Если 1С за роутером — используйте <b>ngrok</b> или <b>Cloudflare Tunnel</b>.</p>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Step 2: OData setup — two tabs */}
+                  {/* Step 2: OData setup */}
                   <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
                     style={{ background: 'rgba(234,179,8,0.08)', color: 'var(--tg-theme-text-color)' }}>
                     <p className="font-semibold text-[13px]">Шаг 2 — Настройка OData в 1С (один раз)</p>
-                    <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Путь: <b style={{ color: 'var(--tg-theme-text-color)' }}>Настройки → Синхронизация данных → Настройка стандартного интерфейса OData</b>
-                    </p>
+                    {onecMode === 'cloud' ? (
+                      <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        Путь: <b style={{ color: 'var(--tg-theme-text-color)' }}>Настройки → Синхронизация данных → Настройка стандартного интерфейса OData</b>
+                      </p>
+                    ) : (
+                      <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                        <p>1. Откройте базу в режиме <b style={{ color: 'var(--tg-theme-text-color)' }}>конфигуратора</b></p>
+                        <p>2. <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Публикация на веб-сервере</b> — опубликуйте базу (IIS или Apache)</p>
+                        <p>3. Затем в режиме предприятия: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Настройка стандартного интерфейса OData</b></p>
+                      </div>
+                    )}
 
-
-                    {/* Tab: Авторизация */}
+                    {/* Авторизация */}
                     <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                      <p className="font-semibold mb-0.5">📋 Вкладка «Авторизация»</p>
+                      <p className="font-semibold mb-0.5">📋 {onecMode === 'cloud' ? 'Вкладка «Авторизация»' : 'Пользователь для OData'}</p>
                       <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        <p>1. Включите переключатель <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
-                        <p>2. Придумайте <b style={{ color: 'var(--tg-theme-text-color)' }}>логин</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
-                        <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните их — введёте в шаге 3</p>
+                        {onecMode === 'cloud' ? (
+                          <>
+                            <p>1. Включите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
+                            <p>2. Придумайте <b style={{ color: 'var(--tg-theme-text-color)' }}>логин</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
+                          </>
+                        ) : (
+                          <>
+                            <p>1. В режиме конфигуратора: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Пользователи</b></p>
+                            <p>2. Создайте пользователя с именем напр. <span className="font-mono">odata.user</span></p>
+                            <p>3. Разрешите <b style={{ color: 'var(--tg-theme-text-color)' }}>аутентификацию 1С:Предприятия</b></p>
+                          </>
+                        )}
+                        <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните логин и пароль — введёте в шаге 3</p>
                       </div>
                     </div>
 
-                    {/* Tab: Состав */}
+                    {/* Состав */}
                     <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
                       <p className="font-semibold mb-0.5">📋 Вкладка «Состав»</p>
                       <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
