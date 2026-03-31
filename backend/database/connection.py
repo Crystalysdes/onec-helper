@@ -25,7 +25,9 @@ if not _is_sqlite:
         _ssl_ctx = _ssl.create_default_context()
         _ssl_ctx.check_hostname = False
         _ssl_ctx.verify_mode = _ssl.CERT_NONE
-        _engine_kwargs["connect_args"] = {"ssl": _ssl_ctx}
+        _engine_kwargs["connect_args"] = {"ssl": _ssl_ctx, "timeout": 10}
+    else:
+        _engine_kwargs["connect_args"] = {"timeout": 10}
 else:
     _db_url = _raw_url
 

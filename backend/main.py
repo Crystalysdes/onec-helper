@@ -42,6 +42,14 @@ async def lifespan(app: FastAPI):
         await asyncio.wait_for(backfill_global_products(), timeout=20)
     except Exception as e:
         logger.warning(f"backfill skipped: {e}")
+    # Pre-warm connection pool so first user requests don't create cold connections
+    try:
+        from backend.database.connection import engine
+        async with engine.connect() as conn:
+            await conn.execute(__import__('sqlalchemy').text("SELECT 1"))
+        logger.info("DB connection pool warmed up")
+    except Exception as e:
+        logger.warning(f"Pool warm-up failed: {e}")
     task = asyncio.create_task(renewal_loop())
     stock_task = asyncio.create_task(stock_alert_loop())
     sync_task = asyncio.create_task(auto_sync_loop())
