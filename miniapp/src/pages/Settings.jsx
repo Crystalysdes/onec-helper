@@ -37,6 +37,7 @@ export default function Settings() {
 
   const [editingIntegration, setEditingIntegration] = useState(null)
   const [onecMode, setOnecMode] = useState('cloud')
+  const [integrationType, setIntegrationType] = useState('onec')
 
   const storeForm = useForm()
   const intForm = useForm({ defaultValues: { name: '1C Integration' } })
@@ -136,18 +137,25 @@ export default function Settings() {
 
   const testFormCredentials = async () => {
     const data = intForm.getValues()
-    if (!data.onec_url || !data.onec_username || !data.onec_password) {
-      return toast.error('Заполните URL, логин и пароль')
-    }
     setFormTestLoading(true)
     setFormTestResult(null)
     try {
-      const res = await storesAPI.testCredentials({
-        onec_url: data.onec_url,
-        onec_username: data.onec_username,
-        onec_password: data.onec_password,
-      })
-      setFormTestResult(res.data)
+      if (integrationType === 'kontur_market') {
+        if (!data.api_key) return toast.error('Введите API-ключ')
+        const res = await storesAPI.testCredentials({ integration_type: 'kontur_market', api_key: data.api_key })
+        setFormTestResult(res.data)
+      } else {
+        if (!data.onec_url || !data.onec_username || !data.onec_password) {
+          return toast.error('Заполните URL, логин и пароль')
+        }
+        const res = await storesAPI.testCredentials({
+          integration_type: 'onec',
+          onec_url: data.onec_url,
+          onec_username: data.onec_username,
+          onec_password: data.onec_password,
+        })
+        setFormTestResult(res.data)
+      }
     } catch (e) {
       setFormTestResult({ success: false, message: e.response?.data?.detail || 'Ошибка подключения' })
     } finally {
@@ -159,12 +167,10 @@ export default function Settings() {
     if (!currentStore) return toast.error('Выберите магазин')
     setLoading(true)
     try {
-      await storesAPI.createIntegration(currentStore.id, {
-        onec_url: data.onec_url,
-        onec_username: data.onec_username,
-        onec_password: data.onec_password,
-        name: '1C Integration',
-      })
+      const payload = integrationType === 'kontur_market'
+        ? { integration_type: 'kontur_market', api_key: data.api_key, name: 'Контур.Маркет' }
+        : { integration_type: 'onec', onec_url: data.onec_url, onec_username: data.onec_username, onec_password: data.onec_password, name: '1C Integration' }
+      await storesAPI.createIntegration(currentStore.id, payload)
       toast.success('Интеграция создана!')
       intForm.reset()
       setFormTestResult(null)
@@ -682,7 +688,7 @@ export default function Settings() {
                         {int.name}
                       </p>
                       <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        {int.onec_url}
+                        {int.integration_type === 'kontur_market' ? '🟢 Контур.Маркет' : (int.onec_url || '1С')}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -790,131 +796,160 @@ export default function Settings() {
               {showIntegrationForm ? (
                 <form onSubmit={intForm.handleSubmit(createIntegration)} className="card flex flex-col gap-4">
                   <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                    Подключить 1С
+                    Подключить учётную систему
                   </p>
 
-                  {/* Mode selector */}
+                  {/* Top-level integration type selector */}
                   <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                    {[['cloud', '☁️ 1С Фреш'], ['local', '🖥️ Локальная 1С']].map(([mode, label]) => (
+                    {[['onec', '🔵 1С'], ['kontur_market', '🟢 Контур.Маркет']].map(([type, label]) => (
                       <button
-                        key={mode}
+                        key={type}
                         type="button"
                         className="flex-1 py-2 text-xs font-semibold rounded-lg transition-all"
                         style={{
-                          background: onecMode === mode ? 'var(--tg-theme-bg-color)' : 'transparent',
-                          color: onecMode === mode ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
-                          boxShadow: onecMode === mode ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                          background: integrationType === type ? 'var(--tg-theme-bg-color)' : 'transparent',
+                          color: integrationType === type ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
+                          boxShadow: integrationType === type ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
                         }}
-                        onClick={() => { setOnecMode(mode); intForm.setValue('onec_url', ''); setFormTestResult(null) }}
+                        onClick={() => { setIntegrationType(type); setFormTestResult(null) }}
                       >{label}</button>
                     ))}
                   </div>
 
-                  {/* Step 1 */}
-                  <div className="flex flex-col gap-1.5">
-                    <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      {onecMode === 'cloud' ? 'Шаг 1 — ID приложения 1СФреш' : 'Шаг 1 — URL опубликованной базы'}
-                    </p>
-                    <input
-                      className="input-field"
-                      placeholder={onecMode === 'cloud' ? 'ID приложения (напр. 3941876) *' : 'http://192.168.1.10/trade *'}
-                      {...intForm.register('onec_url', {
-                        required: true,
-                        onChange: () => setFormTestResult(null),
-                      })}
-                    />
-                    {onecMode === 'cloud' ? (
-                      <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        Цифровой код из адреса браузера 1СФреш — напр. <span className="font-mono">3941876</span> или <span className="font-mono">msk2/3941876</span>
-                      </p>
-                    ) : (
-                      <div className="flex flex-col gap-1 text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        <p>Полный URL базы: <span className="font-mono">http://IP/имя_базы</span> или туннель <span className="font-mono">https://xxx.ngrok.io/имя_базы</span></p>
-                        <p style={{ color: '#d97706' }}>⚠️ Бот должен иметь доступ к этому URL из интернета. Если 1С за роутером — используйте <b>ngrok</b> или <b>Cloudflare Tunnel</b>.</p>
+                  {integrationType === 'kontur_market' ? (
+                    <>
+                      {/* Kontour Market form */}
+                      <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
+                        style={{ background: 'rgba(34,197,94,0.07)', color: 'var(--tg-theme-text-color)' }}>
+                        <p className="font-semibold text-[13px]">Как получить API-ключ</p>
+                        <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          <p>1. Войдите в <b style={{ color: 'var(--tg-theme-text-color)' }}>market.kontur.ru</b></p>
+                          <p>2. Настройки → <b style={{ color: 'var(--tg-theme-text-color)' }}>Интеграция → API</b></p>
+                          <p>3. Создайте ключ и скопируйте его сюда</p>
+                        </div>
                       </div>
-                    )}
-                  </div>
-
-                  {/* Step 2: OData setup */}
-                  <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
-                    style={{ background: 'rgba(234,179,8,0.08)', color: 'var(--tg-theme-text-color)' }}>
-                    <p className="font-semibold text-[13px]">Шаг 2 — Настройка OData в 1С (один раз)</p>
-                    {onecMode === 'cloud' ? (
-                      <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        Путь: <b style={{ color: 'var(--tg-theme-text-color)' }}>Настройки → Синхронизация данных → Настройка стандартного интерфейса OData</b>
-                      </p>
-                    ) : (
-                      <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        <p>1. Откройте базу в режиме <b style={{ color: 'var(--tg-theme-text-color)' }}>конфигуратора</b></p>
-                        <p>2. <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Публикация на веб-сервере</b> — опубликуйте базу (IIS или Apache)</p>
-                        <p>3. Затем в режиме предприятия: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Настройка стандартного интерфейса OData</b></p>
+                      <div className="flex flex-col gap-1.5">
+                        <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>API-ключ Контур.Маркет</p>
+                        <input
+                          className="input-field"
+                          placeholder="Вставьте API-ключ *"
+                          {...intForm.register('api_key', { onChange: () => setFormTestResult(null) })}
+                        />
                       </div>
-                    )}
-
-                    {/* Авторизация */}
-                    <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                      <p className="font-semibold mb-0.5">📋 {onecMode === 'cloud' ? 'Вкладка «Авторизация»' : 'Пользователь для OData'}</p>
-                      <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        {onecMode === 'cloud' ? (
-                          <>
-                            <p>1. Включите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
-                            <p>2. Придумайте <b style={{ color: 'var(--tg-theme-text-color)' }}>логин</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
-                          </>
-                        ) : (
-                          <>
-                            <p>1. В режиме конфигуратора: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Пользователи</b></p>
-                            <p>2. Создайте пользователя с именем напр. <span className="font-mono">odata.user</span></p>
-                            <p>3. Разрешите <b style={{ color: 'var(--tg-theme-text-color)' }}>аутентификацию 1С:Предприятия</b></p>
-                          </>
-                        )}
-                        <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните логин и пароль — введёте в шаге 3</p>
-                      </div>
-                    </div>
-
-                    {/* Состав */}
-                    <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                      <p className="font-semibold mb-0.5">📋 Вкладка «Состав»</p>
-                      <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        <p>1. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Загрузить метаданные»</b></p>
-                        <p>2. Найдите и поставьте галочки:</p>
-                      </div>
-                      <div className="flex flex-col gap-0.5 pl-3 mt-0.5">
-                        {['Номенклатура', 'Штрихкоды номенклатуры', 'Цены номенклатуры', 'Остатки товаров'].map((name) => (
-                          <div key={name} className="flex items-center gap-1.5">
-                            <span className="font-bold" style={{ color: '#d97706' }}>✓</span>
-                            <span className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>{name}</span>
-                          </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* 1C form — mode selector */}
+                      <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+                        {[['cloud', '☁️ 1С Фреш'], ['local', '🖥️ Локальная 1С']].map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            className="flex-1 py-2 text-xs font-semibold rounded-lg transition-all"
+                            style={{
+                              background: onecMode === mode ? 'var(--tg-theme-bg-color)' : 'transparent',
+                              color: onecMode === mode ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
+                              boxShadow: onecMode === mode ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                            }}
+                            onClick={() => { setOnecMode(mode); intForm.setValue('onec_url', ''); setFormTestResult(null) }}
+                          >{label}</button>
                         ))}
                       </div>
-                      <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        3. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Сохранить и закрыть»</b>
-                      </p>
-                    </div>
-                  </div>
 
-                  {/* Step 3: Login / Password */}
-                  <div className="flex flex-col gap-1.5">
-                    <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      Шаг 3 — Логин и пароль из вкладки «Авторизация»
-                    </p>
-                    <input
-                      className="input-field"
-                      placeholder="Имя пользователя (напр. odata.user) *"
-                      {...intForm.register('onec_username', {
-                        required: true,
-                        onChange: () => setFormTestResult(null),
-                      })}
-                    />
-                    <input
-                      className="input-field"
-                      type="password"
-                      placeholder="Пароль *"
-                      {...intForm.register('onec_password', {
-                        required: true,
-                        onChange: () => setFormTestResult(null),
-                      })}
-                    />
-                  </div>
+                      {/* Step 1 */}
+                      <div className="flex flex-col gap-1.5">
+                        <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          {onecMode === 'cloud' ? 'Шаг 1 — ID приложения 1СФреш' : 'Шаг 1 — URL опубликованной базы'}
+                        </p>
+                        <input
+                          className="input-field"
+                          placeholder={onecMode === 'cloud' ? 'ID приложения (напр. 3941876) *' : 'http://192.168.1.10/trade *'}
+                          {...intForm.register('onec_url', { required: integrationType === 'onec', onChange: () => setFormTestResult(null) })}
+                        />
+                        {onecMode === 'cloud' ? (
+                          <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            Цифровой код из адреса браузера 1СФреш — напр. <span className="font-mono">3941876</span> или <span className="font-mono">msk2/3941876</span>
+                          </p>
+                        ) : (
+                          <div className="flex flex-col gap-1 text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            <p>Полный URL базы: <span className="font-mono">http://IP/имя_базы</span> или туннель <span className="font-mono">https://xxx.ngrok.io/имя_базы</span></p>
+                            <p style={{ color: '#d97706' }}>⚠️ Бот должен иметь доступ к этому URL из интернета. Если 1С за роутером — используйте <b>ngrok</b> или <b>Cloudflare Tunnel</b>.</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Step 2: OData setup */}
+                      <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
+                        style={{ background: 'rgba(234,179,8,0.08)', color: 'var(--tg-theme-text-color)' }}>
+                        <p className="font-semibold text-[13px]">Шаг 2 — Настройка OData в 1С (один раз)</p>
+                        {onecMode === 'cloud' ? (
+                          <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            Путь: <b style={{ color: 'var(--tg-theme-text-color)' }}>Настройки → Синхронизация данных → Настройка стандартного интерфейса OData</b>
+                          </p>
+                        ) : (
+                          <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            <p>1. Откройте базу в режиме <b style={{ color: 'var(--tg-theme-text-color)' }}>конфигуратора</b></p>
+                            <p>2. <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Публикация на веб-сервере</b> — опубликуйте базу (IIS или Apache)</p>
+                            <p>3. Затем в режиме предприятия: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Настройка стандартного интерфейса OData</b></p>
+                          </div>
+                        )}
+                        <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
+                          <p className="font-semibold mb-0.5">📋 {onecMode === 'cloud' ? 'Вкладка «Авторизация»' : 'Пользователь для OData'}</p>
+                          <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            {onecMode === 'cloud' ? (
+                              <>
+                                <p>1. Включите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
+                                <p>2. Придумайте <b style={{ color: 'var(--tg-theme-text-color)' }}>логин</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
+                              </>
+                            ) : (
+                              <>
+                                <p>1. В режиме конфигуратора: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Пользователи</b></p>
+                                <p>2. Создайте пользователя с именем напр. <span className="font-mono">odata.user</span></p>
+                                <p>3. Разрешите <b style={{ color: 'var(--tg-theme-text-color)' }}>аутентификацию 1С:Предприятия</b></p>
+                              </>
+                            )}
+                            <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните логин и пароль — введёте в шаге 3</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
+                          <p className="font-semibold mb-0.5">📋 Вкладка «Состав»</p>
+                          <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            <p>1. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Загрузить метаданные»</b></p>
+                            <p>2. Найдите и поставьте галочки:</p>
+                          </div>
+                          <div className="flex flex-col gap-0.5 pl-3 mt-0.5">
+                            {['Номенклатура', 'Штрихкоды номенклатуры', 'Цены номенклатуры', 'Остатки товаров'].map((name) => (
+                              <div key={name} className="flex items-center gap-1.5">
+                                <span className="font-bold" style={{ color: '#d97706' }}>✓</span>
+                                <span className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>{name}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                            3. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Сохранить и закрыть»</b>
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Step 3: Login / Password */}
+                      <div className="flex flex-col gap-1.5">
+                        <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                          Шаг 3 — Логин и пароль из вкладки «Авторизация»
+                        </p>
+                        <input
+                          className="input-field"
+                          placeholder="Имя пользователя (напр. odata.user) *"
+                          {...intForm.register('onec_username', { required: integrationType === 'onec', onChange: () => setFormTestResult(null) })}
+                        />
+                        <input
+                          className="input-field"
+                          type="password"
+                          placeholder="Пароль *"
+                          {...intForm.register('onec_password', { required: integrationType === 'onec', onChange: () => setFormTestResult(null) })}
+                        />
+                      </div>
+                    </>
+                  )}
 
                   {/* Test result */}
                   {formTestResult && (() => {
@@ -935,7 +970,7 @@ export default function Settings() {
                         {isMissingEntities && (
                           <p className="mt-1">Вернитесь в 1С → вкладка «Состав» → поставьте нужные галочки → Сохранить и закрыть → нажмите «Тестировать» ещё раз</p>
                         )}
-                        {!formTestResult.success && (
+                        {!formTestResult.success && integrationType === 'onec' && (
                           <p className="mt-1">Проверьте URL, логин и пароль. Убедитесь что в 1С создан пользователь для OData (вкладка «Авторизация»).</p>
                         )}
                       </div>
@@ -962,10 +997,10 @@ export default function Settings() {
                       className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity"
                       style={{
                         background: 'var(--tg-theme-button-color)',
-                        opacity: (formTestResult?.success && !formTestResult?.message?.includes('не опубликованы')) ? 1 : 0.35,
-                        cursor: (formTestResult?.success && !formTestResult?.message?.includes('не опубликованы')) ? 'pointer' : 'not-allowed',
+                        opacity: formTestResult?.success ? 1 : 0.35,
+                        cursor: formTestResult?.success ? 'pointer' : 'not-allowed',
                       }}
-                      disabled={loading || !(formTestResult?.success && !formTestResult?.message?.includes('не опубликованы'))}
+                      disabled={loading || !formTestResult?.success}
                     >
                       {loading ? '...' : 'Сохранить'}
                     </button>
@@ -981,7 +1016,7 @@ export default function Settings() {
                     <Plus size={18} className="text-purple-500" />
                   </div>
                   <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Подключить 1С
+                    Подключить учётную систему
                   </span>
                 </button>
               )}

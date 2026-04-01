@@ -67,3 +67,18 @@ async def init_db():
         await conn.execute(_text(
             "ALTER TABLE products_cache ADD COLUMN IF NOT EXISTS user_deleted_at TIMESTAMPTZ DEFAULT NULL"
         ))
+        await conn.execute(_text(
+            "ALTER TABLE products_cache ADD COLUMN IF NOT EXISTS kontur_id VARCHAR(255) DEFAULT NULL"
+        ))
+        await conn.execute(_text(
+            "CREATE INDEX IF NOT EXISTS ix_products_cache_kontur_id ON products_cache(kontur_id)"
+        ))
+        await conn.execute(_text(
+            "ALTER TABLE integrations ADD COLUMN IF NOT EXISTS integration_type VARCHAR(50) NOT NULL DEFAULT 'onec'"
+        ))
+        await conn.execute(_text(
+            "ALTER TABLE integrations ALTER COLUMN onec_url DROP NOT NULL"
+        ))
+        await conn.execute(_text(
+            "ALTER TABLE integrations ALTER COLUMN onec_username DROP NOT NULL"
+        ))

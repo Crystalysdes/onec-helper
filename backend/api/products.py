@@ -1106,6 +1106,42 @@ async def save_invoice_products(
                 except Exception as e:
                     logger.warning(f"1C sync failed for {product.name}: {e}")
 
+    # ── Kontour Market push (if KM integration is active) ──
+    km_push_list = []
+    if saved:
+        r_km = await db.execute(
+            select(Integration).where(
+                Integration.store_id == store_id_uuid,
+                Integration.status == IntegrationStatus.active,
+                Integration.integration_type == 'kontur_market',
+            ).limit(1)
+        )
+        km_integration = r_km.scalar_one_or_none()
+        if km_integration:
+            from backend.integrations.kontur_market_integration import KonturMarketClient
+            from backend.core.security import decrypt_password as _dec
+            _km_api_key = _dec(km_integration.onec_password_encrypted)
+            _km_shop_id = (km_integration.settings or {}).get("kontur_shop_id")
+            if _km_shop_id:
+                km_client = KonturMarketClient(api_key=_km_api_key)
+                for product in saved:
+                    try:
+                        ok, kontur_id = await km_client.upsert_product(
+                            shop_id=_km_shop_id,
+                            name=product.name,
+                            price=float(product.price) if product.price else None,
+                            purchase_price=float(product.purchase_price) if product.purchase_price else None,
+                            barcode=product.barcode,
+                            article=product.article,
+                            existing_kontur_id=product.kontur_id,
+                        )
+                        if ok and kontur_id and not product.kontur_id:
+                            product.kontur_id = kontur_id
+                    except Exception as _e:
+                        logger.warning(f"KM push failed for {product.name}: {_e}")
+                if _km_shop_id:
+                    km_push_list.append({"api_key": _km_api_key, "shop_id": _km_shop_id})
+
     # Commit, then refresh to get server-set columns (created_at, updated_at)
     await db.commit()
     for product in saved:
@@ -1116,6 +1152,10 @@ async def save_invoice_products(
     # Schedule 1C pushes as background tasks (after commit, no ORM objects needed)
     for kwargs in onec_push_list:
         background_tasks.add_task(_push_barcode_and_prices, **kwargs, delay=5)
+
+    # Schedule KM cashbox sync in background
+    for km_kwargs in km_push_list:
+        background_tasks.add_task(_km_sync_cashboxes, **km_kwargs)
 
     # Upsert global catalog in background (no DB session issues)
     for s in serialized:
@@ -1789,3 +1829,13 @@ async def bulk_delete_products(
                 article=product.article or "",
             ))
     return {"deleted": len(rows)}
+
+
+async def _km_sync_cashboxes(api_key: str, shop_id: str):
+    """Background task: push all products to KM cash registers after invoice save."""
+    try:
+        from backend.integrations.kontur_market_integration import KonturMarketClient
+        client = KonturMarketClient(api_key=api_key)
+        await client.sync_cashboxes(shop_id)
+    except Exception as _e:
+        logger.warning(f"KM sync_cashboxes failed: {_e}")

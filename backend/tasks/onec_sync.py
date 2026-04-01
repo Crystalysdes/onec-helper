@@ -51,7 +51,10 @@ async def _auto_sync_all():
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(Integration).where(Integration.status == IntegrationStatus.active)
+            select(Integration).where(
+                Integration.status == IntegrationStatus.active,
+                Integration.integration_type == 'onec',
+            )
         )
         integrations = result.scalars().all()
 
@@ -126,7 +129,10 @@ async def _fast_stock_sync_all():
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(Integration).where(Integration.status == IntegrationStatus.active)
+            select(Integration).where(
+                Integration.status == IntegrationStatus.active,
+                Integration.integration_type == 'onec',
+            )
         )
         integrations = result.scalars().all()
 

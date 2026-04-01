@@ -49,9 +49,11 @@ def _normalize_onec_url(raw: str) -> str:
 
 
 class TestCredentialsRequest(BaseModel):
-    onec_url: str
-    onec_username: str
-    onec_password: str
+    integration_type: str = 'onec'
+    onec_url: Optional[str] = None
+    onec_username: Optional[str] = None
+    onec_password: Optional[str] = None
+    api_key: Optional[str] = None
 
 
 @router.post("/test-credentials")
@@ -59,8 +61,17 @@ async def test_onec_credentials(
     payload: TestCredentialsRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Test 1C credentials without saving an integration."""
+    """Test 1C or Kontour Market credentials without saving."""
+    if payload.integration_type == 'kontur_market':
+        from backend.integrations.kontur_market_integration import KonturMarketClient
+        if not payload.api_key:
+            return {"success": False, "message": "Введите API-ключ Контур.Маркет"}
+        client = KonturMarketClient(api_key=payload.api_key)
+        success, message = await client.test_connection()
+        return {"success": success, "message": message}
     from backend.integrations.onec_integration import OneCClient
+    if not payload.onec_url or not payload.onec_username or not payload.onec_password:
+        return {"success": False, "message": "Заполните URL, логин и пароль"}
     url = _normalize_onec_url(payload.onec_url)
     client = OneCClient(url=url, username=payload.onec_username, password=payload.onec_password)
     success, message = await client.test_connection()
@@ -79,10 +90,12 @@ class StoreUpdate(BaseModel):
 
 
 class IntegrationCreate(BaseModel):
-    onec_url: str
-    onec_username: str
-    onec_password: str
-    name: Optional[str] = "1C Integration"
+    integration_type: str = 'onec'
+    onec_url: Optional[str] = None
+    onec_username: Optional[str] = None
+    onec_password: Optional[str] = None
+    api_key: Optional[str] = None
+    name: Optional[str] = None
     use_accounting: bool = False  # True = require debit account in bookkeeping journal
 
 
@@ -173,6 +186,7 @@ async def get_store(
             {
                 "id": str(i.id),
                 "name": i.name,
+                "integration_type": getattr(i, 'integration_type', 'onec') or 'onec',
                 "use_accounting": (i.settings or {}).get("use_accounting", True),
                 "onec_url": i.onec_url,
                 "onec_username": i.onec_username,
@@ -239,9 +253,36 @@ async def create_integration(
     if not store:
         raise HTTPException(status_code=404, detail="Магазин не найден")
 
+    if payload.integration_type == 'kontur_market':
+        if not payload.api_key:
+            raise HTTPException(status_code=400, detail="Введите API-ключ Контур.Маркет")
+        integration = Integration(
+            store_id=store_id,
+            integration_type='kontur_market',
+            name=payload.name or 'Контур.Маркет',
+            onec_url=None,
+            onec_username=None,
+            onec_password_encrypted=encrypt_password(payload.api_key),
+            status=IntegrationStatus.active,
+            settings={},
+        )
+        db.add(integration)
+        await db.flush()
+        integration_id = integration.id
+        background_tasks.add_task(_run_km_sync_in_background, store_id, integration_id)
+        return {
+            "id": str(integration.id),
+            "name": integration.name,
+            "status": integration.status,
+            "message": "Интеграция создана. Импорт товаров из Контур.Маркет запущен в фоне.",
+        }
+
+    if not payload.onec_url or not payload.onec_username or not payload.onec_password:
+        raise HTTPException(status_code=400, detail="Заполните URL, логин и пароль для 1С")
     integration = Integration(
         store_id=store_id,
-        name=payload.name,
+        integration_type='onec',
+        name=payload.name or '1C Integration',
         onec_url=_normalize_onec_url(payload.onec_url),
         onec_username=payload.onec_username,
         onec_password_encrypted=encrypt_password(payload.onec_password),
@@ -345,8 +386,6 @@ async def test_integration(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from backend.integrations.onec_integration import OneCClient
-
     result = await db.execute(
         select(Store).where(Store.id == store_id, Store.owner_id == current_user.id)
     )
@@ -363,12 +402,18 @@ async def test_integration(
     if not integration:
         raise HTTPException(status_code=404, detail="Интеграция не найдена")
 
-    client = OneCClient(
-        url=integration.onec_url,
-        username=integration.onec_username,
-        password=decrypt_password(integration.onec_password_encrypted),
-    )
-    success, message = await client.test_connection()
+    if getattr(integration, 'integration_type', 'onec') == 'kontur_market':
+        from backend.integrations.kontur_market_integration import KonturMarketClient
+        client_km = KonturMarketClient(api_key=decrypt_password(integration.onec_password_encrypted))
+        success, message = await client_km.test_connection()
+    else:
+        from backend.integrations.onec_integration import OneCClient
+        client = OneCClient(
+            url=integration.onec_url,
+            username=integration.onec_username,
+            password=decrypt_password(integration.onec_password_encrypted),
+        )
+        success, message = await client.test_connection()
 
     integration.status = IntegrationStatus.active if success else IntegrationStatus.error
     return {"success": success, "message": message}
@@ -591,8 +636,107 @@ async def sync_from_onec(
     if not integration:
         raise HTTPException(status_code=404, detail="Интеграция не найдена")
 
+    if getattr(integration, 'integration_type', 'onec') == 'kontur_market':
+        background_tasks.add_task(_run_km_sync_in_background, store_id, integration_id)
+        return {"status": "sync_started", "message": "Синхронизация с Контур.Маркет запущена в фоне"}
     background_tasks.add_task(_run_sync_in_background, store_id, integration_id)
     return {"status": "sync_started", "message": "Импорт товаров из 1С запущен в фоне"}
+
+
+async def _run_km_sync_in_background(store_id: UUID, integration_id: UUID):
+    """Pull all products + stock from Kontour Market into products_cache."""
+    from backend.integrations.kontur_market_integration import KonturMarketClient
+    from backend.api.products import _upsert_global_product
+    from loguru import logger
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(select(Integration).where(Integration.id == integration_id))
+            integration = result.scalar_one_or_none()
+            if not integration:
+                return
+
+            api_key = decrypt_password(integration.onec_password_encrypted)
+            client = KonturMarketClient(api_key=api_key)
+
+            ok, shops = await client.get_shops()
+            if not ok or not shops:
+                logger.warning(f"KM sync: no shops found for integration {integration_id}")
+                return
+
+            shop_id = str(shops[0]["id"])
+            settings = dict(integration.settings or {})
+            settings["kontur_shop_id"] = shop_id
+            integration.settings = settings
+
+            ok, products = await client.get_products(shop_id)
+            if not ok:
+                logger.warning(f"KM sync: failed to get products for shop {shop_id}")
+                return
+
+            ok_stock, balances = await client.get_stock_balances(shop_id)
+            stock_map = {b["kontur_id"]: b["quantity"] for b in balances} if ok_stock else {}
+
+            total_added = 0
+            total_updated = 0
+            kontur_id_to_product: dict[str, ProductCache] = {}
+
+            for p in products:
+                if not p.get("name"):
+                    continue
+                kontur_id = p["kontur_id"]
+                existing = (await db.execute(
+                    select(ProductCache).where(
+                        ProductCache.store_id == store_id,
+                        ProductCache.kontur_id == kontur_id,
+                    )
+                )).scalar_one_or_none()
+
+                qty = stock_map.get(kontur_id, 0.0)
+
+                if existing:
+                    existing.name = p["name"]
+                    existing.price = p.get("price") or existing.price
+                    if p.get("barcode"):
+                        existing.barcode = p["barcode"]
+                    if p.get("article"):
+                        existing.article = p["article"]
+                    if p.get("category"):
+                        existing.category = p["category"]
+                    existing.quantity = qty
+                    existing.is_active = True
+                    kontur_id_to_product[kontur_id] = existing
+                    total_updated += 1
+                else:
+                    product = ProductCache(
+                        store_id=store_id,
+                        kontur_id=kontur_id,
+                        name=p["name"],
+                        barcode=p.get("barcode"),
+                        article=p.get("article"),
+                        category=p.get("category"),
+                        price=p.get("price"),
+                        quantity=qty,
+                        is_active=True,
+                    )
+                    db.add(product)
+                    kontur_id_to_product[kontur_id] = product
+                    total_added += 1
+
+            await db.flush()
+
+            for product in kontur_id_to_product.values():
+                if product.barcode or product.article:
+                    await _upsert_global_product(db, product)
+
+            integration.last_sync_at = datetime.now(timezone.utc)
+            integration.status = IntegrationStatus.active
+            await db.commit()
+            logger.info(f"KM sync done: store={store_id} added={total_added} updated={total_updated}")
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"KM sync error: {e}")
 
 
 @router.get("/{store_id}/integrations/{integration_id}/stock")
