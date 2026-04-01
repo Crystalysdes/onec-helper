@@ -537,7 +537,13 @@ class OneCClient:
             ("AccumulationRegister_ЗапасыКПоступлениюНаСклады/Balance", "КоличествоБаланс", "Склад_Key", True),
         ]
         for reg_path, qty_field, wh_field, wh_is_guid in registers:
-            path = f"odata/standard.odata/{reg_path}?$format=json&$select=Номенклатура_Key,{qty_field}"
+            is_info_reg = reg_path.startswith("InformationRegister")
+            select_fields = f"Номенклатура_Key,{qty_field}"
+            if is_info_reg:
+                select_fields += ",Период"
+            path = f"odata/standard.odata/{reg_path}?$format=json&$select={select_fields}"
+            if is_info_reg:
+                path += "&$orderby=Период desc"
             if store_id:
                 if wh_is_guid:
                     path += f"&$filter={wh_field} eq guid'{store_id}'"
@@ -546,15 +552,18 @@ class OneCClient:
             success, data = await self._request("GET", path)
             if success:
                 items = data.get("value", []) if isinstance(data, dict) else []
-                balances = [
-                    {
-                        "onec_id": str(item.get("Номенклатура_Key", "")),
+                seen: set = set()
+                balances = []
+                for item in items:
+                    k = str(item.get("Номенклатура_Key", ""))
+                    if not k or k in seen:
+                        continue
+                    seen.add(k)
+                    balances.append({
+                        "onec_id": k,
                         "quantity": item.get(qty_field, 0) or 0,
-                    }
-                    for item in items
-                    if item.get("Номенклатура_Key")
-                ]
-                if balances:  # only use if register actually has data
+                    })
+                if balances:
                     logger.debug(f"1C get_stock_balances: using {reg_path} ({len(balances)} rows)")
                     return True, balances
         return False, []

@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ChevronLeft, Upload, Check, Trash2,
-  Camera, ChevronDown, ChevronRight, Package, Plus, X, Zap,
+  Camera, ChevronDown, ChevronRight, Package, Plus, X, Zap, Scan,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
@@ -13,6 +13,32 @@ const UNITS = ['шт', 'кг', 'г', 'л', 'мл', 'упак', 'пара', 'ру
 
 function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
   const [open, setOpen] = useState(false)
+  const [scanningBarcode, setScanningBarcode] = useState(false)
+  const barcodeCamRef = useRef()
+
+  const handleBarcodeScan = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setScanningBarcode(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await productsAPI.scanBarcode(fd)
+      const barcodes = res.data?.barcodes || []
+      if (barcodes.length > 0) {
+        onUpdate(i, 'barcode', barcodes[0])
+        toast.success(`Штрих-код: ${barcodes[0]}`)
+      } else {
+        toast.error('Штрих-код не распознан')
+      }
+    } catch {
+      toast.error('Не удалось распознать штрих-код')
+    } finally {
+      setScanningBarcode(false)
+      e.target.value = ''
+    }
+  }
+
   const isMatched = p._matched
   const isGlobal = p._global_match && !p._matched
   const isNew = !isMatched
@@ -129,8 +155,23 @@ function ProductRow({ product: p, index: i, onUpdate, onRemove }) {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Штрих-код</label>
-              <input className="input-field text-sm mt-0.5" value={p.barcode || ''} placeholder="EAN"
-                onChange={(e) => onUpdate(i, 'barcode', e.target.value || null)} />
+              <input ref={barcodeCamRef} type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={handleBarcodeScan} />
+              <div className="flex gap-1 mt-0.5">
+                <input className="input-field text-sm flex-1 min-w-0" value={p.barcode || ''} placeholder="EAN"
+                  onChange={(e) => onUpdate(i, 'barcode', e.target.value || null)} />
+                <button
+                  type="button"
+                  className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 active:scale-90"
+                  style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)' }}
+                  onClick={() => barcodeCamRef.current?.click()}
+                  disabled={scanningBarcode}
+                >
+                  {scanningBarcode
+                    ? <div className="w-3.5 h-3.5 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: 'var(--tg-theme-button-color)', borderTopColor: 'transparent' }} />
+                    : <Scan size={15} style={{ color: 'var(--tg-theme-button-color)' }} />}
+                </button>
+              </div>
             </div>
             <div>
               <label className="text-[11px] font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>Артикул</label>
@@ -582,7 +623,7 @@ export default function UploadInvoice() {
           <div className="text-center">
             <p className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>Готово!</p>
             <p className="text-sm mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              Товары сохранены{syncToOnec ? ' и отправлены в 1С' : ''}
+              Товары сохранены и отправлены в 1С
             </p>
           </div>
           <button className="btn-primary w-auto px-10 mt-4" onClick={() => navigate('/products')}>

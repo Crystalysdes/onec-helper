@@ -141,7 +141,7 @@ async def _fast_stock_sync_all():
             if not ok or not balances:
                 continue
 
-            stock_map = {str(b["onec_id"]).strip("{}"): b["quantity"] for b in balances}
+            stock_map = {str(b["onec_id"]).strip("{}"): float(b["quantity"] or 0) for b in balances}
 
             async with AsyncSessionLocal() as db:
                 rows = (await db.execute(
@@ -154,11 +154,10 @@ async def _fast_stock_sync_all():
                 changed = 0
                 for p in rows:
                     clean = str(p.onec_id).strip("{}")
-                    if clean in stock_map:
-                        new_qty = float(stock_map[clean])
-                        if p.quantity != new_qty:
-                            p.quantity = new_qty
-                            changed += 1
+                    new_qty = stock_map.get(clean, 0.0)
+                    if p.quantity != new_qty:
+                        p.quantity = new_qty
+                        changed += 1
                 if changed:
                     await db.commit()
                     logger.info(f"[stock sync] {integration.store_id}: updated {changed} quantities")

@@ -487,14 +487,17 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
 
             # ── Step 3: sync stock balances (quantities) ──
             qty_success, balances = await client.get_stock_balances()
-            if qty_success and balances:
-                for bal in balances:
-                    oid = str(bal.get("onec_id", ""))
-                    qty = float(bal.get("quantity", 0) or 0)
-                    prod = onec_id_to_product.get(oid)
-                    if prod:
-                        prod.quantity = qty
-                logger.info(f"1C sync: updated quantities for {len(balances)} items")
+            if qty_success:
+                stock_map = {str(b.get("onec_id", "")).strip("{}"): float(b.get("quantity", 0) or 0) for b in balances}
+                updated_qty = 0
+                for oid, prod in onec_id_to_product.items():
+                    new_qty = stock_map.get(str(oid).strip("{}"), 0.0)
+                    if prod.quantity != new_qty:
+                        prod.quantity = new_qty
+                        updated_qty += 1
+                logger.info(f"1C sync: updated quantities for {updated_qty} items (balance rows: {len(balances)})")
+            else:
+                logger.warning("1C sync: could not fetch stock balances")
 
             # ── Step 4: sync retail + purchase prices (single register fetch) ──
             retail_prices, purchase_prices = await client._classify_all_prices()
