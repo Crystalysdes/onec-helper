@@ -1,3 +1,12 @@
+# ── Stage 1: build React frontend ────────────────────────────────────────────
+FROM node:20-alpine AS frontend
+WORKDIR /build
+COPY miniapp/package.json miniapp/package-lock.json ./
+RUN npm ci --prefer-offline
+COPY miniapp/ ./
+RUN npm run build
+
+# ── Stage 2: Python backend ───────────────────────────────────────────────────
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
@@ -14,10 +23,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY bot/ ./bot/
 COPY setup.py ./setup.py
-COPY miniapp/dist/ ./static/
+COPY --from=frontend /build/dist ./static/
 
 RUN pip install -e . --no-deps && \
-    mkdir -p /app/data /app/uploads
+    mkdir -p /app/data /app/uploads /app/logs
 
 EXPOSE 8000
 
