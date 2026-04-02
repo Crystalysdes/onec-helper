@@ -1,5 +1,4 @@
 miniapp/node_modules
-miniapp/dist
 .git
 .github
 __pycache__

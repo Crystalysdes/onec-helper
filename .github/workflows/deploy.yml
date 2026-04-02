@@ -17,13 +17,11 @@ jobs:
           script: |
             cd /app
             git pull origin main
-            # Update nginx to proxy everything to Docker (no more static file serving)
+            # Update nginx to proxy everything to Docker
             NGINX_CONF=$(find /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 1 -type f 2>/dev/null | head -1)
             if [ -n "$NGINX_CONF" ]; then
               cp /app/nginx/nginx-timeweb.conf "$NGINX_CONF"
               nginx -t && nginx -s reload || true
             fi
-            # Build new Docker image and restart (background to avoid SSH timeout)
-            docker compose -f docker-compose.timeweb.yml build --no-cache
-            docker compose -f docker-compose.timeweb.yml up -d
+            docker compose -f docker-compose.timeweb.yml up -d --build
             docker image prune -f
