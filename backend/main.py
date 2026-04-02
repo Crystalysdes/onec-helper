@@ -4,7 +4,8 @@ import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from backend.config import settings
@@ -85,12 +86,27 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "1С Helper API"}
+    return {"status": "ok", "service": "1C Helper API"}
 
 
-@app.get("/")
-async def root():
-    return {"message": "1С Helper API", "version": "1.0.0"}
+# ── Serve React SPA ───────────────────────────────────────────────────────────
+_STATIC_DIR = "/app/static"
+_INDEX = f"{_STATIC_DIR}/index.html"
+
+if os.path.isdir(f"{_STATIC_DIR}/assets"):
+    app.mount("/assets", StaticFiles(directory=f"{_STATIC_DIR}/assets"), name="assets")
+
+
+@app.get("/vite.svg")
+async def vite_svg():
+    return FileResponse(f"{_STATIC_DIR}/vite.svg") if os.path.exists(f"{_STATIC_DIR}/vite.svg") else JSONResponse({}, 404)
+
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    if os.path.exists(_INDEX):
+        return FileResponse(_INDEX)
+    return JSONResponse({"message": "1C Helper API", "version": "1.0.0"})
 
 
 @app.exception_handler(Exception)

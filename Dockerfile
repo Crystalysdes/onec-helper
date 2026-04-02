@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY bot/ ./bot/
 COPY setup.py ./setup.py
+COPY miniapp/dist/ ./static/
 
 RUN pip install -e . --no-deps && \
     mkdir -p /app/data /app/uploads
