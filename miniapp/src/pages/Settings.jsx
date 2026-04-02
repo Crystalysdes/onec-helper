@@ -333,14 +333,14 @@ export default function Settings() {
             className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
             style={{ background: 'var(--tg-theme-button-color)' }}
           >
-            {user?.first_name?.[0] || '?'}
+            {user?.full_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || '?'}
           </div>
           <div className="flex-1 min-w-0">
             <p className="font-semibold truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
-              {[user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Пользователь'}
+              {user?.full_name || 'Пользователь'}
             </p>
             <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              {user?.username ? `@${user.username}` : `ID: ${user?.telegram_id}`}
+              {user?.email || ''}
             </p>
           </div>
           {user?.is_admin && <span className="badge badge-yellow">Админ</span>}

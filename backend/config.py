@@ -3,11 +3,14 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
-    # Telegram
-    BOT_TOKEN: str
+    # Telegram (legacy, kept for bot compatibility)
+    BOT_TOKEN: str = ""
     BOT_USERNAME: str = "oneshelperbot"
     ADMIN_TELEGRAM_ID: int = 5504548686
     WEBHOOK_URL: str = ""
+
+    # Web auth
+    ADMIN_EMAIL: str = ""
 
     # Backend
     SECRET_KEY: str

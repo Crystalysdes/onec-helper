@@ -11,11 +11,24 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from passlib.context import CryptContext
 
 from backend.config import settings
 from backend.database.connection import get_db
 
 security = HTTPBearer()
+_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def hash_password(password: str) -> str:
+    return _pwd_ctx.hash(password)
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    try:
+        return _pwd_ctx.verify(password, hashed)
+    except Exception:
+        return False
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -88,12 +101,18 @@ async def get_current_user(
     if not payload:
         raise credentials_exception
 
-    telegram_id: int = payload.get("sub")
-    if telegram_id is None:
+    user_id: str = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+
+    from uuid import UUID as _UUID
+    try:
+        uid = _UUID(str(user_id))
+    except (ValueError, AttributeError):
         raise credentials_exception
 
     result = await db.execute(
-        select(User).where(User.telegram_id == int(telegram_id), User.is_active == True)
+        select(User).where(User.id == uid, User.is_active == True)
     )
     user = result.scalar_one_or_none()
     if user is None:

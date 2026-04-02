@@ -73,10 +73,7 @@ export default function SwipeToDelete({ onDelete, children, disabled = false }) 
 
   const handleDeleteClick = (e) => {
     e.stopPropagation()
-    const tg = window.Telegram?.WebApp
-    if (tg?.showConfirm) {
-      tg.showConfirm('Удалить?', (ok) => { if (ok) { snapTo(0); onDelete() } })
-    } else if (window.confirm('Удалить?')) {
+    if (window.confirm('Удалить?')) {
       snapTo(0); onDelete()
     }
   }

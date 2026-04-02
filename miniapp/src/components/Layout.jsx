@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Store } from 'lucide-react'
+import { Store, LogOut } from 'lucide-react'
 import BottomNav from './BottomNav'
 import useStore from '../store/useStore'
 
@@ -10,13 +10,19 @@ const PAGE_LABELS = {
   '/reports':        'Отчёты',
   '/settings':       'Настройки',
   '/admin':          'Администрирование',
+  '/subscription':   'Подписка',
 }
 
 export default function Layout() {
   const navigate  = useNavigate()
   const location  = useLocation()
-  const { currentStore } = useStore()
+  const { currentStore, logout } = useStore()
   const isHome    = location.pathname === '/'
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <div className="page-container">
@@ -27,11 +33,22 @@ export default function Layout() {
           background: 'var(--tg-theme-bg-color)',
           paddingTop: 'calc(env(safe-area-inset-top) + 8px)',
           height: 'calc(env(safe-area-inset-top) + 52px)',
-          borderBottom: '1px solid rgba(128,128,128,0.08)',
+          borderBottom: '1px solid var(--border)',
         }}
       >
-        {/* Left: spacer so title stays centred */}
-        <div className="w-8 h-8 pb-2" />
+        {/* Left: logout (home only) or back spacer */}
+        <div className="w-8 h-8 pb-2 flex items-center justify-center">
+          {isHome && (
+            <button
+              onClick={handleLogout}
+              className="w-8 h-8 rounded-xl flex items-center justify-center active:opacity-60 transition-opacity"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
+              title="Выйти"
+            >
+              <LogOut size={14} style={{ color: 'var(--tg-theme-hint-color)' }} />
+            </button>
+          )}
+        </div>
 
         {/* Center: page label */}
         <div className="flex-1 flex items-center justify-center pb-2">

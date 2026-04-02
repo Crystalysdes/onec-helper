@@ -3,13 +3,55 @@
 @tailwind utilities;
 
 :root {
-  --tg-theme-bg-color: #ffffff;
-  --tg-theme-text-color: #000000;
-  --tg-theme-hint-color: #999999;
-  --tg-theme-link-color: #2481cc;
-  --tg-theme-button-color: #2481cc;
+  /* Brand */
+  --brand: #2563eb;
+  --brand-hover: #1d4ed8;
+  --brand-light: rgba(37,99,235,0.1);
+
+  /* Light mode (iOS-like) */
+  --tg-theme-bg-color: #f2f2f7;
+  --tg-theme-text-color: #1c1c1e;
+  --tg-theme-hint-color: #8e8e93;
+  --tg-theme-link-color: #2563eb;
+  --tg-theme-button-color: #2563eb;
   --tg-theme-button-text-color: #ffffff;
-  --tg-theme-secondary-bg-color: #f4f4f5;
+  --tg-theme-secondary-bg-color: #ffffff;
+
+  /* Surfaces */
+  --surface-1: #ffffff;
+  --surface-2: #f2f2f7;
+  --surface-3: #e5e5ea;
+  --border: rgba(60,60,67,0.12);
+
+  /* Status */
+  --success: #34c759;
+  --warning: #ff9500;
+  --danger: #ff3b30;
+  --info: #2563eb;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tg-theme-bg-color: #000000;
+    --tg-theme-text-color: #ffffff;
+    --tg-theme-hint-color: #8e8e93;
+    --tg-theme-link-color: #4a9eff;
+    --tg-theme-button-color: #2563eb;
+    --tg-theme-button-text-color: #ffffff;
+    --tg-theme-secondary-bg-color: #1c1c1e;
+    --surface-1: #1c1c1e;
+    --surface-2: #000000;
+    --surface-3: #2c2c2e;
+    --border: rgba(255,255,255,0.08);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+    --shadow-lg: 0 12px 40px rgba(0,0,0,0.5);
+  }
 }
 
 * {
@@ -124,4 +166,23 @@ body {
 ::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+.auth-bg {
+  background: var(--tg-theme-bg-color);
+}
+
+.auth-card {
+  box-shadow: var(--shadow-lg);
+}
+
+@media (min-width: 640px) {
+  .auth-bg {
+    background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 50%, #f5f3ff 100%);
+  }
+  @media (prefers-color-scheme: dark) {
+    .auth-bg {
+      background: linear-gradient(135deg, #0f172a 0%, #0c1a2e 50%, #12082a 100%);
+    }
+  }
 }

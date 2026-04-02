@@ -296,8 +296,8 @@ async def get_referral_info(
 ):
     ref = await _get_or_create_referral(current_user, db)
     await db.commit()
-    bot_username = settings.BOT_USERNAME
-    link = f"https://t.me/{bot_username}?start=ref_{ref.code}"
+    base_url = settings.MINIAPP_URL.rstrip("/")
+    link = f"{base_url}/?ref={ref.code}"
 
     uses_result = await db.execute(
         select(ReferralUse, User)
@@ -307,14 +307,10 @@ async def get_referral_info(
     )
     referrals = []
     for use, referred_user in uses_result.all():
-        name = (
-            referred_user.telegram_first_name
-            or (f"@{referred_user.telegram_username}" if referred_user.telegram_username else None)
-            or f"ID {referred_user.telegram_id}"
-        )
+        name = referred_user.full_name or referred_user.email or f"ID {referred_user.id}"
         referrals.append({
             "name": name,
-            "username": referred_user.telegram_username,
+            "username": None,
             "joined_at": use.created_at,
             "paid": use.discount_granted,
         })

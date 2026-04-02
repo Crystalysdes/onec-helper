@@ -114,11 +114,14 @@ export default function Subscription() {
     }
   }
 
-  const shareLink = () => {
+  const shareLink = async () => {
     if (!ref?.link) return
-    const tg = window.Telegram?.WebApp
-    if (tg) {
-      tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(ref.link)}&text=${encodeURIComponent('Попробуй 1C Helper — удобный помощник для работы с товарами и 1С!')}`)
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: '1C Helper', text: 'Попробуй 1C Helper — удобный помощник для работы с товарами и 1С!', url: ref.link })
+      } catch {
+        copyCode()
+      }
     } else {
       copyCode()
     }
@@ -130,9 +133,7 @@ export default function Subscription() {
       const res = await subscriptionsAPI.createPayment()
       const url = res.data.confirmation_url
       if (url) {
-        const tg = window.Telegram?.WebApp
-        if (tg) tg.openLink(url)
-        else window.open(url, '_blank')
+        window.open(url, '_blank')
       }
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка создания платежа')

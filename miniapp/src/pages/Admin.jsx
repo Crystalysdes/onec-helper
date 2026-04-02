@@ -749,18 +749,18 @@ export default function Admin() {
                   className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0"
                   style={{ background: u.is_active ? 'var(--tg-theme-button-color)' : '#9ca3af' }}
                 >
-                  {u.first_name?.[0] || u.username?.[0]?.toUpperCase() || '?'}
+                  {u.full_name?.[0] || u.email?.[0]?.toUpperCase() || '?'}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
-                      {u.first_name || u.username || `ID ${u.telegram_id}`}
+                      {u.full_name || u.email || `ID ${u.id}`}
                     </p>
                     {u.is_admin && <span className="badge badge-yellow">Админ</span>}
                     <SubStatusBadge sub={u.subscription} />
                   </div>
                   <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {u.username ? `@${u.username}` : ''} • {u.stores_count} маг.
+                    {u.email ? `${u.email} · ` : ''}{u.stores_count} маг.
                     {u.subscription?.days_left != null && u.subscription.is_active
                       ? ` • ${u.subscription.days_left} дн.`
                       : ''}
@@ -818,14 +818,14 @@ export default function Admin() {
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
                   style={{ background: row.subscription?.is_active ? 'var(--tg-theme-button-color)' : '#9ca3af' }}>
-                  {row.first_name?.[0] || row.username?.[0]?.toUpperCase() || '?'}
+                  {row.full_name?.[0] || row.email?.[0]?.toUpperCase() || '?'}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
-                    {row.first_name || row.username || `ID ${row.telegram_id}`}
+                    {row.full_name || row.email || `ID ${row.id}`}
                   </p>
                   <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    {row.username ? `@${row.username} · ` : ''}{row.telegram_id}
+                    {row.email}
                   </p>
                 </div>
                 <SubStatusBadge sub={row.subscription} />
@@ -1063,7 +1063,7 @@ export default function Admin() {
               ← Назад
             </button>
             <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--tg-theme-text-color)' }}>
-              {userModal ? (userModal.first_name || userModal.username || `ID ${userModal.telegram_id}`) : 'Загрузка...'}
+              {userModal ? (userModal.full_name || userModal.email || `ID ${userModal.id}`) : 'Загрузка...'}
             </span>
           </div>
 
@@ -1075,9 +1075,9 @@ export default function Admin() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {/* TG info */}
+                {/* User info */}
                 <p style={{ fontSize: 13, color: 'var(--tg-theme-hint-color)', margin: 0 }}>
-                  {userModal.username ? `@${userModal.username} · ` : ''}TG: {userModal.telegram_id}
+                  {userModal.email}
                 </p>
 
                 {/* Info grid */}

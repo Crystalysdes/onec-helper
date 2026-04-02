@@ -79,10 +79,7 @@ export default function Products() {
         setDeleting(false)
       }
     }
-    const tg = window.Telegram?.WebApp
-    if (tg?.showConfirm) {
-      tg.showConfirm(`Удалить ${selected.size} товар(ов)?`, (ok) => { if (ok) doDelete() })
-    } else {
+    if (window.confirm(`Удалить ${selected.size} товар(ов)?`)) {
       doDelete()
     }
   }

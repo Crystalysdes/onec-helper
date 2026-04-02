@@ -74,9 +74,8 @@ async def list_all_users(
         )).scalar()
         data.append({
             "id": str(u.id),
-            "telegram_id": u.telegram_id,
-            "username": u.telegram_username,
-            "first_name": u.telegram_first_name,
+            "email": u.email,
+            "full_name": u.full_name,
             "is_active": u.is_active,
             "is_admin": u.is_admin,
             "stores_count": stores_count,
@@ -116,17 +115,15 @@ async def get_user_detail(
     if referred_by_row:
         _, referrer_user = referred_by_row
         referred_by = (
-            referrer_user.telegram_first_name
-            or (f"@{referrer_user.telegram_username}" if referrer_user.telegram_username else None)
-            or f"ID {referrer_user.telegram_id}"
+            referrer_user.full_name
+            or referrer_user.email
+            or f"ID {referrer_user.id}"
         )
 
     return {
         "id": str(user.id),
-        "telegram_id": user.telegram_id,
-        "username": user.telegram_username,
-        "first_name": user.telegram_first_name,
-        "last_name": user.telegram_last_name,
+        "email": user.email,
+        "full_name": user.full_name,
         "is_active": user.is_active,
         "is_admin": user.is_admin,
         "created_at": user.created_at,
@@ -258,9 +255,8 @@ async def list_subscriptions(
     if search.strip():
         pattern = f"%{search.strip()}%"
         q = q.where(or_(
-            User.telegram_username.ilike(pattern),
-            User.telegram_first_name.ilike(pattern),
-            User.telegram_last_name.ilike(pattern),
+            User.email.ilike(pattern),
+            User.full_name.ilike(pattern),
         ))
     total_q = select(func.count()).select_from(q.subquery())
     total = (await db.execute(total_q)).scalar() or 0
@@ -273,9 +269,8 @@ async def list_subscriptions(
         "items": [
             {
                 "user_id": str(u.id),
-                "telegram_id": u.telegram_id,
-                "username": u.telegram_username,
-                "first_name": u.telegram_first_name,
+                "email": u.email,
+                "full_name": u.full_name,
                 "subscription": _sub_dict(s),
             }
             for u, s in rows
@@ -462,7 +457,7 @@ async def admin_list_products(
                 "unit": p.unit,
                 "store_id": str(p.store_id),
                 "store_name": s.name,
-                "owner": u.telegram_username or str(u.telegram_id),
+                "owner": u.full_name or u.email or str(u.id),
                 "created_at": p.created_at,
             }
             for p, s, u in rows
@@ -508,8 +503,8 @@ async def admin_get_product(
         "store_id": str(p.store_id),
         "store_name": s.name,
         "owner_id": str(u.id),
-        "owner": u.telegram_username or str(u.telegram_id),
-        "owner_name": u.telegram_first_name or u.telegram_username or str(u.telegram_id),
+        "owner": u.full_name or u.email or str(u.id),
+        "owner_name": u.full_name or u.email or str(u.id),
     }
 
 

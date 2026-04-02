@@ -162,7 +162,7 @@ export default function Dashboard() {
                 )
               }
               <h1 className="text-2xl font-bold leading-tight" style={{ color: 'var(--tg-theme-text-color)' }}>
-                {user?.first_name || 'Главная'}
+                {user?.full_name?.split(' ')[0] || 'Главная'}
               </h1>
             </div>
           </div>

@@ -14,17 +14,22 @@ import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import Admin from './pages/Admin'
 import Subscription from './pages/Subscription'
+import Login from './pages/Login'
+import Register from './pages/Register'
 import LoadingScreen from './components/LoadingScreen'
 
-function App() {
-  const { token, setToken, setUser, setStores, setCurrentStore, isAdmin } = useStore()
-  const [initializing, setInitializing] = useState(true)
-  const [loadingMessage, setLoadingMessage] = useState(null)
-  const [noTelegram, setNoTelegram] = useState(false)
+function ProtectedRoute({ children }) {
+  const { token } = useStore()
+  if (!token) return <Navigate to="/login" replace />
+  return children
+}
 
-  // ── Keyboard / viewport fix ────────────────────────────────────────
+function App() {
+  const { token, setUser, setStores, setCurrentStore, isAdmin, logout } = useStore()
+  const [initializing, setInitializing] = useState(true)
+
+  // ── Keyboard / viewport fix ─────────────────────────────────────────
   useEffect(() => {
-    // 1. Scroll focused input into view when keyboard appears
     const vv = window.visualViewport
     if (vv) {
       let lastHeight = vv.height
@@ -39,9 +44,6 @@ function App() {
       }
       vv.addEventListener('resize', onResize)
     }
-
-    // 2. Block bottom-nav ghost taps immediately when any input loses focus
-    //    (keyboard starts closing — layout shift hasn't happened yet)
     const onFocusOut = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
         window.__blockNav = true
@@ -51,90 +53,32 @@ function App() {
     document.addEventListener('focusout', onFocusOut, true)
     return () => document.removeEventListener('focusout', onFocusOut, true)
   }, [])
-  // ───────────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    // ── Telegram WebApp bootstrap ────────────────────────────────────
-    const tg = window.Telegram?.WebApp
-    if (tg) {
-      tg.ready()
-      tg.expand()
-    }
-    // ─────────────────────────────────────────────────────────────────
-
     const init = async () => {
+      if (!token) {
+        setInitializing(false)
+        return
+      }
       try {
-        const initData = tg?.initData
+        const res = await authAPI.getMe()
+        setUser(res.data)
 
-        let authenticated = false
-
-        if (initData) {
-          const tryAuth = async (isRetry = false) => {
-            if (isRetry) {
-              setLoadingMessage('Сервер запускается...')
-            }
-            const res = await authAPI.telegramAuth(initData)
-            setLoadingMessage(null)
-            return res
-          }
-
-          try {
-            let res
-            try {
-              res = await tryAuth(false)
-            } catch (firstErr) {
-              const isNetwork = !firstErr?.response && (firstErr?.code === 'ECONNABORTED' || firstErr?.message?.includes('timeout') || firstErr?.message?.includes('Network'))
-              if (isNetwork) {
-                res = await tryAuth(true)
-              } else {
-                throw firstErr
-              }
-            }
-            setToken(res.data.access_token)
-            setUser(res.data.user)
-            authenticated = true
-          } catch (authErr) {
-            toast.dismiss('wakeup')
-            const detail = authErr?.response?.data?.detail || authErr?.message || 'unknown'
-            console.error('telegramAuth failed:', authErr?.response?.status, detail)
-            toast.error(`Ошибка авторизации: ${detail}`, { duration: 6000 })
-            if (token) {
-              try {
-                const res = await authAPI.getMe()
-                setUser(res.data)
-                authenticated = true
-              } catch {
-                localStorage.removeItem('access_token')
-              }
-            }
-          }
-        } else if (token) {
-          try {
-            const res = await authAPI.getMe()
-            setUser(res.data)
-            authenticated = true
-          } catch {
-            localStorage.removeItem('access_token')
-          }
-        } else {
-          setNoTelegram(true)
-        }
-
-        if (authenticated) {
-          const storesRes = await storesAPI.list()
-          const stores = storesRes.data
-          setStores(stores)
-
-          const savedStoreId = localStorage.getItem('current_store_id')
-          if (stores.length > 0) {
-            const saved = savedStoreId
-              ? stores.find((s) => s.id === savedStoreId)
-              : null
-            setCurrentStore(saved || stores[0])
-          }
+        const storesRes = await storesAPI.list()
+        const stores = storesRes.data
+        setStores(stores)
+        const savedId = localStorage.getItem('current_store_id')
+        if (stores.length > 0) {
+          const saved = savedId ? stores.find(s => s.id === savedId) : null
+          setCurrentStore(saved || stores[0])
         }
       } catch (err) {
-        console.error('Init error:', err)
+        if (err?.response?.status === 401) {
+          logout()
+        } else {
+          console.error('Init error:', err)
+        }
       } finally {
         setInitializing(false)
       }
@@ -142,20 +86,7 @@ function App() {
     init()
   }, [])
 
-  if (noTelegram) return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-8 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-orange-500 flex items-center justify-center shadow-lg">
-        <span className="text-3xl">🤖</span>
-      </div>
-      <h1 className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>Откройте через бота</h1>
-      <p className="text-sm" style={{ color: 'var(--tg-theme-hint-color)' }}>
-        Найдите <b>@oneshelperbot</b> в Telegram, отправьте <code>/start</code> и нажмите кнопку
-        <b> «🛍 Открыть магазин»</b>
-      </p>
-    </div>
-  )
-
-  if (initializing) return <LoadingScreen message={loadingMessage} />
+  if (initializing) return <LoadingScreen />
 
   return (
     <BrowserRouter>
@@ -165,14 +96,20 @@ function App() {
         toastOptions={{
           duration: 3000,
           style: {
-            borderRadius: '12px',
+            borderRadius: '14px',
             fontSize: '14px',
-            maxWidth: '320px',
+            maxWidth: '340px',
+            boxShadow: 'var(--shadow-md)',
           },
         }}
       />
       <Routes>
-        <Route element={<Layout />}>
+        {/* Auth routes (public) */}
+        <Route path="/login" element={token ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/register" element={token ? <Navigate to="/" replace /> : <Register />} />
+
+        {/* Protected app routes */}
+        <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route index element={<Dashboard />} />
           <Route path="/products" element={<Products />} />
           <Route path="/products/:id" element={<ProductDetail />} />

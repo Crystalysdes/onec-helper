@@ -1,11 +1,9 @@
-import json
 import string
 import random
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qsl
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -14,8 +12,9 @@ from backend.database.connection import get_db
 from backend.database.models import User, Subscription, ReferralCode, ReferralUse, SubscriptionStatus
 from backend.core.security import (
     create_access_token,
-    validate_telegram_init_data,
     get_current_user,
+    hash_password,
+    verify_password,
 )
 from backend.config import settings
 
@@ -61,9 +60,27 @@ async def _ensure_subscription_and_referral(user: User, db: AsyncSession, referr
                 db.add(ReferralUse(referrer_id=rc.user_id, referee_id=user.id))
 
 
-class TelegramAuthRequest(BaseModel):
-    init_data: str
+def _user_dict(user: User) -> dict:
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "full_name": user.full_name or "",
+        "is_admin": user.is_admin,
+        "is_active": user.is_active,
+        "created_at": user.created_at,
+    }
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
     referral_code: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
 
 
 class AuthResponse(BaseModel):
@@ -72,89 +89,54 @@ class AuthResponse(BaseModel):
     user: dict
 
 
-@router.post("/telegram", response_model=AuthResponse)
-async def telegram_auth(
-    request: TelegramAuthRequest,
+@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    request: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Authenticate via Telegram WebApp initData."""
-    user_data = validate_telegram_init_data(request.init_data)
+    """Register a new account with email + password."""
+    if len(request.password) < 6:
+        raise HTTPException(status_code=400, detail="Пароль должен быть не менее 6 символов")
 
-    if user_data is None:
-        # Fallback: parse user data without HMAC check
-        # Used when HMAC fails (e.g. env mismatch) — still requires valid user field
-        logger.warning("HMAC validation failed — attempting parse fallback")
-        try:
-            parsed = dict(parse_qsl(request.init_data, strict_parsing=False))
-            user_json = parsed.get("user")
-            if user_json:
-                user_data = json.loads(user_json)
-                logger.info(f"Parse fallback: user_id={user_data.get('id')}")
-        except Exception as e:
-            logger.error(f"Parse fallback error: {e}")
+    existing = await db.execute(select(User).where(User.email == request.email.lower()))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Пользователь с таким email уже существует")
 
-    if user_data is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверные данные Telegram",
-        )
-
-    telegram_id = user_data.get("id")
-    if not telegram_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Не удалось получить ID пользователя",
-        )
-
-    result = await db.execute(
-        select(User).where(User.telegram_id == telegram_id)
+    user = User(
+        email=request.email.lower(),
+        password_hash=hash_password(request.password),
+        full_name=request.full_name.strip(),
+        is_admin=(request.email.lower() == settings.ADMIN_EMAIL) if hasattr(settings, 'ADMIN_EMAIL') else False,
     )
+    db.add(user)
+    await db.flush()
+    await _ensure_subscription_and_referral(user, db, request.referral_code)
+
+    token = create_access_token({"sub": str(user.id)})
+    logger.info(f"New user registered: {user.email}")
+    return AuthResponse(access_token=token, user=_user_dict(user))
+
+
+@router.post("/login", response_model=AuthResponse)
+async def login(
+    request: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Login with email + password."""
+    result = await db.execute(select(User).where(User.email == request.email.lower()))
     user = result.scalar_one_or_none()
 
-    if not user:
-        user = User(
-            telegram_id=telegram_id,
-            telegram_username=user_data.get("username"),
-            telegram_first_name=user_data.get("first_name"),
-            telegram_last_name=user_data.get("last_name"),
-            is_admin=(telegram_id == settings.ADMIN_TELEGRAM_ID),
-        )
-        db.add(user)
-        await db.flush()
-        await _ensure_subscription_and_referral(user, db, request.referral_code)
-    else:
-        user.telegram_username = user_data.get("username")
-        user.telegram_first_name = user_data.get("first_name")
-        user.telegram_last_name = user_data.get("last_name")
-        if not user.is_admin and telegram_id == settings.ADMIN_TELEGRAM_ID:
-            user.is_admin = True
-        await _ensure_subscription_and_referral(user, db)
+    if not user or not user.password_hash or not verify_password(request.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
-    token = create_access_token({"sub": str(telegram_id)})
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Аккаунт заблокирован")
 
-    return AuthResponse(
-        access_token=token,
-        user={
-            "id": str(user.id),
-            "telegram_id": user.telegram_id,
-            "username": user.telegram_username,
-            "first_name": user.telegram_first_name,
-            "last_name": user.telegram_last_name,
-            "is_admin": user.is_admin,
-        },
-    )
+    token = create_access_token({"sub": str(user.id)})
+    return AuthResponse(access_token=token, user=_user_dict(user))
 
 
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current authenticated user."""
-    return {
-        "id": str(current_user.id),
-        "telegram_id": current_user.telegram_id,
-        "username": current_user.telegram_username,
-        "first_name": current_user.telegram_first_name,
-        "last_name": current_user.telegram_last_name,
-        "is_admin": current_user.is_admin,
-        "is_active": current_user.is_active,
-        "created_at": current_user.created_at,
-    }
+    return _user_dict(current_user)

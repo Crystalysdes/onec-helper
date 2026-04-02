@@ -82,3 +82,21 @@ async def init_db():
         await conn.execute(_text(
             "ALTER TABLE integrations ALTER COLUMN onec_username DROP NOT NULL"
         ))
+        await conn.execute(_text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255) DEFAULT NULL"
+        ))
+        await conn.execute(_text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) DEFAULT NULL"
+        ))
+        await conn.execute(_text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255) DEFAULT NULL"
+        ))
+        await conn.execute(_text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email) WHERE email IS NOT NULL"
+        ))
+        try:
+            await conn.execute(_text(
+                "ALTER TABLE users ALTER COLUMN telegram_id DROP NOT NULL"
+            ))
+        except Exception:
+            pass
