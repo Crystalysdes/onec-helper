@@ -14,23 +14,10 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
-            set -e
             cd /app
             git pull origin main
-
-            # Install Node 20 once if missing
-            if ! node --version 2>/dev/null | grep -q "^v2"; then
-              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-              apt-get install -y nodejs
-            fi
-
-            # Build React frontend on VPS (outside Docker — no RAM limit)
-            cd /app/miniapp
-            npm ci --prefer-offline || npm install
-            npm run build
-
-            cd /app
+            docker compose -f docker-compose.timeweb.yml down
             docker compose -f docker-compose.timeweb.yml up -d --build
             docker image prune -f
