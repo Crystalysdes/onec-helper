@@ -5,39 +5,32 @@ on:
     branches: [main]
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: miniapp/package-lock.json
-
-      - name: Build React frontend
-        working-directory: miniapp
-        run: npm ci && npm run build
-
-      - name: Copy built dist to VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          password: ${{ secrets.VPS_PASSWORD }}
-          source: "miniapp/dist"
-          target: "/app/"
-
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
+          command_timeout: 10m
           script: |
+            set -e
             cd /app
             git pull origin main
+
+            # Install Node 20 once if missing
+            if ! node --version 2>/dev/null | grep -q "^v2"; then
+              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+              apt-get install -y nodejs
+            fi
+
+            # Build React frontend on VPS (outside Docker — no RAM limit)
+            cd /app/miniapp
+            npm ci --prefer-offline || npm install
+            npm run build
+
+            cd /app
             docker compose -f docker-compose.timeweb.yml up -d --build
             docker image prune -f

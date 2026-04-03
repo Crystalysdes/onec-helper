@@ -537,11 +537,11 @@ body {
 }
 .list-item:hover { background: var(--surface-3); }
 
-.badge { @apply text-xs font-medium px-2 py-0.5 rounded-full; }
-.badge-green { @apply badge; background: rgba(34,197,94,0.1); color: #16a34a; }
-.badge-red   { @apply badge; background: rgba(239,68,68,0.1); color: #dc2626; }
-.badge-yellow{ @apply badge; background: rgba(245,158,11,0.1); color: #d97706; }
-.badge-blue  { @apply badge; background: rgba(37,99,235,0.1); color: var(--brand); }
+.badge        { @apply text-xs font-medium px-2 py-0.5 rounded-full; }
+.badge-green  { @apply text-xs font-medium px-2 py-0.5 rounded-full; background: rgba(34,197,94,0.1);  color: #16a34a; }
+.badge-red    { @apply text-xs font-medium px-2 py-0.5 rounded-full; background: rgba(239,68,68,0.1);  color: #dc2626; }
+.badge-yellow { @apply text-xs font-medium px-2 py-0.5 rounded-full; background: rgba(245,158,11,0.1); color: #d97706; }
+.badge-blue   { @apply text-xs font-medium px-2 py-0.5 rounded-full; background: rgba(37,99,235,0.1);  color: var(--brand); }
 
 .skeleton {
   @apply animate-pulse rounded-xl;
