@@ -91,15 +91,18 @@ function App() {
   return (
     <BrowserRouter>
       <Toaster
-        position="bottom-center"
-        containerStyle={{ bottom: 80 }}
+        position="top-right"
+        containerStyle={{ top: 72 }}
         toastOptions={{
           duration: 3000,
           style: {
-            borderRadius: '14px',
+            borderRadius: '10px',
             fontSize: '14px',
-            maxWidth: '340px',
-            boxShadow: 'var(--shadow-md)',
+            maxWidth: '360px',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+            background: 'var(--surface)',
+            color: 'var(--text)',
+            border: '1px solid var(--border)',
           },
         }}
       />
