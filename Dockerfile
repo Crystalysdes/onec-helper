@@ -8,7 +8,7 @@ COPY miniapp/ ./
 RUN npm run build
 
 # ── Stage 2: Python backend ───────────────────────────────────────────────────
-FROM python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
     libzbar0 curl \
