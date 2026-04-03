@@ -50,8 +50,9 @@ echo '[1/4] git pull...'
 git pull origin main
 echo '[2/4] docker compose down...'
 docker compose -f docker-compose.timeweb.yml down
-echo '[3/4] docker compose build + start...'
-docker compose -f docker-compose.timeweb.yml up -d --build
+sync && echo 3 > /proc/sys/vm/drop_caches
+echo '[3/4] docker compose build + start (BUILDKIT=0)...'
+DOCKER_BUILDKIT=0 docker compose -f docker-compose.timeweb.yml up -d --build
 echo '[4/4] prune old images...'
 docker image prune -f
 echo ''
