@@ -11,7 +11,7 @@ from loguru import logger
 from backend.config import settings
 
 # ── Persistent log file ───────────────────────────────────────────────────────
-_LOG_DIR = "/app/logs"
+_LOG_DIR = os.environ.get("LOG_DIR", "/app/logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
 logger.add(
     f"{_LOG_DIR}/app.log",

@@ -4,6 +4,7 @@ render.env
 *.db-shm
 *.db-wal
 __pycache__/
+run_dev.py
 *.pyc
 *.pyo
 .venv/

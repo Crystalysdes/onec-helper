@@ -120,12 +120,13 @@ async def list_stores(
 
     # Collect store IDs that have at least one integration
     if stores:
-        from sqlalchemy import text as _text
-        store_ids = [str(s.id) for s in stores]
-        int_rows = (await db.execute(_text(
-            "SELECT DISTINCT store_id::text FROM integrations WHERE store_id = ANY(:ids)"
-        ), {"ids": store_ids})).fetchall()
-        stores_with_integration = {r[0] for r in int_rows}
+        from backend.database.models import Integration
+        from sqlalchemy import distinct
+        store_uuids = [s.id for s in stores]
+        int_rows = (await db.execute(
+            select(distinct(Integration.store_id)).where(Integration.store_id.in_(store_uuids))
+        )).fetchall()
+        stores_with_integration = {str(r[0]) for r in int_rows}
     else:
         stores_with_integration = set()
 
@@ -462,9 +463,9 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                         select(ProductCache).where(
                             ProductCache.store_id == store_id,
                             ProductCache.onec_id == onec_id,
-                        )
+                        ).limit(1)
                     )
-                    product = existing.scalar_one_or_none()
+                    product = existing.scalars().first()
 
                     if product:
                         product.name = name
@@ -586,15 +587,17 @@ async def _run_sync_in_background(store_id: UUID, integration_id: UUID):
                 dead_barcodes = [p.barcode for p in to_deactivate if p.barcode]
                 if dead_barcodes:
                     from sqlalchemy import text as _text
-                    await db.execute(_text("""
+                    _ph = ",".join(f":bc{i}" for i in range(len(dead_barcodes)))
+                    _params = {f"bc{i}": v for i, v in enumerate(dead_barcodes)}
+                    await db.execute(_text(f"""
                         DELETE FROM global_products
-                        WHERE barcode = ANY(:bcs)
+                        WHERE barcode IN ({_ph})
                         AND NOT EXISTS (
                             SELECT 1 FROM products_cache
                             WHERE barcode = global_products.barcode
                               AND is_active = true
                         )
-                    """), {"bcs": dead_barcodes})
+                    """), _params)
                     logger.info(f"1C sync: cleaned up to {len(dead_barcodes)} orphaned global_products entries")
 
             # ── Step 6: push products to global catalog ──

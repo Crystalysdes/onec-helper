@@ -11,22 +11,21 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 
 from backend.config import settings
 from backend.database.connection import get_db
 
 security = HTTPBearer()
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
-    return _pwd_ctx.hash(password)
+    return _bcrypt.hashpw(password.encode()[:72], _bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, hashed: str) -> bool:
     try:
-        return _pwd_ctx.verify(password, hashed)
+        return _bcrypt.checkpw(password.encode()[:72], hashed.encode())
     except Exception:
         return False
 

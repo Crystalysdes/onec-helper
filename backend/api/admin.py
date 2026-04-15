@@ -38,7 +38,7 @@ async def get_platform_stats(
     # Check if global catalog needs to be created/populated (raw SQL avoids mapper issues)
     try:
         from sqlalchemy import text as _text
-        global_count_res = await db.execute(_text("SELECT COUNT(*) FROM global_products WHERE is_excluded IS NOT TRUE"))
+        global_count_res = await db.execute(_text("SELECT COUNT(*) FROM global_products WHERE (is_excluded IS NULL OR is_excluded = 0)"))
         global_count = global_count_res.scalar() or 0
     except Exception:
         global_count = -1  # table doesn't exist yet
@@ -220,14 +220,21 @@ async def get_all_logs(
 
 # ── Subscription management ──────────────────────────────────────────
 
+def _aware(dt):
+    """Ensure datetime is timezone-aware (SQLite returns naive datetimes)."""
+    if dt is not None and hasattr(dt, 'tzinfo') and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _sub_dict(sub: Subscription | None) -> dict:
     if not sub:
         return {"status": "none", "is_active": False}
     now = _now()
     if sub.status == SubscriptionStatus.trial:
-        active = bool(sub.trial_ends_at and sub.trial_ends_at > now)
+        active = bool(sub.trial_ends_at and _aware(sub.trial_ends_at) > now)
     elif sub.status == SubscriptionStatus.active:
-        active = bool(sub.current_period_end and sub.current_period_end > now)
+        active = bool(sub.current_period_end and _aware(sub.current_period_end) > now)
     else:
         active = False
     return {
@@ -582,9 +589,11 @@ async def clean_garbled_catalog(current_user: User = Depends(get_current_admin))
                 break
             bad_ids = [str(r[0]) for r in rows if _is_mojibake(r[1])]
             if bad_ids:
+                _ph = ",".join(f":id{i}" for i in range(len(bad_ids)))
+                _params = {f"id{i}": v for i, v in enumerate(bad_ids)}
                 await db.execute(
-                    _text(f"DELETE FROM global_products WHERE id = ANY(:ids::uuid[])"),
-                    {"ids": bad_ids}
+                    _text(f"DELETE FROM global_products WHERE id IN ({_ph})"),
+                    _params
                 )
                 await db.commit()
                 deleted += len(bad_ids)

@@ -29,6 +29,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _aware(dt: datetime) -> datetime:
+    """Ensure datetime is timezone-aware (SQLite returns naive datetimes)."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _gen_referral_code() -> str:
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choices(chars, k=8))
@@ -36,19 +43,21 @@ def _gen_referral_code() -> str:
 
 def _sub_dict(sub: Subscription) -> dict:
     now = _now()
+    trial_ends = _aware(sub.trial_ends_at)
+    period_end = _aware(sub.current_period_end)
     if sub.status == SubscriptionStatus.trial:
-        active = sub.trial_ends_at and sub.trial_ends_at > now
+        active = trial_ends and trial_ends > now
     elif sub.status == SubscriptionStatus.active:
-        active = sub.current_period_end and sub.current_period_end > now
+        active = period_end and period_end > now
     else:
         active = False
 
     days_left = None
-    if sub.status == SubscriptionStatus.trial and sub.trial_ends_at:
-        delta = sub.trial_ends_at - now
+    if sub.status == SubscriptionStatus.trial and trial_ends:
+        delta = trial_ends - now
         days_left = max(0, delta.days)
-    elif sub.status == SubscriptionStatus.active and sub.current_period_end:
-        delta = sub.current_period_end - now
+    elif sub.status == SubscriptionStatus.active and period_end:
+        delta = period_end - now
         days_left = max(0, delta.days)
 
     return {
@@ -106,10 +115,10 @@ async def require_subscription(
         raise HTTPException(status_code=402, detail="subscription_required")
     now = _now()
     if sub.status == SubscriptionStatus.trial:
-        if not sub.trial_ends_at or sub.trial_ends_at <= now:
+        if not sub.trial_ends_at or _aware(sub.trial_ends_at) <= now:
             raise HTTPException(status_code=402, detail="trial_expired")
     elif sub.status == SubscriptionStatus.active:
-        if not sub.current_period_end or sub.current_period_end <= now:
+        if not sub.current_period_end or _aware(sub.current_period_end) <= now:
             sub.status = SubscriptionStatus.expired
             raise HTTPException(status_code=402, detail="subscription_expired")
     else:

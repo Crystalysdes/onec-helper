@@ -124,7 +124,7 @@ async def _upsert_global_product(_ignored_db: AsyncSession, p: ProductCache, for
                 unit             = COALESCE(EXCLUDED.unit,           global_products.unit),
                 is_excluded      = FALSE
         """), {
-            "id": _uuid.uuid4(), "bc": bc_key, "name": clean_name,
+            "id": str(_uuid.uuid4()), "bc": bc_key, "name": clean_name,
             "price": p.price, "pp": p.purchase_price,
             "article": article or p.article, "category": clean_cat,
             "unit": clean_unit, "desc": p.description,
@@ -207,9 +207,9 @@ async def _upsert_global_product_from_dict(
                     article        = COALESCE(EXCLUDED.article,       global_products.article),
                     category       = COALESCE(EXCLUDED.category,      global_products.category),
                     unit           = COALESCE(EXCLUDED.unit,          global_products.unit)
-                WHERE global_products.is_excluded IS NOT TRUE
+                WHERE (global_products.is_excluded IS NULL OR global_products.is_excluded = 0)
             """), {
-                "id": _uuid.uuid4(), "bc": bc, "name": clean_name,
+                "id": str(_uuid.uuid4()), "bc": bc, "name": clean_name,
                 "price": price, "pp": purchase_price,
                 "article": (article or "").strip() or None, "cat": clean_cat, "unit": clean_unit,
             })
@@ -634,7 +634,8 @@ async def list_products(
         if integ_row:
             stale = True
             if integ_row.last_sync_at:
-                age = (datetime.now(_tz.utc) - integ_row.last_sync_at).total_seconds()
+                _last = integ_row.last_sync_at if integ_row.last_sync_at.tzinfo else integ_row.last_sync_at.replace(tzinfo=_tz.utc)
+                age = (datetime.now(_tz.utc) - _last).total_seconds()
                 stale = age > 120  # re-sync if older than 2 minutes
             if stale:
                 from backend.api.stores import _run_sync_in_background
@@ -890,9 +891,9 @@ async def upload_invoice(
                     ProductCache.store_id == store_id_uuid,
                     ProductCache.barcode == barcode,
                     ProductCache.is_active == True,
-                )
+                ).limit(1)
             )
-            existing = r.scalar_one_or_none()
+            existing = r.scalars().first()
             if existing:
                 p["_matched"] = True
                 p["_existing_id"] = str(existing.id)
@@ -907,9 +908,9 @@ async def upload_invoice(
         # 2. Match by barcode in global catalog
         if barcode:
             r = await db.execute(
-                select(GlobalProduct).where(GlobalProduct.barcode == barcode)
+                select(GlobalProduct).where(GlobalProduct.barcode == barcode).limit(1)
             )
-            gp = r.scalar_one_or_none()
+            gp = r.scalars().first()
             if gp:
                 p["_global_match"] = True
                 if not p.get("name") or len(p.get("name", "")) < 3:
@@ -928,9 +929,9 @@ async def upload_invoice(
                     ProductCache.store_id == store_id_uuid,
                     ProductCache.article == article,
                     ProductCache.is_active == True,
-                )
+                ).limit(1)
             )
-            existing = r.scalar_one_or_none()
+            existing = r.scalars().first()
             if existing:
                 p["_matched"] = True
                 p["_existing_id"] = str(existing.id)
@@ -949,9 +950,9 @@ async def upload_invoice(
                     ProductCache.store_id == store_id_uuid,
                     _func.lower(ProductCache.name) == name.lower(),
                     ProductCache.is_active == True,
-                )
+                ).limit(1)
             )
-            existing = r.scalar_one_or_none()
+            existing = r.scalars().first()
             if existing:
                 p["_matched"] = True
                 p["_existing_id"] = str(existing.id)
