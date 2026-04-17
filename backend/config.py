@@ -32,10 +32,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_PROXY_URL: str = ""  # e.g. socks5://user:pass@host:port
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "anthropic/claude-3.5-sonnet"
-    OPENROUTER_FAST_MODEL: str = "anthropic/claude-3.5-haiku"
-    OPENROUTER_VISION_MODEL: str = "anthropic/claude-3.5-haiku"
-    OPENROUTER_INVOICE_MODEL: str = "anthropic/claude-3.5-sonnet"
+    OPENROUTER_MODEL: str = "google/gemini-2.0-flash-001"
+    OPENROUTER_FAST_MODEL: str = "google/gemini-2.0-flash-001"
+    OPENROUTER_VISION_MODEL: str = "google/gemini-2.0-flash-001"
+    OPENROUTER_INVOICE_MODEL: str = "google/gemini-2.0-flash-001"
     CLAUDE_MODEL: str = "claude-3-5-sonnet-20241022"
     ANTHROPIC_INVOICE_MODEL: str = "claude-3-5-sonnet-20241022"
 
