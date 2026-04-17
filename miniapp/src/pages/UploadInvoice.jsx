@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ChevronLeft, Upload, Check, Trash2,
-  Camera, ChevronDown, ChevronRight, Package, Plus, X, Zap, Scan,
+  Camera, ChevronDown, ChevronRight, Package, Plus, X, Zap, Scan, Download, FileSpreadsheet,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
@@ -203,6 +203,8 @@ export default function UploadInvoice() {
   const [markup, setMarkup] = useState('')
   const [roundPrices, setRoundPrices] = useState(false)
   const [syncPaths, setSyncPaths] = useState([])
+  const [savedProductIds, setSavedProductIds] = useState([])
+  const [exporting, setExporting] = useState(false)
   const fileRef = useRef()
   const cameraRef = useRef()
 
@@ -304,7 +306,9 @@ export default function UploadInvoice() {
       }))
       const res = await productsAPI.saveInvoice(currentStore.id, payload, true)
       const paths = res.data?.sync_paths || []
+      const savedIds = (res.data?.products || []).map(p => p.id).filter(Boolean)
       setSyncPaths(paths)
+      setSavedProductIds(savedIds)
       const syncMsg = paths.includes('onec_kontur_bridge')
         ? 'Отправлено в 1С + Контур.Маркет'
         : paths.includes('kontur_market')
@@ -318,6 +322,30 @@ export default function UploadInvoice() {
       toast.error(e.response?.data?.detail || 'Ошибка сохранения')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const downloadExcel = async (fmt = 'xlsx') => {
+    if (!currentStore) return
+    setExporting(true)
+    try {
+      const res = await productsAPI.exportKonturMarket(currentStore.id, {
+        fmt,
+        ids: savedProductIds.length > 0 ? savedProductIds : null,
+      })
+      const ext = fmt === 'csv' ? 'csv' : 'xlsx'
+      const mime = fmt === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      const url = URL.createObjectURL(new Blob([res.data], { type: mime }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `kontur_market_${new Date().toISOString().slice(0, 10)}.${ext}`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`Файл ${ext.toUpperCase()} скачан — загрузите его в Контур.Маркет`)
+    } catch {
+      toast.error('Не удалось сгенерировать файл')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -662,11 +690,45 @@ export default function UploadInvoice() {
               )}
             </div>
           )}
-          <button className="btn-primary w-auto px-10 mt-2" onClick={() => navigate('/products')}>
+          {/* Kontur Market export block */}
+          <div className="w-full rounded-2xl p-4 flex flex-col gap-3"
+            style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet size={18} style={{ color: '#8b5cf6' }} />
+              <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                Экспорт для Контур.Маркет
+              </p>
+            </div>
+            <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+              Скачайте файл и загрузите его в Контур.Маркет через&nbsp;
+              <span className="font-medium">Товары → Импорт</span>
+            </p>
+            <div className="flex gap-2">
+              <button
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium active:opacity-70 disabled:opacity-50"
+                style={{ background: '#8b5cf6', color: 'white' }}
+                onClick={() => downloadExcel('xlsx')}
+                disabled={exporting}
+              >
+                <Download size={15} />
+                {exporting ? 'Генерация...' : 'Excel (.xlsx)'}
+              </button>
+              <button
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium active:opacity-70 disabled:opacity-50"
+                style={{ background: 'var(--tg-theme-bg-color)', color: 'var(--tg-theme-text-color)', border: '1px solid var(--tg-theme-hint-color)' }}
+                onClick={() => downloadExcel('csv')}
+                disabled={exporting}
+              >
+                CSV
+              </button>
+            </div>
+          </div>
+
+          <button className="btn-primary w-auto px-10" onClick={() => navigate('/products')}>
             Перейти к товарам
           </button>
           <button className="btn-secondary w-auto px-8"
-            onClick={() => { setStep('scan'); setPhotos([]); setPreviews([]); setProducts([]); setSyncPaths([]) }}>
+            onClick={() => { setStep('scan'); setPhotos([]); setPreviews([]); setProducts([]); setSyncPaths([]); setSavedProductIds([]) }}>
             Загрузить ещё
           </button>
         </div>

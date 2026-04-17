@@ -120,6 +120,11 @@ export const productsAPI = {
     return api.post('/products/import-csv', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
   },
   aiEnrich: (payload) => api.post('/products/ai-enrich', payload, { timeout: 10000 }),
+  exportKonturMarket: (storeId, { fmt = 'xlsx', ids = null } = {}) => {
+    const params = { store_id: storeId, fmt }
+    if (ids && ids.length > 0) params.ids = ids.join(',')
+    return api.get('/products/export/kontur-market', { params, responseType: 'blob', timeout: 30000 })
+  },
 }
 
 export const reportsAPI = {

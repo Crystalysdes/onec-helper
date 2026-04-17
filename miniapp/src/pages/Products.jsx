@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Plus, X, ChevronLeft, CheckSquare, Square, Trash2, CheckCheck } from 'lucide-react'
+import { Search, Plus, X, ChevronLeft, CheckSquare, Square, Trash2, CheckCheck, FileSpreadsheet, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
 import { productsAPI } from '../services/api'
@@ -19,6 +19,7 @@ export default function Products() {
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const load = useCallback(async (p = page) => {
     if (!currentStore) return
@@ -61,6 +62,28 @@ export default function Products() {
   const deselectAll = () => setSelected(new Set())
 
   const exitSelectMode = () => { setSelectMode(false); setSelected(new Set()) }
+
+  const downloadExcel = async (fmt = 'xlsx') => {
+    if (!currentStore) return
+    setExporting(true)
+    try {
+      const exportIds = selectMode && selected.size > 0 ? [...selected] : null
+      const res = await productsAPI.exportKonturMarket(currentStore.id, { fmt, ids: exportIds })
+      const ext = fmt === 'csv' ? 'csv' : 'xlsx'
+      const mime = fmt === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      const url = URL.createObjectURL(new Blob([res.data], { type: mime }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `kontur_market_${new Date().toISOString().slice(0, 10)}.${ext}`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`Файл ${ext.toUpperCase()} скачан — загрузите в Контур.Маркет`)
+    } catch {
+      toast.error('Не удалось сгенерировать файл')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const handleBulkDelete = async () => {
     if (selected.size === 0) return
@@ -113,15 +136,35 @@ export default function Products() {
           {selectMode ? `Выбрано: ${selected.size}` : 'Товары'}
         </h1>
         {selectMode ? (
-          <button
-            className="px-3 py-1.5 rounded-xl text-xs font-medium active:opacity-70"
-            style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
-            onClick={allSelected ? deselectAll : selectAll}
-          >
-            {allSelected ? 'Снять всё' : 'Выбрать всё'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              className="px-3 py-1.5 rounded-xl text-xs font-medium active:opacity-70"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
+              onClick={allSelected ? deselectAll : selectAll}
+            >
+              {allSelected ? 'Снять всё' : 'Выбрать всё'}
+            </button>
+            <button
+              className="w-9 h-9 rounded-xl flex items-center justify-center active:opacity-70 disabled:opacity-40"
+              style={{ background: 'rgba(139,92,246,0.15)' }}
+              onClick={() => downloadExcel('xlsx')}
+              disabled={exporting}
+              title="Экспорт в Excel для Контур.Маркет"
+            >
+              <FileSpreadsheet size={18} style={{ color: '#8b5cf6' }} />
+            </button>
+          </div>
         ) : (
           <div className="flex gap-2">
+            <button
+              className="w-9 h-9 rounded-xl flex items-center justify-center active:opacity-70 disabled:opacity-40"
+              style={{ background: 'rgba(139,92,246,0.15)' }}
+              onClick={() => downloadExcel('xlsx')}
+              disabled={exporting}
+              title="Экспорт в Excel для Контур.Маркет"
+            >
+              <FileSpreadsheet size={18} style={{ color: '#8b5cf6' }} />
+            </button>
             <button
               className="w-9 h-9 rounded-xl flex items-center justify-center active:opacity-60"
               style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
@@ -250,6 +293,16 @@ export default function Products() {
             >
               <CheckCheck size={16} />
               {allSelected ? 'Снять все' : 'Выбрать все'}
+            </button>
+            <button
+              className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium active:opacity-70 disabled:opacity-40"
+              style={{ background: selected.size > 0 ? 'rgba(139,92,246,0.12)' : 'var(--tg-theme-secondary-bg-color)', color: selected.size > 0 ? '#8b5cf6' : 'var(--tg-theme-hint-color)' }}
+              onClick={() => downloadExcel('xlsx')}
+              disabled={exporting}
+              title="Экспорт выбранных в Excel"
+            >
+              <FileSpreadsheet size={16} />
+              {exporting ? '...' : 'Excel'}
             </button>
             <button
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium active:opacity-70 disabled:opacity-40"

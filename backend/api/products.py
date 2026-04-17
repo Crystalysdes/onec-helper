@@ -7,7 +7,8 @@ from uuid import UUID
 from loguru import logger
 
 import aiofiles
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, update as sa_update
@@ -1852,6 +1853,82 @@ async def bulk_delete_products(
                 article=product.article or "",
             ))
     return {"deleted": len(rows)}
+
+
+@router.get("/export/kontur-market")
+async def export_kontur_market(
+    store_id: str,
+    fmt: str = Query(default="xlsx", regex="^(xlsx|csv)$"),
+    ids: Optional[str] = Query(default=None, description="Comma-separated product IDs to export"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export store products as Excel/CSV for Kontur Market import."""
+    from backend.services.excel_export import generate_kontur_market_xlsx, generate_kontur_market_csv
+    import io
+
+    store_id_uuid = UUID(store_id)
+    await _check_store_access(store_id_uuid, current_user, db)
+
+    # Fetch store name
+    store_res = await db.execute(select(Store).where(Store.id == store_id_uuid))
+    store = store_res.scalar_one_or_none()
+    store_name = store.name if store else None
+
+    # Build product query
+    q = select(ProductCache).where(
+        ProductCache.store_id == store_id_uuid,
+        ProductCache.is_active == True,
+    )
+    if ids:
+        id_list = [i.strip() for i in ids.split(",") if i.strip()]
+        try:
+            uuid_list = [UUID(i) for i in id_list]
+            q = q.where(ProductCache.id.in_(uuid_list))
+        except ValueError:
+            pass
+    q = q.order_by(ProductCache.name)
+
+    result = await db.execute(q)
+    products = result.scalars().all()
+
+    if not products:
+        raise HTTPException(status_code=404, detail="Нет товаров для экспорта")
+
+    rows = [
+        {
+            "name": p.name,
+            "barcode": p.barcode,
+            "article": p.article,
+            "unit": p.unit or "шт",
+            "category": p.category,
+            "purchase_price": float(p.purchase_price) if p.purchase_price else None,
+            "price": float(p.price) if p.price else None,
+            "quantity": float(p.quantity) if p.quantity else 0,
+            "description": p.description,
+        }
+        for p in products
+    ]
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    safe_name = (store_name or "store").replace(" ", "_")[:20]
+
+    if fmt == "csv":
+        content = generate_kontur_market_csv(rows)
+        filename = f"kontur_market_{safe_name}_{ts}.csv"
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    content = generate_kontur_market_xlsx(rows, store_name=store_name)
+    filename = f"kontur_market_{safe_name}_{ts}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 async def _km_sync_cashboxes(api_key: str, shop_id: str):
