@@ -1107,8 +1107,8 @@ async def save_invoice_products(
                 except Exception as e:
                     logger.warning(f"1C sync failed for {product.name}: {e}")
 
-    # ── Kontour Market push (if KM integration is active) ──
-    km_push_list = []
+    # ── Detect Kontour Market integration ──
+    km_bg_kwargs = None
     if saved:
         r_km = await db.execute(
             select(Integration).where(
@@ -1119,29 +1119,42 @@ async def save_invoice_products(
         )
         km_integration = r_km.scalar_one_or_none()
         if km_integration:
-            from backend.integrations.kontur_market_integration import KonturMarketClient
             from backend.core.security import decrypt_password as _dec
             _km_api_key = _dec(km_integration.onec_password_encrypted)
             _km_shop_id = (km_integration.settings or {}).get("kontur_shop_id")
             if _km_shop_id:
-                km_client = KonturMarketClient(api_key=_km_api_key)
-                for product in saved:
-                    try:
-                        ok, kontur_id = await km_client.upsert_product(
-                            shop_id=_km_shop_id,
-                            name=product.name,
-                            price=float(product.price) if product.price else None,
-                            purchase_price=float(product.purchase_price) if product.purchase_price else None,
-                            barcode=product.barcode,
-                            article=product.article,
-                            existing_kontur_id=product.kontur_id,
-                        )
-                        if ok and kontur_id and not product.kontur_id:
-                            product.kontur_id = kontur_id
-                    except Exception as _e:
-                        logger.warning(f"KM push failed for {product.name}: {_e}")
-                if _km_shop_id:
-                    km_push_list.append({"api_key": _km_api_key, "shop_id": _km_shop_id})
+                # Determine if 1C bridge is available (both integrations active)
+                _has_onec = bool(onec_push_list)
+                _onec_int = None
+                if _has_onec:
+                    r_onec = await db.execute(
+                        select(Integration).where(
+                            Integration.store_id == store_id_uuid,
+                            Integration.status == IntegrationStatus.active,
+                            Integration.integration_type == 'onec',
+                        ).limit(1)
+                    )
+                    _onec_int = r_onec.scalars().first()
+                km_bg_kwargs = {
+                    "api_key": _km_api_key,
+                    "shop_id": _km_shop_id,
+                    "products": [
+                        {
+                            "name": p.name,
+                            "price": float(p.price) if p.price else None,
+                            "purchase_price": float(p.purchase_price) if p.purchase_price else None,
+                            "barcode": p.barcode,
+                            "article": p.article,
+                            "kontur_id": p.kontur_id,
+                            "quantity": float(p.quantity) if p.quantity else 0,
+                        }
+                        for p in saved
+                    ],
+                    "via_onec": _has_onec,
+                    "onec_url": _onec_int.onec_url if _onec_int else None,
+                    "onec_username": _onec_int.onec_username if _onec_int else None,
+                    "onec_password_enc": _onec_int.onec_password_encrypted if _onec_int else None,
+                }
 
     # Commit, then refresh to get server-set columns (created_at, updated_at)
     await db.commit()
@@ -1154,9 +1167,18 @@ async def save_invoice_products(
     for kwargs in onec_push_list:
         background_tasks.add_task(_push_barcode_and_prices, **kwargs, delay=5)
 
-    # Schedule KM cashbox sync in background
-    for km_kwargs in km_push_list:
-        background_tasks.add_task(_km_sync_cashboxes, **km_kwargs)
+    # Schedule KM push as background task (direct + 1C bridge)
+    if km_bg_kwargs:
+        background_tasks.add_task(_push_to_kontur_market, **km_bg_kwargs, delay=8)
+
+    # Build sync_paths for frontend status display
+    sync_paths = []
+    if onec_push_list:
+        sync_paths.append("onec")
+    if km_bg_kwargs:
+        sync_paths.append("kontur_market")
+        if km_bg_kwargs.get("via_onec"):
+            sync_paths.append("onec_kontur_bridge")
 
     # Upsert global catalog in background (no DB session issues)
     for s in serialized:
@@ -1168,7 +1190,7 @@ async def save_invoice_products(
                 s.get("unit"), s.get("category"), s.get("description"),
             )
 
-    return {"saved": len(saved), "products": serialized}
+    return {"saved": len(saved), "products": serialized, "sync_paths": sync_paths}
 
 
 @router.post("/bulk-create")
@@ -1840,3 +1862,81 @@ async def _km_sync_cashboxes(api_key: str, shop_id: str):
         await client.sync_cashboxes(shop_id)
     except Exception as _e:
         logger.warning(f"KM sync_cashboxes failed: {_e}")
+
+
+async def _push_to_kontur_market(
+    api_key: str,
+    shop_id: str,
+    products: list,
+    via_onec: bool = False,
+    onec_url: str = None,
+    onec_username: str = None,
+    onec_password_enc: str = None,
+    delay: int = 10,
+):
+    """Background task: push invoice products to Kontur Market.
+
+    Variant 5 - 1C Bridge: if via_onec=True, also ask 1C to trigger KM sync.
+    Direct push: tries to create/update products via KM API directly.
+    """
+    import asyncio
+    if delay:
+        await asyncio.sleep(delay)
+
+    from backend.integrations.kontur_market_integration import KonturMarketClient
+    client = KonturMarketClient(api_key=api_key)
+
+    pushed = 0
+    invoice_items = []
+    for p in products:
+        try:
+            ok, kontur_id = await client.upsert_product(
+                shop_id=shop_id,
+                name=p["name"],
+                price=p.get("price"),
+                purchase_price=p.get("purchase_price"),
+                barcode=p.get("barcode"),
+                article=p.get("article"),
+                existing_kontur_id=p.get("kontur_id"),
+            )
+            if ok and kontur_id:
+                pushed += 1
+                if p.get("quantity") is not None:
+                    invoice_items.append({
+                        "kontur_id": kontur_id,
+                        "quantity": p["quantity"],
+                        "purchase_price": p.get("purchase_price"),
+                    })
+        except Exception as _e:
+            logger.warning(f"KM direct push failed for {p.get('name')}: {_e}")
+
+    if pushed:
+        logger.info(f"KM direct push: {pushed}/{len(products)} products upserted to shop {shop_id}")
+
+    if invoice_items:
+        try:
+            ok, inv_id = await client.create_incoming_invoice(shop_id, invoice_items)
+            if ok:
+                logger.info(f"KM incoming invoice created: {inv_id} ({len(invoice_items)} items)")
+            else:
+                for item in invoice_items:
+                    await client.set_stock(shop_id, item["kontur_id"], item["quantity"])
+        except Exception as _e:
+            logger.warning(f"KM invoice/stock update failed: {_e}")
+
+    await client.sync_cashboxes(shop_id)
+
+    if via_onec and onec_url and onec_username and onec_password_enc:
+        try:
+            from backend.integrations.onec_integration import OneCClient
+            from backend.core.security import decrypt_password as _dec
+            onec_client = OneCClient(
+                url=onec_url,
+                username=onec_username,
+                password=_dec(onec_password_enc),
+            )
+            synced, path = await onec_client.trigger_kontur_market_sync()
+            if synced:
+                logger.info(f"1C→KM bridge sync triggered via {path}")
+        except Exception as _e:
+            logger.warning(f"1C bridge trigger failed: {_e}")

@@ -202,6 +202,7 @@ export default function UploadInvoice() {
   const [products, setProducts] = useState([])
   const [markup, setMarkup] = useState('')
   const [roundPrices, setRoundPrices] = useState(false)
+  const [syncPaths, setSyncPaths] = useState([])
   const fileRef = useRef()
   const cameraRef = useRef()
 
@@ -301,8 +302,17 @@ export default function UploadInvoice() {
         category: p.category || null,
         existing_id: p._existing_id || null,
       }))
-      await productsAPI.saveInvoice(currentStore.id, payload, true)
-      toast.success(`Сохранено ${valid.length} товаров! Отправлено в 1С.`)
+      const res = await productsAPI.saveInvoice(currentStore.id, payload, true)
+      const paths = res.data?.sync_paths || []
+      setSyncPaths(paths)
+      const syncMsg = paths.includes('onec_kontur_bridge')
+        ? 'Отправлено в 1С + Контур.Маркет'
+        : paths.includes('kontur_market')
+        ? 'Отправлено в Контур.Маркет'
+        : paths.includes('onec')
+        ? 'Отправлено в 1С'
+        : ''
+      toast.success(`Сохранено ${valid.length} товаров!${syncMsg ? ' ' + syncMsg + '.' : ''}`)
       setStep('done')
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка сохранения')
@@ -623,14 +633,40 @@ export default function UploadInvoice() {
           <div className="text-center">
             <p className="text-xl font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>Готово!</p>
             <p className="text-sm mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              Товары сохранены и отправлены в 1С
+              Товары сохранены в базе
             </p>
           </div>
-          <button className="btn-primary w-auto px-10 mt-4" onClick={() => navigate('/products')}>
+          {/* Sync badges */}
+          {syncPaths.length > 0 && (
+            <div className="flex flex-wrap gap-2 justify-center">
+              {syncPaths.includes('onec') && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                  style={{ background: 'rgba(59,130,246,0.12)', color: '#3b82f6' }}>
+                  <Check size={12} />
+                  Отправлено в 1С
+                </div>
+              )}
+              {syncPaths.includes('kontur_market') && !syncPaths.includes('onec_kontur_bridge') && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                  style={{ background: 'rgba(139,92,246,0.12)', color: '#8b5cf6' }}>
+                  <Check size={12} />
+                  Отправлено в Контур.Маркет
+                </div>
+              )}
+              {syncPaths.includes('onec_kontur_bridge') && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                  style={{ background: 'rgba(139,92,246,0.12)', color: '#8b5cf6' }}>
+                  <Zap size={12} />
+                  1С → Контур.Маркет
+                </div>
+              )}
+            </div>
+          )}
+          <button className="btn-primary w-auto px-10 mt-2" onClick={() => navigate('/products')}>
             Перейти к товарам
           </button>
           <button className="btn-secondary w-auto px-8"
-            onClick={() => { setStep('scan'); setPhotos([]); setPreviews([]); setProducts([]) }}>
+            onClick={() => { setStep('scan'); setPhotos([]); setPreviews([]); setProducts([]); setSyncPaths([]) }}>
             Загрузить ещё
           </button>
         </div>

@@ -2249,6 +2249,27 @@ class OneCClient:
             return True, docs
         return False, []
 
+    async def trigger_kontur_market_sync(self) -> Tuple[bool, str]:
+        """Ask 1C to trigger its Kontur Market exchange (if configured).
+        Calls a custom HTTP-service endpoint that user's 1C may expose.
+        Gracefully returns (False, reason) if not available.
+        """
+        paths = [
+            "hs/1c-helper/sync-kontur-market",
+            "hs/integration/sync-kontur",
+            "hs/market/sync",
+        ]
+        for path in paths:
+            try:
+                success, _ = await self._request_silent("POST", path, json={})
+                if success:
+                    logger.info(f"1C→Kontur Market sync triggered via {path}")
+                    return True, path
+            except Exception:
+                continue
+        logger.info("1C Kontur Market sync endpoint not found — passive sync via 1C scheduler")
+        return False, "endpoint_not_found"
+
     async def sync_products(self, store_products: List) -> dict:
         """Full sync: pull from 1C and return mapping."""
         result = {"synced": 0, "errors": 0, "products": []}

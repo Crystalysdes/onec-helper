@@ -2,7 +2,7 @@ import httpx
 from typing import Tuple, List, Optional
 from loguru import logger
 
-_BASE_URL = "https://api.kontur.ru/market/v1"
+_BASE_URL = "https://api.kontur.ru/market"
 
 
 class KonturMarketClient:
@@ -35,7 +35,7 @@ class KonturMarketClient:
 
     async def test_connection(self) -> Tuple[bool, str]:
         """Test API key validity by fetching shops list."""
-        success, data = await self._request("GET", "/v1/shops")
+        success, data = await self._request("GET", "v1/shops")
         if success:
             shops = data if isinstance(data, list) else []
             if not shops:
@@ -47,7 +47,7 @@ class KonturMarketClient:
 
     async def get_shops(self) -> Tuple[bool, List[dict]]:
         """Return list of shops available for this API key."""
-        success, data = await self._request("GET", "/v1/shops")
+        success, data = await self._request("GET", "v1/shops")
         if not success:
             return False, []
         items = data if isinstance(data, list) else data.get("items", []) if isinstance(data, dict) else []
@@ -55,7 +55,7 @@ class KonturMarketClient:
 
     async def get_products(self, shop_id: str) -> Tuple[bool, List[dict]]:
         """Fetch full product list for a shop."""
-        success, data = await self._request("GET", f"/v1/shops/{shop_id}/products")
+        success, data = await self._request("GET", f"v1/shops/{shop_id}/products")
         if not success:
             logger.warning(f"KM get_products failed for shop {shop_id}: {data.get('error')}")
             return False, []
@@ -78,7 +78,7 @@ class KonturMarketClient:
 
     async def get_stock_balances(self, shop_id: str) -> Tuple[bool, List[dict]]:
         """Fetch current stock balances for a shop."""
-        success, data = await self._request("GET", f"/v1/shops/{shop_id}/product-rests")
+        success, data = await self._request("GET", f"v1/shops/{shop_id}/product-rests")
         if not success:
             logger.warning(f"KM get_stock_balances failed for shop {shop_id}: {data.get('error')}")
             return False, []
@@ -109,7 +109,7 @@ class KonturMarketClient:
             payload["barcode"] = barcode
         if article:
             payload["code"] = article
-        success, data = await self._request("POST", f"/v1/shops/{shop_id}/products", json=payload)
+        success, data = await self._request("POST", f"v1/shops/{shop_id}/products", json=payload)
         if not success:
             logger.warning(f"KM create_product failed: {data.get('error')}")
         return success, data
@@ -135,7 +135,7 @@ class KonturMarketClient:
             payload["code"] = article
         if not payload:
             return True, {}
-        success, data = await self._request("PATCH", f"/v1/shops/{shop_id}/products/{product_id}", json=payload)
+        success, data = await self._request("PATCH", f"v1/shops/{shop_id}/products/{product_id}", json=payload)
         if not success:
             logger.warning(f"KM update_product failed: {data.get('error')}")
         return success, data
@@ -143,8 +143,54 @@ class KonturMarketClient:
     async def sync_cashboxes(self, shop_id: str, product_ids: Optional[List[str]] = None) -> bool:
         """Push products to cash registers. Empty list = push all."""
         payload = product_ids or []
-        success, _ = await self._request("POST", f"/v1/shops/{shop_id}/products/syncCashboxes", json=payload)
+        success, _ = await self._request("POST", f"v1/shops/{shop_id}/products/syncCashboxes", json=payload)
         return success
+
+    async def set_stock(
+        self,
+        shop_id: str,
+        product_id: str,
+        quantity: float,
+    ) -> bool:
+        """Update stock quantity for a product (incoming invoice receipt)."""
+        payload = {"quantity": quantity}
+        success, _ = await self._request(
+            "POST", f"v1/shops/{shop_id}/products/{product_id}/set-count", json=payload
+        )
+        return success
+
+    async def create_incoming_invoice(
+        self,
+        shop_id: str,
+        products: List[dict],
+        supplier_name: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Create incoming invoice (приходная накладная) in Kontur Market.
+        products: list of {kontur_id, quantity, purchase_price}
+        Returns (success, invoice_id or error)
+        """
+        items = [
+            {
+                "productId": p["kontur_id"],
+                "quantity": p.get("quantity", 1),
+                "purchasePrice": p.get("purchase_price"),
+            }
+            for p in products
+            if p.get("kontur_id")
+        ]
+        if not items:
+            return False, "no_products_with_kontur_id"
+        payload: dict = {"shopId": shop_id, "items": items}
+        if supplier_name:
+            payload["supplierName"] = supplier_name
+        success, data = await self._request("POST", f"v1/shops/{shop_id}/incoming-invoices", json=payload)
+        if success:
+            invoice_id = str(data.get("id", "")) if isinstance(data, dict) else ""
+            logger.info(f"KM incoming invoice created: {invoice_id} ({len(items)} items)")
+            return True, invoice_id
+        error = data.get("error", "unknown") if isinstance(data, dict) else str(data)
+        logger.warning(f"KM incoming invoice failed: {error}")
+        return False, error
 
     async def upsert_product(
         self,
