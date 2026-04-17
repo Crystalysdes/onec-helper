@@ -1601,7 +1601,7 @@ async def ai_enrich_product(
 
 
 @router.get("/ai-status")
-async def ai_status(current_user: User = Depends(get_current_user)):
+async def ai_status():
     """Diagnostic endpoint: check which AI mode is active and test a quick call."""
     from backend.services.ai_service import AIService
     from backend.config import settings as _cfg
