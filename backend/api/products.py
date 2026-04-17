@@ -862,6 +862,7 @@ async def upload_invoice(
             all_pdf = False
 
     ai_service = AIService()
+    products = []
     try:
         if combined_text_parts and all_pdf:
             products = await ai_service.parse_invoice("\n\n".join(combined_text_parts))
@@ -875,7 +876,17 @@ async def upload_invoice(
                 detail="Недостаточно кредитов AI. Пополните баланс на openrouter.ai и попробуйте снова.",
             )
         logger.error(f"Invoice AI error: {exc}")
-        raise HTTPException(status_code=503, detail="Ошибка сервиса AI. Попробуйте позже.")
+        raise HTTPException(status_code=503, detail=f"Ошибка сервиса AI: {str(exc)[:120]}")
+
+    # If 2-pass returned nothing — try simple per-image fallback
+    if not products and all_image_bytes:
+        logger.info("2-pass returned empty, trying simple per-image fallback")
+        try:
+            for img_bytes in all_image_bytes:
+                partial = await ai_service.parse_invoice_from_image(img_bytes)
+                products.extend(partial)
+        except Exception as exc2:
+            logger.warning(f"Simple fallback also failed: {exc2}")
 
     # DB matching — enrich each product from store products and global catalog
     for p in products:

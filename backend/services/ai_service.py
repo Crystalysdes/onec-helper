@@ -253,14 +253,21 @@ class AIService:
                     return r
                 except Exception as e:
                     is_402 = "402" in str(e) or (hasattr(e, 'status_code') and getattr(e, 'status_code', 0) == 402)
-                    if is_402 and attempt == 0:
-                        logger.warning(f"Invoice model {model} got 402, falling back to {fallback}")
-                        last_exc = None
-                        break  # try next (model, tokens) pair
                     if _is_proxy_error(e) and n > 1:
                         logger.warning(f"AIService invoice: proxy[{idx}] failed, trying next")
                         last_exc = e
                         continue
+                    if attempt == 0:
+                        # Primary model failed for any reason — always try fallback
+                        if is_402:
+                            logger.warning(f"Invoice model {model} got 402, falling back to {fallback}")
+                        else:
+                            logger.warning(
+                                f"Invoice model {model} failed ({type(e).__name__}: {str(e)[:120]}), "
+                                f"falling back to {fallback}"
+                            )
+                        last_exc = e
+                        break  # try fallback model
                     raise
             if last_exc is None and attempt == 0:
                 continue  # 402 fallback to next model
@@ -507,15 +514,23 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         result = None
         try:
             result = await self._call_invoice(messages, max_tokens=8192)
+        except Exception as e:
+            logger.error(f"Invoice _call_invoice error: {type(e).__name__}: {e}")
+            raise  # propagate so endpoint can show proper error message
+
+        try:
             products = json.loads(_strip_json(result))
             logger.info(f"Invoice parsed: {len(products)} products extracted")
             return products
         except json.JSONDecodeError as e:
             logger.error(f"Invoice JSON parse error: {e}. Preview: {result[:400] if result else 'empty'}")
-            return []
-        except Exception as e:
-            logger.error(f"Invoice parse error: {e}")
-            return []
+            # Fallback: try single-pass parse on first image only
+            logger.info("Trying single-pass fallback on first image")
+            try:
+                return await self.parse_invoice_from_image(images_bytes[0])
+            except Exception as fe:
+                logger.error(f"Single-pass fallback also failed: {fe}")
+                return []
 
     async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
         """Parse invoice by sending image directly to Claude vision (when OCR is unavailable)."""

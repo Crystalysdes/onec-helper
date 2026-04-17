@@ -259,7 +259,10 @@ export default function UploadInvoice() {
       const res = await productsAPI.uploadInvoice(fd)
       const list = res.data.products || []
       if (list.length === 0) {
-        toast.error('Товары не распознаны — сделайте фото чётче и попробуйте снова')
+        toast.error(
+          'Товары не распознаны. Попробуйте: сделать фото чётче, снять ближе, или использовать несколько фото',
+          { duration: 5000 }
+        )
         return
       }
 
@@ -273,7 +276,15 @@ export default function UploadInvoice() {
         (globalMatch ? ` · ${globalMatch} из каталога` : '')
       )
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка обработки фото')
+      const status = e.response?.status
+      const detail = e.response?.data?.detail || ''
+      if (status === 402) {
+        toast.error('Закончились кредиты AI. Пополните баланс на openrouter.ai', { duration: 6000 })
+      } else if (status === 503 || detail.includes('AI')) {
+        toast.error(`Сервис AI временно недоступен — попробуйте через минуту`, { duration: 5000 })
+      } else {
+        toast.error(detail || 'Ошибка обработки фото')
+      }
     } finally {
       clearTimeout(timer1)
       clearTimeout(timer2)
