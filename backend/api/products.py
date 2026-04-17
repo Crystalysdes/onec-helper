@@ -813,8 +813,11 @@ async def recognize_photo(
 
     # Step 2: no barcode → compress + AI vision
     compressed = await loop.run_in_executor(None, _compress_image, contents, 512)
-    ai_service = AIService()
-    product_data = await ai_service.recognize_product_from_image("", compressed)
+    try:
+        ai_service = AIService()
+        product_data = await ai_service.recognize_product_from_image("", compressed)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     return {"recognized": product_data, "ocr_text": "", "source": "ai"}
 
 
@@ -861,13 +864,16 @@ async def upload_invoice(
         else:
             all_pdf = False
 
-    ai_service = AIService()
     products = []
     try:
+        ai_service = AIService()
         if combined_text_parts and all_pdf:
             products = await ai_service.parse_invoice("\n\n".join(combined_text_parts))
         else:
             products = await ai_service.parse_invoice_from_images(all_image_bytes)
+    except ValueError as exc:
+        logger.error(f"Invoice AI config error: {exc}")
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         err_str = str(exc)
         if "402" in err_str or "credits" in err_str.lower() or "afford" in err_str.lower():
@@ -876,7 +882,7 @@ async def upload_invoice(
                 detail="Недостаточно кредитов AI. Пополните баланс на openrouter.ai и попробуйте снова.",
             )
         logger.error(f"Invoice AI error: {exc}")
-        raise HTTPException(status_code=503, detail=f"Ошибка сервиса AI: {str(exc)[:120]}")
+        raise HTTPException(status_code=503, detail=f"Ошибка сервиса AI: {str(exc)[:200]}")
 
     # If 2-pass returned nothing — try simple per-image fallback
     if not products and all_image_bytes:
@@ -1270,7 +1276,10 @@ async def quick_add_product(
     from backend.services.ai_service import AIService
 
     await _check_store_access(UUID(store_id), current_user, db)
-    ai_service = AIService()
+    try:
+        ai_service = AIService()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     full_text = text
     if barcode:
@@ -1319,7 +1328,10 @@ async def parse_product_from_text(
     """Parse free-form text description into structured product data using AI."""
     from backend.services.ai_service import AIService
 
-    ai_service = AIService()
+    try:
+        ai_service = AIService()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     result = await ai_service.extract_product_from_text(text)
     return result
 
@@ -1549,7 +1561,10 @@ async def ai_enrich_product(
     from sqlalchemy import text as _text
     from loguru import logger as _log
 
-    ai = AIService()
+    try:
+        ai = AIService()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     prompt = (
         "Нормализуй товар для российского ритейла. "
         "Верни ТОЛЬКО JSON без пояснений, без markdown:\n"
@@ -1589,24 +1604,35 @@ async def ai_enrich_product(
 async def ai_status(current_user: User = Depends(get_current_user)):
     """Diagnostic endpoint: check which AI mode is active and test a quick call."""
     from backend.services.ai_service import AIService
-    from backend.config import settings
-    svc = AIService()
-    test_ok = False
-    test_result = None
+    from backend.config import settings as _cfg
     try:
-        result = await svc.extract_product_from_text("тест молоко 1л")
-        test_ok = bool(result.get("name"))
-        test_result = result.get("name")
-    except Exception as e:
-        test_result = str(e)
-    return {
-        "mode": svc._mode,
-        "model": svc._model,
-        "openrouter_key_set": bool(settings.OPENROUTER_API_KEY),
-        "anthropic_key_set": bool(settings.ANTHROPIC_API_KEY),
-        "test_ok": test_ok,
-        "test_name": test_result,
-    }
+        svc = AIService()
+        test_ok = False
+        test_result = None
+        try:
+            result = await svc.extract_product_from_text("тест молоко 1л")
+            test_ok = bool(result.get("name"))
+            test_result = result.get("name")
+        except Exception as e:
+            test_result = str(e)
+        return {
+            "mode": svc._mode,
+            "model": svc._model,
+            "openrouter_key_set": bool(_cfg.OPENROUTER_API_KEY),
+            "anthropic_key_set": bool(_cfg.ANTHROPIC_API_KEY),
+            "test_ok": test_ok,
+            "test_name": test_result,
+        }
+    except ValueError as exc:
+        return {
+            "mode": None,
+            "model": None,
+            "openrouter_key_set": bool(_cfg.OPENROUTER_API_KEY),
+            "anthropic_key_set": bool(_cfg.ANTHROPIC_API_KEY),
+            "test_ok": False,
+            "test_name": str(exc),
+            "error": "AI не настроен — добавьте OPENROUTER_API_KEY в /app/.env",
+        }
 
 
 @router.delete("/detail/{product_id}", status_code=status.HTTP_204_NO_CONTENT)

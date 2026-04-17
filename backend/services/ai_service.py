@@ -148,6 +148,12 @@ class AIService:
         proxies = _get_proxy_list()  # e.g. ["socks5://...", "http://..."] or [None]
         self._active_idx = 0
 
+        if not settings.OPENROUTER_API_KEY and not settings.ANTHROPIC_API_KEY:
+            raise ValueError(
+                "AI не настроен: задайте OPENROUTER_API_KEY (рекомендуется) "
+                "или ANTHROPIC_API_KEY в файле /app/.env на сервере и перезапустите контейнер."
+            )
+
         if settings.OPENROUTER_API_KEY:
             from openai import AsyncOpenAI
             self._mode = "openai"
@@ -174,8 +180,14 @@ class AIService:
             self._vision_model = settings.CLAUDE_MODEL
             self._model = settings.CLAUDE_MODEL
             self._clients = []
+            api_key = settings.ANTHROPIC_API_KEY or ""
+            if not api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY не задан в .env. "
+                    "Добавьте OPENROUTER_API_KEY или ANTHROPIC_API_KEY и перезапустите контейнер."
+                )
             for p in proxies:
-                kw = {"api_key": settings.ANTHROPIC_API_KEY, "timeout": 90.0}
+                kw = {"api_key": api_key, "timeout": 90.0}
                 if p:
                     kw["http_client"] = httpx.AsyncClient(proxy=p, timeout=90.0)
                 self._clients.append(anthropic.AsyncAnthropic(**kw))
