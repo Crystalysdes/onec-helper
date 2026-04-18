@@ -18,6 +18,8 @@ jobs:
           script: |
             cd /app
             git pull origin main
+            cd /app/miniapp && npm install --silent && VITE_API_URL="https://net1c.ru/api/v1" npm run build
+            cd /app
             docker compose -f docker-compose.timeweb.yml down
             DOCKER_BUILDKIT=0 docker compose -f docker-compose.timeweb.yml up -d --build
             docker image prune -f
