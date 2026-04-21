@@ -1,6 +1,6 @@
 # setup-ssh.ps1 — One-time SSH key setup for VPS (run once, then deploy.ps1 works without password)
 
-$VPS_HOST = "217.198.13.160"
+$VPS_HOST = "89.169.1.192"
 $VPS_USER = "root"
 $KEY_PATH = "$env:USERPROFILE\.ssh\id_ed25519"
 $PUB_KEY_PATH = "$KEY_PATH.pub"

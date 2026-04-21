@@ -172,6 +172,17 @@ export const adminAPI = {
   globalCatalog: (params) => api.get('/admin/global-catalog', { params }),
 }
 
+export const agentAPI = {
+  list: (storeId) => api.get('/agent/list', { params: { store_id: storeId } }),
+  pair: (storeId, name) => api.post('/agent/pair', { store_id: storeId, name }),
+  revoke: (agentId) => api.delete(`/agent/${agentId}`),
+  rename: (agentId, name) => api.patch(`/agent/${agentId}`, { name }),
+  tasks: (agentId, limit = 50) => api.get(`/agent/${agentId}/tasks`, { params: { limit } }),
+  testTask: (agentId, action = 'login_check', payload = {}) =>
+    api.post(`/agent/${agentId}/test-task`, { action, payload }),
+  info: () => api.get('/agent/info'),
+}
+
 export const subscriptionsAPI = {
   status: () => api.get('/subscriptions/status'),
   createPayment: () => api.post('/subscriptions/create-payment'),

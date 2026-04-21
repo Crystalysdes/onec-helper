@@ -9,6 +9,7 @@ import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
 import { storesAPI, subscriptionsAPI } from '../services/api'
+import AgentTab from './AgentTab'
 
 export default function Settings() {
   const navigate = useNavigate()
@@ -353,6 +354,7 @@ export default function Settings() {
           {[
             { id: 'stores', label: '🏪 Магазины' },
             { id: 'integration', label: '🔌 1С' },
+            { id: 'agent', label: '🤖 Агент' },
             { id: 'subscription', label: '💳 Подписка' },
           ].map(({ id, label }) => (
             <button
@@ -1023,6 +1025,13 @@ export default function Settings() {
 
             </>
           )}
+        </div>
+      )}
+
+      {/* Tab: Agent (Desktop Bridge for Kontur.Market) */}
+      {tab === 'agent' && (
+        <div className="px-4 flex flex-col gap-3 pb-6">
+          <AgentTab currentStore={currentStore} />
         </div>
       )}
     </div>

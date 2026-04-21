@@ -262,6 +262,70 @@ class ReferralCode(Base):
         return f"<ReferralCode {self.code}>"
 
 
+class AgentStatus(str, enum.Enum):
+    pending = "pending"     # paired but never connected
+    online = "online"       # recent heartbeat (< 90s)
+    offline = "offline"     # no heartbeat for a while
+    revoked = "revoked"     # user unpaired
+
+
+class AgentTaskStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class AgentDevice(Base):
+    """Desktop Bridge Agent — runs on client's PC, automates Kontur.Market via browser."""
+    __tablename__ = "agent_devices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False, default="Агент")
+    pairing_code = Column(String(16), nullable=True, unique=True, index=True)  # one-time
+    pairing_expires_at = Column(DateTime(timezone=True), nullable=True)
+    auth_token_hash = Column(String(255), nullable=True, unique=True, index=True)  # bcrypt of bearer token
+    status = Column(SAEnum(AgentStatus, name="agentstatus"), default=AgentStatus.pending, nullable=False)
+    agent_version = Column(String(50), nullable=True)
+    hostname = Column(String(255), nullable=True)
+    platform = Column(String(100), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    settings = Column(JSON, default={})
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    tasks = relationship("AgentTask", back_populates="agent", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<AgentDevice {self.name} ({self.status})>"
+
+
+class AgentTask(Base):
+    """Task queue for Desktop Bridge Agent — e.g. add product, update stock in Kontur.Market."""
+    __tablename__ = "agent_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id = Column(UUID(as_uuid=True), ForeignKey("agent_devices.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id = Column(UUID(as_uuid=True), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    action = Column(String(100), nullable=False)  # add_product, update_stock, update_price, delete_product, login_check
+    payload = Column(JSON, default={}, nullable=False)
+    status = Column(SAEnum(AgentTaskStatus, name="agenttaskstatus"), default=AgentTaskStatus.pending, nullable=False, index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    result = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+    agent = relationship("AgentDevice", back_populates="tasks")
+
+    def __repr__(self):
+        return f"<AgentTask {self.action} {self.status}>"
+
+
 class ReferralUse(Base):
     __tablename__ = "referral_uses"
 

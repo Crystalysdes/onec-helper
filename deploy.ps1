@@ -6,7 +6,7 @@ param(
     [string]$Message = ""
 )
 
-$VPS_HOST = "217.198.13.160"
+$VPS_HOST = "89.169.1.192"
 $VPS_USER = "root"
 $VPS = "$VPS_USER@$VPS_HOST"
 $SSH_KEY = "$env:USERPROFILE\.ssh\id_ed25519"
