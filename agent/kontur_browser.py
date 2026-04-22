@@ -325,6 +325,39 @@ class KonturBrowser:
         """Fill product form fields by label. Resilient to field renames via regex."""
         page = self._page
 
+        # New Контур UI: when creating a product, the modal first asks for a
+        # barcode (or a "Добавить без штрихкода" escape hatch). The main form
+        # with Save button only appears after this gate. Handle it here.
+        if mode == "create":
+            barcode = (payload.get("barcode") or "").strip()
+            try:
+                # Wait briefly for the barcode-gate step to show up.
+                gate_input = page.locator(
+                    'input[placeholder*="штрихкод" i], '
+                    'input[placeholder*="штрих-код" i], '
+                    'input[placeholder*="штрихкод" i] + *, '
+                    '[role="dialog"] input[type="text"]:visible, '
+                    '[role="dialog"] input:not([type="hidden"]):visible'
+                ).first
+                gate_input.wait_for(state="visible", timeout=4000)
+                if barcode:
+                    gate_input.fill(barcode, timeout=3000)
+                    page.wait_for_timeout(500)
+                    # Many Контур forms auto-advance on Enter after scan.
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(1500)
+                else:
+                    # No barcode in payload → click the "Добавить без штрихкода" escape
+                    no_bc = page.locator(
+                        'button:visible:has-text("Без штрихкода"), '
+                        'button:visible:has-text("без штрихкода"), '
+                        'a:visible:has-text("без штрихкода")'
+                    ).first
+                    no_bc.click(timeout=5000)
+                    page.wait_for_timeout(1500)
+            except Exception as e:
+                log.debug(f"Barcode gate step skipped/not present: {e}")
+
         def _fill_by_label(label_re: str, value) -> None:
             if value is None or value == "":
                 return
