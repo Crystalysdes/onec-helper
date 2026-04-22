@@ -34,12 +34,14 @@ CONFIG_DIR = get_config_dir()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 BROWSER_DATA_DIR = CONFIG_DIR / "browser-profile"
 LOG_DIR = CONFIG_DIR / "logs"
+SCREENSHOT_DIR = CONFIG_DIR / "screenshots"
 
 
 def ensure_dirs() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     BROWSER_DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load() -> dict:

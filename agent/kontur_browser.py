@@ -12,13 +12,14 @@ If Контур UI changes, adjust them in _selectors dict.
 import logging
 import re
 import time
+from datetime import datetime
 from typing import Optional
 
 from playwright.sync_api import (
     BrowserContext, Page, TimeoutError as PwTimeoutError, sync_playwright,
 )
 
-from config import BROWSER_DATA_DIR
+from config import BROWSER_DATA_DIR, SCREENSHOT_DIR
 
 log = logging.getLogger("agent.browser")
 
@@ -132,23 +133,53 @@ class KonturBrowser:
             raise ValueError("Product name is required")
         barcode = payload.get("barcode")
 
+        # Reset page state before each task: a previous failed task may have
+        # left a modal / unsaved form open, which blocks the "Добавить" button
+        # on the products list. Escape closes most Контур modals; goto then
+        # forces a fresh render.
+        try:
+            self._dismiss_modals()
+        except Exception as e:
+            log.debug(f"dismiss_modals ignored error: {e}")
+
         # Go to products page
         self._page.goto(KONTUR_PRODUCTS_URL, wait_until="domcontentloaded", timeout=30000)
         self._page.wait_for_timeout(1500)
 
-        # If product already exists by kontur_id or barcode — update, else add
-        kontur_id = payload.get("kontur_id")
-        if not kontur_id and barcode:
-            kontur_id = self._find_product_by_barcode(barcode)
+        try:
+            # If product already exists by kontur_id or barcode — update, else add
+            kontur_id = payload.get("kontur_id")
+            if not kontur_id and barcode:
+                kontur_id = self._find_product_by_barcode(barcode)
 
-        if kontur_id:
-            self._open_product(kontur_id)
-            self._fill_product_form(payload, mode="update")
-            return {"kontur_id": kontur_id, "action": "updated", "message": "Товар обновлён"}
+            if kontur_id:
+                self._open_product(kontur_id)
+                self._fill_product_form(payload, mode="update")
+                return {"kontur_id": kontur_id, "action": "updated", "message": "Товар обновлён"}
 
-        # Add new product
-        new_id = self._add_new_product(payload)
-        return {"kontur_id": new_id, "action": "added", "message": "Товар добавлен"}
+            # Add new product
+            new_id = self._add_new_product(payload)
+            return {"kontur_id": new_id, "action": "added", "message": "Товар добавлен"}
+        except Exception as e:
+            # Capture diagnostic screenshot so we can see what's actually on
+            # the page when the selector times out.
+            shot = self._capture_diagnostic(tag=f"upsert_{(barcode or name)[:20]}")
+            if shot:
+                raise type(e)(f"{e}  [screenshot: {shot}]") from e
+            raise
+
+    def _dismiss_modals(self) -> None:
+        """Close any open modal dialogs / confirmations before a new task."""
+        page = self._page
+        # Handle a native beforeunload / confirm dialog if one pops up during navigation
+        page.once("dialog", lambda d: d.accept())
+        # Press Escape a couple of times to close Контур's in-page modals
+        for _ in range(3):
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(200)
+            except Exception:
+                break
 
     # ── Low-level UI helpers (resilient-ish selectors) ────────────────────────
     def _find_product_by_barcode(self, barcode: str) -> Optional[str]:
@@ -179,13 +210,19 @@ class KonturBrowser:
 
     def _add_new_product(self, payload: dict) -> Optional[str]:
         page = self._page
-        # Click "Добавить товар" button
+        # Click "Добавить товар" button. Filter by :visible so we don't hit a
+        # hidden button inside a closed modal/menu from a previous task.
+        clicked = False
         try:
             add_btn = page.get_by_role("button", name=re.compile(r"Добавить товар|Добавить$", re.I)).first
+            add_btn.wait_for(state="visible", timeout=10000)
             add_btn.click(timeout=10000)
-        except Exception:
-            # Fallback: any button/link containing "Добавить"
-            page.locator('button:has-text("Добавить"), a:has-text("Добавить")').first.click(timeout=10000)
+            clicked = True
+        except Exception as e:
+            log.debug(f"role=button 'Добавить товар' not found: {e}")
+        if not clicked:
+            # Fallback: any visible button/link containing "Добавить"
+            page.locator('button:visible:has-text("Добавить"), a:visible:has-text("Добавить")').first.click(timeout=10000)
         page.wait_for_timeout(1500)
 
         self._fill_product_form(payload, mode="create")
@@ -222,13 +259,23 @@ class KonturBrowser:
         _fill_by_label(r"Количество|Остаток", payload.get("quantity"))
         _fill_by_label(r"Единица|Ед\. ?изм", payload.get("unit"))
 
-        # Save: look for "Сохранить" button
+        # Save: look for "Сохранить" button. Filter by :visible and give it a
+        # generous timeout — Контур sometimes takes several seconds to enable
+        # the Save button after the form fields are validated.
         try:
             save_btn = page.get_by_role("button", name=re.compile(r"Сохранить|Готово", re.I)).first
-            save_btn.click(timeout=5000)
+            save_btn.wait_for(state="visible", timeout=20000)
+            save_btn.click(timeout=20000)
             page.wait_for_timeout(2000)
         except Exception as e:
             log.warning(f"Save button click failed ({mode}): {e}")
+            # Fallback: try a broader selector
+            try:
+                page.locator('button:visible:has-text("Сохранить"), button:visible:has-text("Готово")').first.click(timeout=10000)
+                page.wait_for_timeout(2000)
+                return
+            except Exception:
+                pass
             raise
 
     def screenshot(self, path: str) -> None:
@@ -236,3 +283,25 @@ class KonturBrowser:
             self._page.screenshot(path=path, full_page=False)
         except Exception:
             pass
+
+    def _capture_diagnostic(self, tag: str = "error") -> Optional[str]:
+        """Save a screenshot + short HTML snippet for debugging a failed task.
+        Returns the screenshot path, or None on failure.
+        """
+        try:
+            SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tag)[:40]
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shot = SCREENSHOT_DIR / f"{ts}_{safe}.png"
+            self._page.screenshot(path=str(shot), full_page=True)
+            # Also dump URL + visible button texts for quick triage
+            try:
+                url = self._page.url
+                btns = self._page.locator("button:visible").all_inner_texts()[:20]
+                log.warning(f"Diagnostic captured: url={url} visible_buttons={btns}")
+            except Exception:
+                pass
+            return str(shot)
+        except Exception as e:
+            log.debug(f"diagnostic screenshot failed: {e}")
+            return None
