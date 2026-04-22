@@ -1,0 +1,202 @@
+<#
+.SYNOPSIS
+  1С Helper — installer for the Desktop Bridge Agent (Kontur.Market browser automation).
+
+.DESCRIPTION
+  Installs the agent into %LOCALAPPDATA%\net1c-agent:
+   * downloads portable Python if no Python 3.10+ is available system-wide
+   * downloads agent code from <ServerUrl>/api/v1/agent/package.zip
+   * creates venv, installs dependencies, downloads Chromium via Playwright
+   * writes prepair.json with the pairing code so agent auto-pairs on first run
+   * creates Desktop shortcut and startup entry
+   * launches the agent
+
+.PARAMETER PairingCode
+  One-time code from net1c.ru settings page.
+
+.PARAMETER ServerUrl
+  Base URL of the net1c server. Defaults to https://net1c.ru.
+#>
+param(
+    [Parameter(Mandatory=$true)][string]$PairingCode,
+    [string]$ServerUrl = 'https://net1c.ru'
+)
+
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
+function Write-OK  ($msg) { Write-Host "[OK] $msg" -ForegroundColor Green }
+function Write-Warn($msg) { Write-Host "[!!] $msg" -ForegroundColor Yellow }
+function Write-Err ($msg) { Write-Host "[XX] $msg" -ForegroundColor Red }
+
+Write-Host ""
+Write-Host "+-----------------------------------------------+" -ForegroundColor Magenta
+Write-Host "|  1C Helper - Agent installer (Kontur.Market)  |" -ForegroundColor Magenta
+Write-Host "+-----------------------------------------------+" -ForegroundColor Magenta
+Write-Host ""
+
+$InstallDir  = Join-Path $env:LOCALAPPDATA 'net1c-agent'
+$ConfigDir   = Join-Path $env:APPDATA     'net1c-agent'
+$VenvDir     = Join-Path $InstallDir 'venv'
+$AgentDir    = Join-Path $InstallDir 'app'
+$PortablePy  = Join-Path $InstallDir 'python'
+
+Write-Step "Preparing folders"
+New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir, $AgentDir | Out-Null
+Write-OK  "Install dir: $InstallDir"
+Write-OK  "Config dir:  $ConfigDir"
+
+# ── 1. Ensure Python 3.10+ ────────────────────────────────────────────────────
+Write-Step "Looking for Python 3.10+"
+$python = $null
+foreach ($cand in @('python', 'py', 'python3')) {
+    try {
+        $output = & $cand --version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $output -match 'Python 3\.(\d+)') {
+            $minor = [int]$Matches[1]
+            if ($minor -ge 10) {
+                $python = $cand
+                Write-OK "Using system Python: $output"
+                break
+            }
+        }
+    } catch { }
+}
+
+if (-not $python) {
+    Write-Warn "System Python not found. Downloading portable Python 3.11.9 (~15 MB)..."
+    $pyVersion  = '3.11.9'
+    $pyZipUrl   = "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-embed-amd64.zip"
+    $pyZipFile  = Join-Path $InstallDir 'python-embed.zip'
+
+    Invoke-WebRequest -Uri $pyZipUrl -OutFile $pyZipFile -UseBasicParsing
+    New-Item -ItemType Directory -Force -Path $PortablePy | Out-Null
+    Expand-Archive -Path $pyZipFile -DestinationPath $PortablePy -Force
+    Remove-Item $pyZipFile -Force
+
+    # Enable `import site` so pip can be bootstrapped
+    $pth = Get-ChildItem -Path $PortablePy -Filter 'python*._pth' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pth) {
+        (Get-Content $pth.FullName) -replace '#\s*import\s+site', 'import site' | Set-Content $pth.FullName
+    }
+
+    $getPip = Join-Path $InstallDir 'get-pip.py'
+    Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip -UseBasicParsing
+
+    $portablePyExe = Join-Path $PortablePy 'python.exe'
+    & $portablePyExe $getPip --quiet
+    Remove-Item $getPip -Force -ErrorAction SilentlyContinue
+
+    # Portable Python can't run `python -m venv` (no ensurepip). Use the interpreter directly
+    # as the "system" Python and skip venv creation — install deps straight into portable's site-packages.
+    $python = $portablePyExe
+    Write-OK "Portable Python ready: $portablePyExe"
+    $script:UsePortable = $true
+} else {
+    $script:UsePortable = $false
+}
+
+# ── 2. Download agent code ────────────────────────────────────────────────────
+Write-Step "Downloading agent code"
+$agentZip = Join-Path $InstallDir 'agent.zip'
+try {
+    Invoke-WebRequest -Uri "$ServerUrl/api/v1/agent/package.zip" -OutFile $agentZip -UseBasicParsing
+} catch {
+    Write-Err "Failed to download agent package from $ServerUrl"
+    throw
+}
+
+# Clear old code, extract fresh
+if (Test-Path $AgentDir) { Remove-Item "$AgentDir\*" -Recurse -Force -ErrorAction SilentlyContinue }
+Expand-Archive -Path $agentZip -DestinationPath $AgentDir -Force
+Remove-Item $agentZip -Force
+Write-OK "Code extracted: $AgentDir"
+
+# ── 3. Create venv (or use portable) ──────────────────────────────────────────
+if ($UsePortable) {
+    Write-Step "Using portable Python directly (venv not supported in embeddable build)"
+    $Py = $python
+} else {
+    Write-Step "Creating virtual environment"
+    & $python -m venv $VenvDir
+    $Py = Join-Path $VenvDir 'Scripts\python.exe'
+    if (-not (Test-Path $Py)) { throw "venv creation failed" }
+    Write-OK "venv ready"
+}
+
+# ── 4. Install Python dependencies ────────────────────────────────────────────
+Write-Step "Installing Python dependencies (1-2 min)"
+& $Py -m pip install --upgrade pip --quiet
+& $Py -m pip install --quiet -r (Join-Path $AgentDir 'requirements.txt')
+if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+Write-OK "Dependencies installed"
+
+# ── 5. Download Chromium ──────────────────────────────────────────────────────
+Write-Step "Downloading Chromium browser (~130 MB, 2-3 min)"
+& $Py -m playwright install chromium
+if ($LASTEXITCODE -ne 0) { Write-Warn "playwright install returned non-zero; continuing anyway" }
+Write-OK "Browser ready"
+
+# ── 6. Save pairing config for auto-pair on first run ─────────────────────────
+Write-Step "Saving pairing config"
+$prepair = [ordered]@{
+    server_url        = $ServerUrl
+    pending_pair_code = $PairingCode
+}
+$prepairFile = Join-Path $ConfigDir 'prepair.json'
+$prepair | ConvertTo-Json | Out-File -FilePath $prepairFile -Encoding UTF8
+Write-OK "Pairing code saved (will be used on first launch)"
+
+# ── 7. Create launcher script ─────────────────────────────────────────────────
+$launcher = Join-Path $InstallDir 'Start-Agent.bat'
+$launcherContent = @"
+@echo off
+title 1C Helper Agent
+cd /d "$AgentDir"
+"$Py" main.py
+"@
+$launcherContent | Out-File -FilePath $launcher -Encoding ASCII
+
+# Silent launcher (for startup, no console window)
+$launcherVbs = Join-Path $InstallDir 'Start-Agent-Silent.vbs'
+$vbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "$launcher" & Chr(34), 0, False
+"@
+$vbsContent | Out-File -FilePath $launcherVbs -Encoding ASCII
+
+# ── 8. Desktop shortcut + startup entry ───────────────────────────────────────
+Write-Step "Creating shortcuts"
+$WshShell = New-Object -ComObject WScript.Shell
+
+$desktop = [Environment]::GetFolderPath('Desktop')
+$scPath  = Join-Path $desktop '1C Helper Agent.lnk'
+$sc = $WshShell.CreateShortcut($scPath)
+$sc.TargetPath = $launcher
+$sc.WorkingDirectory = $AgentDir
+$sc.IconLocation = 'shell32.dll,21'
+$sc.Description = 'Локальный агент 1С Helper для Контур.Маркет'
+$sc.Save()
+
+$startup = [Environment]::GetFolderPath('Startup')
+$suPath  = Join-Path $startup '1C Helper Agent.lnk'
+$su = $WshShell.CreateShortcut($suPath)
+$su.TargetPath = $launcherVbs
+$su.WorkingDirectory = $InstallDir
+$su.Description = 'Автозапуск агента 1С Helper'
+$su.Save()
+Write-OK "Shortcuts: Desktop + Startup"
+
+# ── 9. Finish & launch ────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "+=================================================+" -ForegroundColor Green
+Write-Host "|  Agent installed successfully!                  |" -ForegroundColor Green
+Write-Host "+=================================================+" -ForegroundColor Green
+Write-Host "|  Launching agent now...                         |" -ForegroundColor Green
+Write-Host "|  Chromium will open - log into Kontur.Market    |" -ForegroundColor Green
+Write-Host "|  manually ONCE. Session is saved afterwards.    |" -ForegroundColor Green
+Write-Host "+=================================================+" -ForegroundColor Green
+Write-Host ""
+
+Start-Process -FilePath $launcher

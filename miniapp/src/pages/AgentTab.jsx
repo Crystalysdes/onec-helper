@@ -77,6 +77,31 @@ export default function AgentTab({ currentStore }) {
     }
   }
 
+  const [downloading, setDownloading] = useState(false)
+  const downloadInstaller = async () => {
+    if (!currentStore) return toast.error('Выберите магазин')
+    setDownloading(true)
+    try {
+      const res = await agentAPI.downloadInstaller(currentStore.id, 'Агент КМ')
+      const blob = new Blob([res.data], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'install-net1c-agent.bat'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success('Установщик скачан! Запусти его двойным кликом.')
+      // Refresh agents list — a new pending agent has been created on the server
+      setTimeout(load, 500)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Не удалось скачать установщик')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   const copyCode = async (code) => {
     try {
       await navigator.clipboard.writeText(code)
@@ -149,7 +174,7 @@ export default function AgentTab({ currentStore }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Intro / Download agent */}
+      {/* Intro / One-click installer */}
       <div className="rounded-2xl p-4 flex flex-col gap-3"
         style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.12), rgba(59,130,246,0.08))' }}>
         <div className="flex items-start gap-3">
@@ -162,20 +187,48 @@ export default function AgentTab({ currentStore }) {
               Локальный агент Контур.Маркет
             </p>
             <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--tg-theme-hint-color)' }}>
-              Запусти агента на ПК, где открыт Контур.Маркет. Все товары из накладных будут
-              автоматически добавляться в Контур через браузер — в обход ограничений API.
+              Ставится на ПК, где открыт Контур.Маркет. Все товары из накладных автоматически
+              улетают в Контур через браузер — в обход ограничений API.
             </p>
           </div>
         </div>
-        <a
-          href="https://github.com/Crystalysdes/onec-helper/tree/main/agent#readme"
-          target="_blank" rel="noreferrer"
-          className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium active:opacity-70"
+
+        {/* Primary: one-click install */}
+        <button
+          onClick={downloadInstaller}
+          disabled={downloading || !currentStore}
+          className="flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold active:opacity-70 disabled:opacity-50"
           style={{ background: '#8b5cf6', color: 'white' }}
         >
-          <Download size={15} />
-          Инструкция по установке агента
-        </a>
+          {downloading
+            ? <><RefreshCw size={16} className="animate-spin" /> Готовим установщик...</>
+            : <><Download size={16} /> Скачать установщик (Windows)</>}
+        </button>
+
+        <div className="flex flex-col gap-1 text-[11px] leading-relaxed px-1"
+          style={{ color: 'var(--tg-theme-hint-color)' }}>
+          <p>1. Скачай <b>install-net1c-agent.bat</b> и запусти двойным кликом</p>
+          <p>2. 3–5 минут установка (Python + Chromium + агент)</p>
+          <p>3. Войди в Контур.Маркет в открывшемся окне — один раз</p>
+          <p>4. Готово. Агент работает в автозапуске.</p>
+        </div>
+
+        <div className="flex items-center gap-2 text-[11px] pt-1 border-t"
+          style={{ color: 'var(--tg-theme-hint-color)', borderColor: 'rgba(139,92,246,0.2)' }}>
+          <AlertCircle size={12} />
+          <span>Windows покажет SmartScreen — нажми «Подробнее → Выполнить в любом случае».</span>
+        </div>
+
+        <details className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
+          <summary className="cursor-pointer active:opacity-70">Ручная установка / Linux / macOS</summary>
+          <a
+            href="https://github.com/Crystalysdes/onec-helper/tree/main/agent#readme"
+            target="_blank" rel="noreferrer"
+            className="inline-flex items-center gap-1 mt-1.5 underline"
+          >
+            Инструкция на GitHub →
+          </a>
+        </details>
       </div>
 
       {/* Pairing code card — shown right after pair click */}

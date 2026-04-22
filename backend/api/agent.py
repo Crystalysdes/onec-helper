@@ -482,3 +482,192 @@ async def agent_info():
         "poll_interval_seconds": 3,
         "heartbeat_interval_seconds": 30,
     }
+
+
+# ── One-click installer endpoints ─────────────────────────────────────────────
+# Layout of agent project files inside Docker image: /app/agent/
+# Layout locally (dev):                              <repo>/agent/
+def _agent_src_dir():
+    import os as _os
+    # Try common locations: Docker image, then walk up from this file
+    candidates = [
+        "/app/agent",
+        _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", "agent")),
+    ]
+    for c in candidates:
+        if _os.path.isdir(c):
+            return c
+    raise HTTPException(status_code=500, detail="Agent source not found on server")
+
+
+@router.get("/package.zip")
+async def download_agent_package():
+    """Public: returns a zip of the agent/ Python code for bootstrap installers.
+    No secrets inside — this is just source code."""
+    import io as _io
+    import os as _os
+    import zipfile as _zf
+    from fastapi.responses import StreamingResponse as _SR
+
+    src = _agent_src_dir()
+    buf = _io.BytesIO()
+    excluded_parts = {"__pycache__", ".venv", "venv", "logs", "browser-profile", "build", "dist", "installer"}
+    excluded_names = {".gitignore"}
+    with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as zf:
+        for root, dirs, files in _os.walk(src):
+            dirs[:] = [d for d in dirs if d not in excluded_parts]
+            for fname in files:
+                if fname in excluded_names or fname.endswith(".pyc"):
+                    continue
+                abs_path = _os.path.join(root, fname)
+                rel_path = _os.path.relpath(abs_path, src)
+                zf.write(abs_path, arcname=rel_path)
+    buf.seek(0)
+    return _SR(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="net1c-agent.zip"'},
+    )
+
+
+@router.get("/install-script.ps1")
+async def download_install_script():
+    """Public: returns the PowerShell installer script. Parameters (PairingCode, ServerUrl)
+    are passed from the wrapper .bat file — no secrets baked in here."""
+    import os as _os
+    from fastapi.responses import Response as _Resp
+
+    src = _agent_src_dir()
+    ps1_path = _os.path.join(src, "installer", "install.ps1")
+    if not _os.path.isfile(ps1_path):
+        raise HTTPException(status_code=404, detail="install.ps1 missing in server image")
+    with open(ps1_path, "rb") as f:
+        data = f.read()
+    return _Resp(
+        content=data,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'inline; filename="install.ps1"'},
+    )
+
+
+@router.get("/installer.bat")
+async def download_installer_bat(
+    store_id: str,
+    name: Optional[str] = "Агент",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """JWT-authed: creates a pending AgentDevice with a 15-min pairing code, then returns
+    a personalized .bat wrapper that downloads and runs install.ps1 with the code embedded.
+
+    This is the one-click installer flow: user clicks → downloads .bat → double-clicks it → done.
+    """
+    from fastapi.responses import Response as _Resp
+    from backend.config import settings as _settings
+
+    store_uuid = UUID(store_id)
+    await _check_store_access(store_uuid, current_user, db)
+
+    # Generate unique pairing code
+    for _ in range(5):
+        code = _gen_pairing_code()
+        exists = await db.execute(
+            select(AgentDevice.id).where(AgentDevice.pairing_code == code)
+        )
+        if not exists.first():
+            break
+    else:
+        raise HTTPException(status_code=500, detail="Could not generate pairing code")
+
+    ag = AgentDevice(
+        store_id=store_uuid,
+        name=name or "Агент",
+        pairing_code=code,
+        pairing_expires_at=datetime.now(timezone.utc) + timedelta(minutes=PAIRING_CODE_TTL_MINUTES),
+        status=AgentStatus.pending,
+    )
+    db.add(ag)
+    await db.commit()
+    logger.info(f"Installer generated for store={store_id} code={code}")
+
+    # Determine public base URL for the agent to call back to.
+    # BACKEND_URL often points to the internal Docker service (http://backend:8000),
+    # so prefer MINIAPP_URL (which is always the public domain) if BACKEND_URL looks internal.
+    _miniapp = (getattr(_settings, "MINIAPP_URL", "") or "").strip()
+    _backend = (getattr(_settings, "BACKEND_URL", "") or "").strip()
+    if _backend and not _backend.startswith("http://backend") and _backend.startswith(("http://", "https://")):
+        server_url = _backend
+    elif _miniapp.startswith(("http://", "https://")):
+        server_url = _miniapp
+    else:
+        server_url = "https://net1c.ru"
+    server_url = server_url.rstrip("/")
+
+    # Sanitise code for .bat (should already be alnum uppercase)
+    safe_code = "".join(c for c in code if c.isalnum()).upper()
+
+    bat_content = (
+        "@echo off\r\n"
+        "chcp 65001 > nul\r\n"
+        "setlocal enabledelayedexpansion\r\n"
+        "title 1C Helper - Installation\r\n"
+        "\r\n"
+        f"set \"PAIRING_CODE={safe_code}\"\r\n"
+        f"set \"SERVER_URL={server_url}\"\r\n"
+        "\r\n"
+        "echo.\r\n"
+        "echo  +-----------------------------------------------+\r\n"
+        "echo  ^|  1C Helper - Agent for Kontur.Market          ^|\r\n"
+        "echo  +-----------------------------------------------+\r\n"
+        "echo.\r\n"
+        "\r\n"
+        "where powershell >nul 2>&1\r\n"
+        "if errorlevel 1 (\r\n"
+        "  echo [ERROR] PowerShell not found. Please update Windows.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "set \"PS_FILE=%TEMP%\\net1c-install-%RANDOM%.ps1\"\r\n"
+        "echo [1/2] Downloading installer script...\r\n"
+        "powershell.exe -NoProfile -Command \""
+        "[Net.ServicePointManager]::SecurityProtocol='Tls12'; "
+        "try { Invoke-WebRequest -Uri '%SERVER_URL%/api/v1/agent/install-script.ps1' "
+        "-OutFile '%PS_FILE%' -UseBasicParsing } catch { exit 1 }"
+        "\"\r\n"
+        "if errorlevel 1 (\r\n"
+        "  echo [ERROR] Could not download installer from %SERVER_URL%.\r\n"
+        "  echo Check your internet connection and try again.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "echo [2/2] Running installation (takes 3-5 minutes)...\r\n"
+        "echo.\r\n"
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%PS_FILE%\" "
+        "-PairingCode \"%PAIRING_CODE%\" -ServerUrl \"%SERVER_URL%\"\r\n"
+        "\r\n"
+        "set RC=%errorlevel%\r\n"
+        "if exist \"%PS_FILE%\" del \"%PS_FILE%\" >nul 2>&1\r\n"
+        "\r\n"
+        "if %RC% neq 0 (\r\n"
+        "  echo.\r\n"
+        "  echo [ERROR] Installation failed. See messages above.\r\n"
+        "  pause\r\n"
+        "  exit /b %RC%\r\n"
+        ")\r\n"
+        "\r\n"
+        "echo.\r\n"
+        "echo Done! The agent is now running.\r\n"
+        "echo A browser window will open - log into Kontur.Market ONCE.\r\n"
+        "echo.\r\n"
+        "pause\r\n"
+    )
+
+    # Prepend UTF-8 BOM so Windows sees the non-ASCII chars correctly if user edits later
+    body = "\ufeff".encode("utf-8") + bat_content.encode("utf-8")
+    return _Resp(
+        content=body,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="install-net1c-agent.bat"'},
+    )

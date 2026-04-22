@@ -181,6 +181,12 @@ export const agentAPI = {
   testTask: (agentId, action = 'login_check', payload = {}) =>
     api.post(`/agent/${agentId}/test-task`, { action, payload }),
   info: () => api.get('/agent/info'),
+  downloadInstaller: (storeId, name = 'Агент') =>
+    api.get('/agent/installer.bat', {
+      params: { store_id: storeId, name },
+      responseType: 'blob',
+      timeout: 30000,
+    }),
 }
 
 export const subscriptionsAPI = {

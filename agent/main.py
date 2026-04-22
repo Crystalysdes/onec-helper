@@ -100,6 +100,44 @@ def interactive_pair_prompt() -> int:
     return cmd_pair(code)
 
 
+def try_auto_pair() -> bool:
+    """If the installer left a prepair.json, use it to auto-pair and delete the file."""
+    import json
+    prepair_file = config.CONFIG_DIR / "prepair.json"
+    if not prepair_file.exists():
+        return False
+    try:
+        data = json.loads(prepair_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning(f"prepair.json is malformed: {e}")
+        try:
+            prepair_file.unlink()
+        except Exception:
+            pass
+        return False
+
+    code = (data.get("pending_pair_code") or "").strip()
+    server = (data.get("server_url") or config.DEFAULT_SERVER).strip()
+    if not code:
+        return False
+
+    # Set server_url BEFORE pairing so cmd_pair uses the right endpoint
+    cfg = config.load()
+    cfg["server_url"] = server
+    config.save(cfg)
+
+    print(f"Автоматическое сопряжение с {server} ...")
+    rc = cmd_pair(code)
+    if rc == 0:
+        try:
+            prepair_file.unlink()
+        except Exception:
+            pass
+        return True
+    print("Не удалось выполнить автоматическое сопряжение. Введи код вручную ниже.")
+    return False
+
+
 def main() -> int:
     print(BANNER)
     args = sys.argv[1:]
@@ -123,9 +161,11 @@ def main() -> int:
 
     # Default: run the agent
     if not config.is_paired():
-        rc = interactive_pair_prompt()
-        if rc != 0:
-            return rc
+        # First, try auto-pair from installer's prepair.json
+        if not try_auto_pair():
+            rc = interactive_pair_prompt()
+            if rc != 0:
+                return rc
 
     cfg = config.load()
     server = cfg.get("server_url") or config.DEFAULT_SERVER
