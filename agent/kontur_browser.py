@@ -273,19 +273,40 @@ class KonturBrowser:
 
     def _add_new_product(self, payload: dict) -> Optional[str]:
         page = self._page
-        # Click "Добавить товар" button. Filter by :visible so we don't hit a
-        # hidden button inside a closed modal/menu from a previous task.
+        # The "add product" button in the current Контур.Маркет UI is labeled
+        # «+ товар» (with a plus icon, no word "Добавить"). Older UI used
+        # «Добавить товар». We try several selectors in order of specificity.
+        add_selectors = [
+            # New UI — exact toolbar button with "+ товар"
+            'button:visible:has-text("+ товар")',
+            'a:visible:has-text("+ товар")',
+            # Regex form — handles extra whitespace / icon markup
+            ('role', re.compile(r"(^|\s)(\+\s*)?товар\s*$", re.I)),
+            # Legacy UI
+            ('role', re.compile(r"Добавить\s+товар|Добавить$", re.I)),
+            'button:visible:has-text("Добавить товар")',
+            'button:visible:has-text("Добавить"), a:visible:has-text("Добавить")',
+        ]
         clicked = False
-        try:
-            add_btn = page.get_by_role("button", name=re.compile(r"Добавить товар|Добавить$", re.I)).first
-            add_btn.wait_for(state="visible", timeout=10000)
-            add_btn.click(timeout=10000)
-            clicked = True
-        except Exception as e:
-            log.debug(f"role=button 'Добавить товар' not found: {e}")
+        last_err = None
+        for sel in add_selectors:
+            try:
+                if isinstance(sel, tuple) and sel[0] == 'role':
+                    loc = page.get_by_role("button", name=sel[1]).first
+                else:
+                    loc = page.locator(sel).first
+                loc.wait_for(state="visible", timeout=4000)
+                loc.click(timeout=4000)
+                clicked = True
+                log.debug(f"Add-product selector matched: {sel}")
+                break
+            except Exception as e:
+                last_err = e
+                continue
         if not clicked:
-            # Fallback: any visible button/link containing "Добавить"
-            page.locator('button:visible:has-text("Добавить"), a:visible:has-text("Добавить")').first.click(timeout=10000)
+            raise TimeoutError(
+                f"Could not find 'Add product' button on products page. Last error: {last_err}"
+            )
         page.wait_for_timeout(1500)
 
         self._fill_product_form(payload, mode="create")
