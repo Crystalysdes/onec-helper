@@ -197,9 +197,37 @@ class AIService:
         # keep self._client as alias for the current active client
         self._client = self._clients[0]
 
+        # ── Dedicated Anthropic clients for INVOICE PARSING ──────────────────
+        # Per product decision: invoice scanning MUST go directly to Anthropic
+        # (never via OpenRouter), using the same proxy list. All other AI calls
+        # can stay on OpenRouter if it is configured.
+        self._invoice_clients = []
+        self._invoice_model = settings.ANTHROPIC_INVOICE_MODEL
+        self._invoice_active_idx = 0
+        if settings.ANTHROPIC_API_KEY:
+            import anthropic as _anthropic
+            for p in proxies:
+                kw = {"api_key": settings.ANTHROPIC_API_KEY, "timeout": 90.0}
+                if p:
+                    kw["http_client"] = httpx.AsyncClient(proxy=p, timeout=90.0)
+                self._invoice_clients.append(_anthropic.AsyncAnthropic(**kw))
+            logger.info(
+                f"AIService: invoice pipeline → Anthropic direct, model={self._invoice_model}"
+                f"{(' proxies=' + str(proxies)) if proxies != [None] else ''}"
+            )
+        else:
+            logger.warning(
+                "AIService: ANTHROPIC_API_KEY is not set — invoice parsing will FALL BACK "
+                "to the main provider. Set ANTHROPIC_API_KEY in .env for direct-to-Anthropic invoice parsing."
+            )
+
     def _img_block(self, b64: str) -> dict:
         if self._mode == "openai":
             return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
+
+    def _invoice_img_block(self, b64: str) -> dict:
+        """Invoice pipeline always goes to Anthropic, so always return Anthropic-format image block."""
         return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
 
     async def _do_call_openai(self, client, model: str, max_tokens: int, msgs: list) -> str:
@@ -240,51 +268,41 @@ class AIService:
         raise last_exc or RuntimeError("All proxies exhausted")
 
     async def _call_invoice(self, messages: list, max_tokens: int = 8192) -> str:
-        """Call dedicated Claude Opus 4 model for invoice parsing.
-        Falls back to fast model on 402 (insufficient credits)."""
-        primary = settings.OPENROUTER_INVOICE_MODEL if self._mode == "openai" else settings.ANTHROPIC_INVOICE_MODEL
-        fallback = self._fast_model
+        """Invoice parsing goes DIRECTLY to Anthropic (never OpenRouter), with proxy failover.
 
-        for attempt, (model, tokens) in enumerate([
-            (primary, max_tokens),
-            (fallback, min(max_tokens, 4096)),
-        ]):
-            n = len(self._clients)
-            last_exc = None
-            for pi in range(n):
-                idx = (self._active_idx + pi) % n
-                client = self._clients[idx]
-                try:
-                    if self._mode == "openai":
-                        r = await self._do_call_openai(client, model, tokens, messages)
-                    else:
-                        r = await self._do_call_anthropic(client, model, tokens, messages)
-                    if idx != self._active_idx:
-                        self._active_idx = idx
-                        self._client = client
-                    return r
-                except Exception as e:
-                    is_402 = "402" in str(e) or (hasattr(e, 'status_code') and getattr(e, 'status_code', 0) == 402)
-                    if _is_proxy_error(e) and n > 1:
-                        logger.warning(f"AIService invoice: proxy[{idx}] failed, trying next")
-                        last_exc = e
-                        continue
-                    if attempt == 0:
-                        # Primary model failed for any reason — always try fallback
-                        if is_402:
-                            logger.warning(f"Invoice model {model} got 402, falling back to {fallback}")
-                        else:
-                            logger.warning(
-                                f"Invoice model {model} failed ({type(e).__name__}: {str(e)[:120]}), "
-                                f"falling back to {fallback}"
-                            )
-                        last_exc = e
-                        break  # try fallback model
-                    raise
-            if last_exc is None and attempt == 0:
-                continue  # 402 fallback to next model
-        if last_exc:
-            raise last_exc
+        The messages argument MUST already be in Anthropic format (use
+        self._invoice_img_block for image parts). Falls back to the main
+        provider only as a last resort if Anthropic is not configured at all.
+        """
+        # Fallback path: no Anthropic key configured → use the generic _call
+        if not self._invoice_clients:
+            logger.warning(
+                "Invoice parse: no Anthropic clients configured — falling back to main provider"
+            )
+            return await self._call(messages, max_tokens=max_tokens)
+
+        model = self._invoice_model
+        n = len(self._invoice_clients)
+        last_exc = None
+        for pi in range(n):
+            idx = (self._invoice_active_idx + pi) % n
+            client = self._invoice_clients[idx]
+            try:
+                r = await self._do_call_anthropic(client, model, max_tokens, messages)
+                if idx != self._invoice_active_idx:
+                    logger.info(f"AIService invoice: switched to proxy index {idx}")
+                    self._invoice_active_idx = idx
+                return r
+            except Exception as e:
+                if _is_proxy_error(e) and n > 1:
+                    logger.warning(
+                        f"AIService invoice: proxy[{idx}] failed ({type(e).__name__}: {str(e)[:120]}), trying next"
+                    )
+                    last_exc = e
+                    continue
+                logger.error(f"AIService invoice: Anthropic call failed ({type(e).__name__}: {str(e)[:200]})")
+                raise
+        raise last_exc or RuntimeError("All Anthropic proxies exhausted for invoice call")
 
     async def parse_invoice(self, ocr_text: str) -> List[dict]:
         """Parse invoice text and extract product list using Claude."""
@@ -322,7 +340,11 @@ class AIService:
 Если товаров не найдено, верни пустой массив: []"""
 
         try:
-            content = await self._call([{"role": "user", "content": prompt}], max_tokens=4096)
+            # Route invoice text parsing through the dedicated Anthropic pipeline
+            # so the entire invoice flow (text and vision) consistently uses Claude.
+            content = await self._call_invoice(
+                [{"role": "user", "content": prompt}], max_tokens=4096
+            )
             return json.loads(_strip_json(content))
         except json.JSONDecodeError as e:
             logger.error(f"AI invoice parse JSON error: {e}")
@@ -398,7 +420,7 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
   "doc_type": null
 }"""
 
-        content = [self._img_block(b64), {"type": "text", "text": prompt}]
+        content = [self._invoice_img_block(b64), {"type": "text", "text": prompt}]
         messages = [{"role": "user", "content": content}]
         try:
             result = await self._call_invoice(messages, max_tokens=1024)
@@ -519,7 +541,7 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         content = []
         for img_bytes in images_bytes:
             b64 = base64.standard_b64encode(img_bytes).decode()
-            content.append(self._img_block(b64))
+            content.append(self._invoice_img_block(b64))
         content.append({"type": "text", "text": prompt})
 
         messages = [{"role": "user", "content": content}]
@@ -572,12 +594,12 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         messages = [{
             "role": "user",
             "content": [
-                self._img_block(base64_image),
+                self._invoice_img_block(base64_image),
                 {"type": "text", "text": prompt},
             ],
         }]
         try:
-            content = await self._call(messages, max_tokens=4096)
+            content = await self._call_invoice(messages, max_tokens=4096)
             return json.loads(_strip_json(content))
         except json.JSONDecodeError as e:
             logger.error(f"AI invoice image parse JSON error: {e}")
