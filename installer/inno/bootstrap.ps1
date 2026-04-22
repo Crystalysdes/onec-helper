@@ -37,19 +37,35 @@ try {
     } else {
         New-Item -ItemType Directory -Force -Path $PortablePy | Out-Null
     }
-    Expand-Archive -Path $PyZip -DestinationPath $PortablePy -Force
-
-    # Enable 'import site' so pip can be bootstrapped
-    $pthFile = Get-ChildItem -Path $PortablePy -Filter 'python*._pth' | Select-Object -First 1
-    if ($pthFile) {
-        $content = Get-Content $pthFile.FullName
-        $content = $content -replace '#\s*import\s+site', 'import site'
-        $content | Set-Content $pthFile.FullName
-    }
+    # Use .NET ZipFile for reliable extraction on non-ASCII paths (e.g. Cyrillic usernames)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($PyZip, $PortablePy)
 
     $PyExe  = Join-Path $PortablePy 'python.exe'
     $PywExe = Join-Path $PortablePy 'pythonw.exe'
-    if (-not (Test-Path $PyExe)) { throw "Python exe not found at $PyExe" }
+    if (-not (Test-Path $PyExe))  { throw "Python exe not found at $PyExe after extraction" }
+    if (-not (Test-Path $PywExe)) { throw "pythonw.exe not found at $PywExe after extraction" }
+
+    # Rewrite python*._pth so the embedded Python can find:
+    #   - its stdlib (python311.zip, .)
+    #   - site-packages installed by pip
+    #   - the agent source folder (..\app, relative to python.exe)
+    #   - 'import site' so get-pip / pip work
+    # NOTE: the default ._pth ships in ISOLATED mode which does NOT add the
+    # script's own directory to sys.path, so we must list '..\app' explicitly,
+    # otherwise `pythonw.exe main.py` fails with ModuleNotFoundError and exits
+    # silently (this is exactly what made the installer look broken).
+    $pthFile = Get-ChildItem -Path $PortablePy -Filter 'python*._pth' | Select-Object -First 1
+    if (-not $pthFile) { throw "python*._pth not found in $PortablePy" }
+    @(
+        'python311.zip',
+        '.',
+        'Lib\site-packages',
+        '..\app',
+        '',
+        'import site'
+    ) | Set-Content -Path $pthFile.FullName -Encoding ASCII
+    Log "Rewrote $($pthFile.Name) with agent sys.path entries"
 
     # -- 2. Bootstrap pip ------------------------------------------------------
     Log "Bootstrapping pip..."
@@ -79,6 +95,22 @@ try {
     } else {
         Log "No pairing code in filename; user will need to paste it in the GUI manually."
     }
+
+    # -- 6. Smoke test: verify the agent can actually be imported -------------
+    # If this fails, the installer will report an error instead of "install OK"
+    # followed by a silent no-op on double-click.
+    Log "Running import smoke test..."
+    $smoke = @'
+import sys, importlib
+sys.path.insert(0, r"{0}")
+for m in ("config", "client", "runner", "gui", "PySide6.QtWidgets", "httpx", "playwright"):
+    importlib.import_module(m)
+print("OK")
+'@ -f $AgentDir
+    $smokeOut = & $PyExe -c $smoke 2>&1
+    $smokeOut | Out-File -Append -FilePath (Join-Path $InstallDir 'bootstrap.log') -Encoding UTF8
+    if ($LASTEXITCODE -ne 0) { throw "Smoke test failed: $smokeOut" }
+    Log "Smoke test passed."
 
     Log "Bootstrap complete."
     exit 0
