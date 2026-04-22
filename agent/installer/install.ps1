@@ -165,11 +165,15 @@ Write-OK "Code extracted: $AgentDir"
 if ($UsePortable) {
     Write-Step "Using portable Python directly (venv not supported in embeddable build)"
     $Py = $python
+    $Pyw = Join-Path (Split-Path $python) 'pythonw.exe'
+    if (-not (Test-Path $Pyw)) { $Pyw = $Py }  # fallback
 } else {
     Write-Step "Creating virtual environment"
     & $python -m venv $VenvDir
     $Py = Join-Path $VenvDir 'Scripts\python.exe'
+    $Pyw = Join-Path $VenvDir 'Scripts\pythonw.exe'
     if (-not (Test-Path $Py)) { throw "venv creation failed" }
+    if (-not (Test-Path $Pyw)) { $Pyw = $Py }
     Write-OK "venv ready"
 }
 
@@ -204,23 +208,16 @@ $prepairFile = Join-Path $ConfigDir 'prepair.json'
 $prepair | ConvertTo-Json | Out-File -FilePath $prepairFile -Encoding UTF8
 Write-OK "Pairing code saved (will be used on first launch)"
 
-# -- 7. Create launcher script --------------------------------------------------
-$launcher = Join-Path $InstallDir 'Start-Agent.bat'
+# -- 7. Create launcher (pythonw = GUI, no console window) ---------------------
+# GUI launcher -- double-click opens the Qt window; no black CMD box.
+# We use a .cmd wrapper that invokes pythonw via `start` so the wrapper exits
+# immediately, leaving only the GUI process visible.
+$launcher = Join-Path $InstallDir 'Start-Agent.cmd'
 $launcherContent = @"
 @echo off
-title 1C Helper Agent
-cd /d "$AgentDir"
-"$Py" main.py
+start "" /D "$AgentDir" "$Pyw" main.py
 "@
-$launcherContent | Out-File -FilePath $launcher -Encoding ASCII
-
-# Silent launcher (for startup, no console window)
-$launcherVbs = Join-Path $InstallDir 'Start-Agent-Silent.vbs'
-$vbsContent = @"
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run Chr(34) & "$launcher" & Chr(34), 0, False
-"@
-$vbsContent | Out-File -FilePath $launcherVbs -Encoding ASCII
+[System.IO.File]::WriteAllText($launcher, $launcherContent, [System.Text.Encoding]::ASCII)
 
 # -- 8. Desktop shortcut + startup entry ----------------------------------------
 Write-Step "Creating shortcuts"
@@ -229,18 +226,23 @@ $WshShell = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
 $scPath  = Join-Path $desktop '1C Helper Agent.lnk'
 $sc = $WshShell.CreateShortcut($scPath)
-$sc.TargetPath = $launcher
+$sc.TargetPath = $Pyw
+$sc.Arguments = '"main.py"'
 $sc.WorkingDirectory = $AgentDir
 $sc.IconLocation = 'shell32.dll,21'
 $sc.Description = 'net1c Helper agent for Kontur.Market'
+$sc.WindowStyle = 1   # Normal window
 $sc.Save()
 
 $startup = [Environment]::GetFolderPath('Startup')
 $suPath  = Join-Path $startup '1C Helper Agent.lnk'
 $su = $WshShell.CreateShortcut($suPath)
-$su.TargetPath = $launcherVbs
-$su.WorkingDirectory = $InstallDir
+$su.TargetPath = $Pyw
+$su.Arguments = '"main.py"'
+$su.WorkingDirectory = $AgentDir
+$su.IconLocation = 'shell32.dll,21'
 $su.Description = 'net1c Helper agent auto-start'
+$su.WindowStyle = 7   # Minimized (will go straight to tray)
 $su.Save()
 Write-OK "Shortcuts: Desktop + Startup"
 
@@ -249,10 +251,11 @@ Write-Host ""
 Write-Host "+=================================================+" -ForegroundColor Green
 Write-Host "|  Agent installed successfully!                  |" -ForegroundColor Green
 Write-Host "+=================================================+" -ForegroundColor Green
-Write-Host "|  Launching agent now...                         |" -ForegroundColor Green
+Write-Host "|  Launching agent GUI now...                     |" -ForegroundColor Green
 Write-Host "|  Chromium will open - log into Kontur.Market    |" -ForegroundColor Green
 Write-Host "|  manually ONCE. Session is saved afterwards.    |" -ForegroundColor Green
 Write-Host "+=================================================+" -ForegroundColor Green
 Write-Host ""
 
-Start-Process -FilePath $launcher
+# Launch the GUI directly via pythonw (no intermediate console)
+Start-Process -FilePath $Pyw -ArgumentList 'main.py' -WorkingDirectory $AgentDir

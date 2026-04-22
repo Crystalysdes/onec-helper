@@ -1,11 +1,12 @@
 """1С Helper Desktop Agent — entry point.
 
 Usage:
-  python main.py              - run the agent (starts pairing if not paired)
+  python main.py              - launch the GUI (default)
+  python main.py --cli        - run headless CLI mode (old behavior)
   python main.py pair CODE    - pair with code
   python main.py status       - show current pairing status
   python main.py unpair       - remove local config
-  python main.py --headless   - run browser headless (only useful after first login)
+  python main.py --headless   - CLI with headless browser
 """
 import logging
 import os
@@ -139,14 +140,17 @@ def try_auto_pair() -> bool:
 
 
 def main() -> int:
-    print(BANNER)
     args = sys.argv[1:]
     headless = "--headless" in args
     if headless:
         args.remove("--headless")
+    cli_mode = "--cli" in args
+    if cli_mode:
+        args.remove("--cli")
 
     if args:
         if args[0] == "pair" and len(args) >= 2:
+            print(BANNER)
             return cmd_pair(args[1])
         if args[0] == "status":
             return cmd_status()
@@ -159,9 +163,22 @@ def main() -> int:
         print(__doc__)
         return 1
 
-    # Default: run the agent
+    # Default: launch GUI (unless --cli requested)
+    if not cli_mode:
+        try:
+            from gui import run_gui
+            return run_gui()
+        except ImportError as e:
+            print(f"GUI недоступен (PySide6 не установлен): {e}")
+            print("Запускаю в режиме CLI...\n")
+            # Fall through to CLI
+        except Exception as e:
+            print(f"GUI не удалось запустить: {e}\nЗапускаю в режиме CLI...\n")
+            # Fall through to CLI
+
+    # CLI mode
+    print(BANNER)
     if not config.is_paired():
-        # First, try auto-pair from installer's prepair.json
         if not try_auto_pair():
             rc = interactive_pair_prompt()
             if rc != 0:
