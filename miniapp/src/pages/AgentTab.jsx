@@ -78,27 +78,66 @@ export default function AgentTab({ currentStore }) {
   }
 
   const [downloading, setDownloading] = useState(false)
+
+  /** Extract filename from Content-Disposition header, falling back to a default. */
+  const _filenameFromResponse = (res, fallback) => {
+    const cd = res.headers?.['content-disposition'] || res.headers?.get?.('content-disposition') || ''
+    const m = /filename="?([^";]+)"?/i.exec(cd)
+    return (m && m[1]) || fallback
+  }
+
+  const _triggerDownload = (data, filename) => {
+    const blob = new Blob([data], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
   const downloadInstaller = async () => {
     if (!currentStore) return toast.error('Выберите магазин')
     setDownloading(true)
     try {
-      const res = await agentAPI.downloadInstaller(currentStore.id, 'Агент КМ')
-      const blob = new Blob([res.data], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'install-net1c-agent.bat'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      const res = await agentAPI.downloadInstallerExe(currentStore.id, 'Агент КМ')
+      const filename = _filenameFromResponse(res, 'net1c-agent-setup.exe')
+      _triggerDownload(res.data, filename)
       toast.success('Установщик скачан! Запусти его двойным кликом.')
-      // Refresh agents list — a new pending agent has been created on the server
       setTimeout(load, 500)
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Не удалось скачать установщик')
+      // If .exe isn't built yet (CI still running), fall back to .bat silently
+      const msg = e.response?.data?.detail || e.message || ''
+      if (e.response?.status === 503 || /not.*available|not reachable/i.test(msg)) {
+        toast((t) => '.exe-установщик ещё не готов, качаю резервный .bat')
+        try {
+          const res = await agentAPI.downloadInstallerBat(currentStore.id, 'Агент КМ')
+          _triggerDownload(res.data, _filenameFromResponse(res, 'install-net1c-agent.bat'))
+          toast.success('Резервный .bat-установщик скачан')
+          setTimeout(load, 500)
+          return
+        } catch (ee) {
+          toast.error(ee.response?.data?.detail || 'Не удалось скачать установщик')
+          return
+        }
+      }
+      toast.error(msg || 'Не удалось скачать установщик')
     } finally {
       setDownloading(false)
+    }
+  }
+
+  const downloadInstallerBat = async () => {
+    if (!currentStore) return toast.error('Выберите магазин')
+    try {
+      const res = await agentAPI.downloadInstallerBat(currentStore.id, 'Агент КМ')
+      _triggerDownload(res.data, _filenameFromResponse(res, 'install-net1c-agent.bat'))
+      toast.success('Резервный .bat-установщик скачан')
+      setTimeout(load, 500)
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Не удалось скачать .bat')
     }
   }
 
@@ -207,11 +246,12 @@ export default function AgentTab({ currentStore }) {
 
         <div className="flex flex-col gap-1 text-[11px] leading-relaxed px-1"
           style={{ color: 'var(--tg-theme-hint-color)' }}>
-          <p>1. Скачай <b>install-net1c-agent.bat</b> и запусти двойным кликом</p>
-          <p>2. 5–8 минут установка (Python + Qt GUI + Chromium, ~250 МБ)</p>
-          <p>3. Откроется окно приложения с панелью статусов</p>
-          <p>4. Войди в Контур.Маркет — один раз</p>
-          <p>5. Готово. Приложение живёт в трее и работает в фоне.</p>
+          <p>1. Скачай <b>net1c-agent-setup.exe</b> и запусти двойным кликом</p>
+          <p>2. Пройди мастер установки (2 шага: папка → установить)</p>
+          <p>3. 3–5 минут — Python, зависимости, Chromium ставятся автоматически</p>
+          <p>4. Откроется окно приложения, сопряжение пройдёт само</p>
+          <p>5. Войди в Контур.Маркет в открытом Chromium — один раз</p>
+          <p>6. Готово. Приложение в трее, деинсталлятор в Панели управления.</p>
         </div>
 
         <div className="flex items-center gap-2 text-[11px] pt-1 border-t"
@@ -221,14 +261,23 @@ export default function AgentTab({ currentStore }) {
         </div>
 
         <details className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-          <summary className="cursor-pointer active:opacity-70">Ручная установка / Linux / macOS</summary>
-          <a
-            href="https://github.com/Crystalysdes/onec-helper/tree/main/agent#readme"
-            target="_blank" rel="noreferrer"
-            className="inline-flex items-center gap-1 mt-1.5 underline"
-          >
-            Инструкция на GitHub →
-          </a>
+          <summary className="cursor-pointer active:opacity-70">Альтернативы (Linux / macOS / резервный .bat)</summary>
+          <div className="flex flex-col gap-2 mt-2">
+            <button
+              onClick={downloadInstallerBat}
+              className="text-left underline active:opacity-70"
+              style={{ color: 'var(--tg-theme-link-color, #8b5cf6)' }}
+            >
+              Скачать старый .bat-установщик (если .exe не работает)
+            </button>
+            <a
+              href="https://github.com/Crystalysdes/onec-helper/tree/main/agent#readme"
+              target="_blank" rel="noreferrer"
+              className="underline"
+            >
+              Ручная установка на Linux / macOS →
+            </a>
+          </div>
         </details>
       </div>
 

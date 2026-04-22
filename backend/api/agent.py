@@ -677,3 +677,107 @@ async def download_installer_bat(
         media_type="application/octet-stream",
         headers={"Content-Disposition": 'attachment; filename="install-net1c-agent.bat"'},
     )
+
+
+# ── Inno Setup .exe installer proxy ───────────────────────────────────────────
+# Small in-process cache for the GitHub-Release-hosted .exe (refresh every 5 min)
+_installer_exe_cache: dict = {"body": None, "ts": 0.0}
+_INSTALLER_EXE_URL = (
+    "https://github.com/Crystalysdes/onec-helper/releases/download/"
+    "agent-latest/net1c-agent-setup.exe"
+)
+
+
+async def _fetch_installer_exe() -> bytes:
+    """Fetch and cache the Inno Setup .exe from the rolling 'agent-latest' GitHub Release."""
+    import time
+    import httpx as _httpx
+
+    now = time.time()
+    cached = _installer_exe_cache.get("body")
+    if cached and (now - _installer_exe_cache.get("ts", 0) < 300):
+        return cached
+
+    try:
+        async with _httpx.AsyncClient(follow_redirects=True, timeout=120) as cli:
+            resp = await cli.get(_INSTALLER_EXE_URL)
+    except Exception as e:
+        # Fallback to cache if available
+        if cached:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail=f"Installer not reachable from server: {e}",
+        )
+
+    if resp.status_code != 200:
+        if cached:
+            return cached
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Installer .exe not yet available (GitHub returned {resp.status_code}). "
+                "Build may still be running — try again in a few minutes."
+            ),
+        )
+
+    _installer_exe_cache["body"] = resp.content
+    _installer_exe_cache["ts"] = now
+    return resp.content
+
+
+@router.get("/installer.exe")
+async def download_installer_exe(
+    store_id: str,
+    name: Optional[str] = "Агент",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """JWT-authed: creates a pending AgentDevice with a pairing code, then streams the
+    prebuilt Inno Setup .exe from our GitHub Release with the code encoded in the filename
+    (so the installer auto-pairs on first run — no code-paste needed).
+
+    Filename format: ``net1c-agent-setup-<CODE>.exe``.  The Inno Setup script parses
+    its own filename at install time to extract the code.
+    """
+    from fastapi.responses import Response as _Resp
+
+    store_uuid = UUID(store_id)
+    await _check_store_access(store_uuid, current_user, db)
+
+    # 1. Reserve a pairing code (same flow as /installer.bat)
+    for _ in range(5):
+        code = _gen_pairing_code()
+        exists = await db.execute(
+            select(AgentDevice.id).where(AgentDevice.pairing_code == code)
+        )
+        if not exists.first():
+            break
+    else:
+        raise HTTPException(status_code=500, detail="Could not generate pairing code")
+
+    ag = AgentDevice(
+        store_id=store_uuid,
+        name=name or "Агент",
+        pairing_code=code,
+        pairing_expires_at=datetime.now(timezone.utc) + timedelta(minutes=PAIRING_CODE_TTL_MINUTES),
+        status=AgentStatus.pending,
+    )
+    db.add(ag)
+    await db.commit()
+    logger.info(f"Installer .exe generated for store={store_id} code={code}")
+
+    # 2. Fetch the prebuilt installer (cached in memory)
+    exe_bytes = await _fetch_installer_exe()
+
+    # 3. Stream it back with the code baked into the filename
+    safe_code = "".join(c for c in code if c.isalnum()).upper()
+    filename = f"net1c-agent-setup-{safe_code}.exe"
+    return _Resp(
+        content=exe_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
