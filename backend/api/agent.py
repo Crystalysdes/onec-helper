@@ -543,6 +543,11 @@ async def download_install_script():
         raise HTTPException(status_code=404, detail="install.ps1 missing in server image")
     with open(ps1_path, "rb") as f:
         data = f.read()
+    # Ensure UTF-8 BOM so Windows PowerShell 5.1 does NOT fall back to the
+    # system ANSI code-page (cp1251 on Russian Windows) when parsing the file.
+    bom = b"\xef\xbb\xbf"
+    if not data.startswith(bom):
+        data = bom + data
     return _Resp(
         content=data,
         media_type="text/plain; charset=utf-8",
@@ -664,8 +669,9 @@ async def download_installer_bat(
         "pause\r\n"
     )
 
-    # Prepend UTF-8 BOM so Windows sees the non-ASCII chars correctly if user edits later
-    body = "\ufeff".encode("utf-8") + bat_content.encode("utf-8")
+    # NB: do NOT prepend a UTF-8 BOM — cmd.exe would treat it as the first char of the script
+    # and the line "@echo off" would become invalid.  The script is pure ASCII anyway.
+    body = bat_content.encode("ascii", errors="replace")
     return _Resp(
         content=body,
         media_type="application/octet-stream",
