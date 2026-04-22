@@ -679,6 +679,19 @@ def run_gui() -> int:
     w = AgentMainWindow()
     w.show()
 
+    # Make sure the background worker is stopped and joined BEFORE the event
+    # loop tears down its QThreads, otherwise Qt prints
+    #   "QThread: Destroyed while thread is still running"
+    # and the process may segfault on some Windows builds.
+    def _graceful_shutdown():
+        if w.worker is not None:
+            try:
+                w.worker.stop()
+                w.worker.wait(5000)
+            except Exception:
+                pass
+    app.aboutToQuit.connect(_graceful_shutdown)
+
     return app.exec()
 
 
