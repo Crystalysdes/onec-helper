@@ -47,18 +47,22 @@ New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir, $AgentDir | O
 Write-OK  "Install dir: $InstallDir"
 Write-OK  "Config dir:  $ConfigDir"
 
-# -- 1. Ensure Python 3.10+ -----------------------------------------------------
-Write-Step "Looking for Python 3.10+"
+# -- 1. Ensure Python 3.10 / 3.11 / 3.12 ---------------------------------------
+# We reject 3.13+ because several deps (e.g. greenlet) often lack prebuilt wheels
+# for very new Python, which would force users to install Visual C++ Build Tools.
+Write-Step "Looking for Python 3.10 / 3.11 / 3.12"
 $python = $null
 foreach ($cand in @('python', 'py', 'python3')) {
     try {
         $output = & $cand --version 2>&1
         if ($LASTEXITCODE -eq 0 -and $output -match 'Python 3\.(\d+)') {
             $minor = [int]$Matches[1]
-            if ($minor -ge 10) {
+            if ($minor -ge 10 -and $minor -le 12) {
                 $python = $cand
                 Write-OK "Using system Python: $output"
                 break
+            } elseif ($minor -ge 13) {
+                Write-Warn "System has $output -- too new for some C-extensions. Will use portable 3.11 instead."
             }
         }
     } catch { }
@@ -66,7 +70,7 @@ foreach ($cand in @('python', 'py', 'python3')) {
 
 $script:UsePortable = $false
 if (-not $python) {
-    Write-Warn "System Python not found. Downloading portable Python 3.11.9 (~15 MB)..."
+    Write-Warn "Downloading portable Python 3.11.9 (~15 MB)..."
     $pyVersion  = '3.11.9'
     $pyZipUrl   = "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-embed-amd64.zip"
     $pyZipFile  = Join-Path $InstallDir 'python-embed.zip'
@@ -126,8 +130,16 @@ if ($UsePortable) {
 # -- 4. Install Python dependencies ---------------------------------------------
 Write-Step "Installing Python dependencies (1-2 min)"
 & $Py -m pip install --upgrade pip --quiet
-& $Py -m pip install --quiet -r (Join-Path $AgentDir 'requirements.txt')
-if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+# --prefer-binary: try wheels first; only compile from source if no wheel exists at all
+& $Py -m pip install --prefer-binary -r (Join-Path $AgentDir 'requirements.txt')
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "pip install failed."
+    Write-Err "This usually means a dependency has no prebuilt wheel for your Python version."
+    Write-Err "Run the installer again -- it will download portable Python 3.11 which has all wheels available."
+    # Mark system Python unusable so on next run we skip it
+    $python = $null
+    throw "pip install failed"
+}
 Write-OK "Dependencies installed"
 
 # -- 5. Download Chromium -------------------------------------------------------
