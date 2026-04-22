@@ -26,7 +26,16 @@ log = logging.getLogger("agent.browser")
 
 KONTUR_LOGIN_URL = "https://kontur.ru/"
 KONTUR_MARKET_URL = "https://market.kontur.ru/"
+# Kept for backward compatibility; new UI no longer uses /#products (returns 404).
+# We now navigate by clicking the sidebar link «Услуги и товары» instead.
 KONTUR_PRODUCTS_URL = "https://market.kontur.ru/#products"
+# Candidate URLs to try as fallbacks if the sidebar link is not found.
+KONTUR_PRODUCTS_URL_CANDIDATES = [
+    "https://market.kontur.ru/goods",
+    "https://market.kontur.ru/services-and-goods",
+    "https://market.kontur.ru/#goods",
+    "https://market.kontur.ru/#products",
+]
 
 
 class KonturBrowser:
@@ -142,9 +151,8 @@ class KonturBrowser:
         except Exception as e:
             log.debug(f"dismiss_modals ignored error: {e}")
 
-        # Go to products page
-        self._page.goto(KONTUR_PRODUCTS_URL, wait_until="domcontentloaded", timeout=30000)
-        self._page.wait_for_timeout(1500)
+        # Navigate to the products list page.
+        self._goto_products_page()
 
         try:
             # If product already exists by kontur_id or barcode — update, else add
@@ -167,6 +175,61 @@ class KonturBrowser:
             if shot:
                 raise type(e)(f"{e}  [screenshot: {shot}]") from e
             raise
+
+    def _goto_products_page(self) -> None:
+        """Open the products list. New Контур UI dropped the old /#products hash
+        URL (404s), so we click the sidebar link «Услуги и товары» which is
+        stable across UI revisions. Falls back to direct URL navigation.
+        """
+        page = self._page
+        # Make sure we're on the Market root first so the sidebar is rendered.
+        current = (page.url or "").lower()
+        if "market.kontur.ru" not in current or "404" in current:
+            try:
+                page.goto(KONTUR_MARKET_URL, wait_until="domcontentloaded", timeout=30000)
+            except PwTimeoutError:
+                pass
+        page.wait_for_timeout(800)
+
+        # Try clicking the sidebar link first (most resilient to URL changes)
+        sidebar_selectors = [
+            'a:has-text("Услуги и товары")',
+            'a:has-text("Товары")',
+            '[role="link"]:has-text("Услуги и товары")',
+            'nav a:has-text("товар")',
+        ]
+        for sel in sidebar_selectors:
+            try:
+                link = page.locator(sel).first
+                if link.count() > 0:
+                    link.wait_for(state="visible", timeout=5000)
+                    link.click(timeout=5000)
+                    page.wait_for_timeout(1500)
+                    log.debug(f"Clicked sidebar selector: {sel}")
+                    # Verify we're not on a 404 page
+                    if "404" not in (page.locator("body").inner_text(timeout=2000) or ""):
+                        return
+            except Exception as e:
+                log.debug(f"Sidebar selector {sel} failed: {e}")
+                continue
+
+        # Fallback: try candidate URLs directly
+        for url in KONTUR_PRODUCTS_URL_CANDIDATES:
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_timeout(1200)
+                body_text = page.locator("body").inner_text(timeout=2000) or ""
+                if "Ошибка 404" in body_text or "404" in page.url:
+                    continue
+                log.info(f"Products page opened via fallback URL: {url}")
+                return
+            except Exception as e:
+                log.debug(f"Fallback URL {url} failed: {e}")
+                continue
+
+        # Last resort: proceed from whatever page we are on. Downstream selectors
+        # will throw and the diagnostic screenshot will capture the state.
+        log.warning("Could not confirm products page; proceeding anyway")
 
     def _dismiss_modals(self) -> None:
         """Close any open modal dialogs / confirmations before a new task."""
