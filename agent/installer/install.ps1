@@ -42,6 +42,52 @@ $VenvDir     = Join-Path $InstallDir 'venv'
 $AgentDir    = Join-Path $InstallDir 'app'
 $PortablePy  = Join-Path $InstallDir 'python'
 
+# -- 0. Clean up previous installation -----------------------------------------
+Write-Step "Cleaning up any previous installation"
+
+# 0a. Stop running agent processes (python.exe under our install dir)
+try {
+    $old = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($InstallDir, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    foreach ($p in $old) {
+        Write-OK ("Stopping old process PID {0}: {1}" -f $p.Id, $p.ProcessName)
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($old) { Start-Sleep -Seconds 2 }  # give handles time to release
+} catch { }
+
+# 0b. Remove install dir contents (venv, python, app, launchers)
+if (Test-Path $InstallDir) {
+    try {
+        Remove-Item "$InstallDir\*" -Recurse -Force -ErrorAction Stop
+        Write-OK "Cleared $InstallDir"
+    } catch {
+        Write-Warn "Could not fully clean $InstallDir (some files locked). Continuing anyway."
+    }
+}
+
+# 0c. Remove old config + logs (pairing token is invalid anyway on re-install)
+#     KEEP browser-profile/ so Kontur.Market login session survives reinstall
+if (Test-Path $ConfigDir) {
+    foreach ($item in @('config.json', 'prepair.json', 'logs', 'agent.log')) {
+        $p = Join-Path $ConfigDir $item
+        if (Test-Path $p) {
+            Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-OK "Cleared old config ($ConfigDir)"
+}
+
+# 0d. Remove old shortcuts (they point to now-deleted launcher)
+$oldShortcuts = @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop')) '1C Helper Agent.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('Startup')) '1C Helper Agent.lnk')
+)
+foreach ($s in $oldShortcuts) {
+    if (Test-Path $s) { Remove-Item $s -Force -ErrorAction SilentlyContinue }
+}
+
 Write-Step "Preparing folders"
 New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir, $AgentDir | Out-Null
 Write-OK  "Install dir: $InstallDir"
