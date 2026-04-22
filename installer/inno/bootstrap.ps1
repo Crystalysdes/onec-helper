@@ -30,13 +30,35 @@ try {
     $AgentDir   = Join-Path $InstallDir 'app'
     $ConfigDir  = Join-Path $env:APPDATA 'net1c-agent'
 
+    # -- 0. Terminate any running agent instance ------------------------------
+    # When the user re-runs the installer while the agent is still running,
+    # pythonw.exe holds a file lock on its own binary, and the subsequent
+    # Remove-Item silently skips the locked file → ExtractToDirectory then
+    # throws "file already exists" and the whole bootstrap aborts, leaving a
+    # half-installed Python that segfaults on launch.
+    try {
+        Get-Process pythonw, python -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, [System.StringComparison]::OrdinalIgnoreCase) } |
+            ForEach-Object {
+                Log "Terminating running agent process PID=$($_.Id) Path=$($_.Path)"
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+        Start-Sleep -Seconds 2
+    } catch {
+        Log "Warning: failed to enumerate running python processes: $_"
+    }
+
     # -- 1. Extract embedded Python --------------------------------------------
     Log "Extracting Python to $PortablePy"
     if (Test-Path $PortablePy) {
-        Remove-Item "$PortablePy\*" -Recurse -Force -ErrorAction SilentlyContinue
-    } else {
-        New-Item -ItemType Directory -Force -Path $PortablePy | Out-Null
+        # Remove the whole directory, not just its contents — otherwise locked
+        # files silently remain and break extraction.
+        Remove-Item $PortablePy -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $PortablePy) {
+            throw "Could not clean previous Python folder ($PortablePy). Close the running 1C Helper Agent and retry."
+        }
     }
+    New-Item -ItemType Directory -Force -Path $PortablePy | Out-Null
     # Use .NET ZipFile for reliable extraction on non-ASCII paths (e.g. Cyrillic usernames)
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::ExtractToDirectory($PyZip, $PortablePy)
@@ -99,16 +121,24 @@ try {
     # -- 6. Smoke test: verify the agent can actually be imported -------------
     # If this fails, the installer will report an error instead of "install OK"
     # followed by a silent no-op on double-click.
+    #
+    # The script is written to a real .py file (not passed via `python -c`)
+    # because Windows console command lines mangle Cyrillic paths when they
+    # are interpolated into the source string, producing a SyntaxError at
+    # import time even when everything else is fine.
     Log "Running import smoke test..."
-    $smoke = @'
-import sys, importlib
-sys.path.insert(0, r"{0}")
-for m in ("config", "client", "runner", "gui", "PySide6.QtWidgets", "httpx", "playwright"):
-    importlib.import_module(m)
-print("OK")
-'@ -f $AgentDir
-    $smokeOut = & $PyExe -c $smoke 2>&1
+    $smokeFile = Join-Path $InstallDir '_smoke_test.py'
+    @(
+        'import sys, os',
+        'here = os.path.dirname(os.path.abspath(__file__))',
+        'sys.path.insert(0, os.path.join(here, "app"))',
+        'import config, client, runner, gui',
+        'import PySide6.QtWidgets, httpx, playwright',
+        'print("OK")'
+    ) | Set-Content -Path $smokeFile -Encoding UTF8
+    $smokeOut = & $PyExe $smokeFile 2>&1
     $smokeOut | Out-File -Append -FilePath (Join-Path $InstallDir 'bootstrap.log') -Encoding UTF8
+    Remove-Item $smokeFile -Force -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0) { throw "Smoke test failed: $smokeOut" }
     Log "Smoke test passed."
 
