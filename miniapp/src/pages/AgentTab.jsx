@@ -208,9 +208,10 @@ export default function AgentTab({ currentStore }) {
         <div className="flex flex-col gap-1 text-[11px] leading-relaxed px-1"
           style={{ color: 'var(--tg-theme-hint-color)' }}>
           <p>1. Скачай <b>install-net1c-agent.bat</b> и запусти двойным кликом</p>
-          <p>2. 3–5 минут установка (Python + Chromium + агент)</p>
-          <p>3. Войди в Контур.Маркет в открывшемся окне — один раз</p>
-          <p>4. Готово. Агент работает в автозапуске.</p>
+          <p>2. 5–8 минут установка (Python + Qt GUI + Chromium, ~250 МБ)</p>
+          <p>3. Откроется окно приложения с панелью статусов</p>
+          <p>4. Войди в Контур.Маркет — один раз</p>
+          <p>5. Готово. Приложение живёт в трее и работает в фоне.</p>
         </div>
 
         <div className="flex items-center gap-2 text-[11px] pt-1 border-t"
