@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Plus, Store, Check, ChevronLeft, Trash2, Monitor,
-  Download, Crown, RefreshCw, LogOut, FileSpreadsheet,
+  Plus, Store, Check, ChevronLeft, Trash2,
+  Crown, RefreshCw, LogOut, FileSpreadsheet,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
@@ -11,7 +11,6 @@ import { storesAPI, subscriptionsAPI } from '../services/api'
 
 const TABS = [
   { id: 'stores',       label: 'Магазины',       icon: Store },
-  { id: 'desktop',      label: 'Десктоп',        icon: Monitor },
   { id: 'subscription', label: 'Подписка',       icon: Crown },
 ]
 
@@ -303,8 +302,8 @@ export default function Settings() {
         </div>
       )}
 
-      {/* ── Tab: Desktop ─────────────────────────────────────────────── */}
-      {tab === 'desktop' && (
+      {/* ── Tab: Desktop (REMOVED) ────────────────────────────────────── */}
+      {false && tab === 'desktop' && (
         <div className="px-4 flex flex-col gap-3 pb-6">
           <p className="section-title px-0">Десктоп-версия для Windows</p>
 
