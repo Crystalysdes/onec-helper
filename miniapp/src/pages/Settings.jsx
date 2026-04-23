@@ -1,275 +1,99 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Plus, Store, Plug, Check, ChevronLeft, ChevronRight,
-  CreditCard, RefreshCw, Users, Copy, CheckCircle2,
-  AlertCircle, Crown, Zap, ExternalLink, Pencil, Trash2,
+  Plus, Store, Check, ChevronLeft, Trash2, Monitor,
+  Download, Crown, RefreshCw, LogOut, FileSpreadsheet,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import useStore from '../store/useStore'
 import { storesAPI, subscriptionsAPI } from '../services/api'
-import AgentTab from './AgentTab'
+
+const TABS = [
+  { id: 'stores',       label: 'Магазины',       icon: Store },
+  { id: 'desktop',      label: 'Десктоп',        icon: Monitor },
+  { id: 'subscription', label: 'Подписка',       icon: Crown },
+]
 
 export default function Settings() {
   const navigate = useNavigate()
-  const location = useLocation()
-  const { stores, currentStore, setStores, setCurrentStore, user } = useStore()
-  const [tab, setTab] = useState(location.state?.tab || 'stores')
-  const [showStoreForm, setShowStoreForm] = useState(false)
-  const [showIntegrationForm, setShowIntegrationForm] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [diagnoseLoadingId, setDiagnoseLoadingId] = useState(null)
-  const [diagnoseResults, setDiagnoseResults] = useState({})
-  const [testResults, setTestResults] = useState({})
-  const [formTestResult, setFormTestResult] = useState(null)
-  const [formTestLoading, setFormTestLoading] = useState(false)
-  const [storeDetail, setStoreDetail] = useState(null)
-  const [detailLoading, setDetailLoading] = useState(false)
+  const { stores, currentStore, setStores, setCurrentStore, user, logout } = useStore()
 
-  // Subscription state
+  const [tab, setTab] = useState('stores')
+  const [showStoreForm, setShowStoreForm] = useState(false)
+  const [creatingStore, setCreatingStore] = useState(false)
+  const storeForm = useForm()
+
+  // Subscription
   const [sub, setSub] = useState(null)
   const [subLoading, setSubLoading] = useState(false)
-  const [subError, setSubError] = useState(false)
-  const [referral, setReferral] = useState(null)
-  const [copied, setCopied] = useState(false)
-  const [refCode, setRefCode] = useState('')
   const [payLoading, setPayLoading] = useState(false)
-
-  const [editingIntegration, setEditingIntegration] = useState(null)
-  const [onecMode, setOnecMode] = useState('cloud')
-  const [integrationType, setIntegrationType] = useState('onec')
-
-  const storeForm = useForm()
-  const intForm = useForm({ defaultValues: { name: '1C Integration' } })
-  const editForm = useForm()
-
-  const loadStoreDetail = async (storeId) => {
-    if (!storeId) return
-    setDetailLoading(true)
-    try {
-      const res = await storesAPI.get(storeId)
-      setStoreDetail(res.data)
-    } catch {}
-    finally { setDetailLoading(false) }
-  }
 
   const loadStores = async () => {
     try {
-      const res = await storesAPI.list()
-      setStores(res.data)
-      const savedId = localStorage.getItem('current_store_id')
-      if (savedId && !currentStore) {
-        const found = res.data.find((s) => s.id === savedId)
-        if (found) {
-          setCurrentStore(found)
-          loadStoreDetail(found.id)
-        }
-      } else if (currentStore) {
-        loadStoreDetail(currentStore.id)
-      }
+      const r = await storesAPI.list()
+      setStores(r.data)
     } catch {}
   }
 
   const loadSubscription = async () => {
     setSubLoading(true)
-    setSubError(false)
     try {
-      const [subRes, refRes] = await Promise.all([
-        subscriptionsAPI.status(),
-        subscriptionsAPI.referral(),
-      ])
-      setSub(subRes.data)
-      setReferral(refRes.data)
+      const r = await subscriptionsAPI.status()
+      setSub(r.data)
     } catch {
-      setSubError(true)
-    } finally { setSubLoading(false) }
+      toast.error('Не удалось загрузить подписку')
+    } finally {
+      setSubLoading(false)
+    }
   }
 
   useEffect(() => { loadStores() }, [])
   useEffect(() => { if (tab === 'subscription') loadSubscription() }, [tab])
 
+  // ── Stores ──────────────────────────────────────────────────────────
   const createStore = async (data) => {
-    setLoading(true)
+    setCreatingStore(true)
     try {
       const res = await storesAPI.create(data)
-      toast.success('Магазин создан!')
+      toast.success('Магазин создан')
       storeForm.reset()
       setShowStoreForm(false)
-      const newStore = { id: res.data.id, name: res.data.name, description: res.data.description, is_active: true }
-      // Set new store BEFORE loadStores to avoid race: loadStores would see old currentStore
+      const newStore = {
+        id: res.data.id,
+        name: res.data.name,
+        description: res.data.description,
+        is_active: true,
+      }
       setCurrentStore(newStore)
-      setStoreDetail(null)
-      const listRes = await storesAPI.list()
-      setStores(listRes.data)
-      setShowIntegrationForm(true)
-      setTab('integration')
+      const list = await storesAPI.list()
+      setStores(list.data)
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка создания магазина')
     } finally {
-      setLoading(false)
+      setCreatingStore(false)
     }
   }
 
   const deleteStore = async (store) => {
-    if (!window.confirm(`Удалить магазин «${store.name}»? Все товары в нём будут удалены.`)) return
+    if (!window.confirm(`Удалить магазин «${store.name}»? Все его товары и экспорты будут удалены.`)) return
     try {
       await storesAPI.delete(store.id)
       toast.success('Магазин удалён')
-      if (currentStore?.id === store.id) {
-        setCurrentStore(null)
-        setStoreDetail(null)
-      }
-      const listRes = await storesAPI.list()
-      setStores(listRes.data)
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка удаления магазина')
-    }
-  }
-
-  const selectStore = async (store) => {
-    setCurrentStore(store)
-    setStoreDetail(null)
-    setTestResults({})
-    setDiagnoseResults({})
-    loadStoreDetail(store.id)
-    toast.success(`Выбран магазин: ${store.name}`)
-  }
-
-  const testFormCredentials = async () => {
-    const data = intForm.getValues()
-    setFormTestLoading(true)
-    setFormTestResult(null)
-    try {
-      if (integrationType === 'kontur_market') {
-        if (!data.api_key) return toast.error('Введите API-ключ')
-        const res = await storesAPI.testCredentials({ integration_type: 'kontur_market', api_key: data.api_key })
-        setFormTestResult(res.data)
-      } else {
-        if (!data.onec_url || !data.onec_username || !data.onec_password) {
-          return toast.error('Заполните URL, логин и пароль')
-        }
-        const res = await storesAPI.testCredentials({
-          integration_type: 'onec',
-          onec_url: data.onec_url,
-          onec_username: data.onec_username,
-          onec_password: data.onec_password,
-        })
-        setFormTestResult(res.data)
-      }
-    } catch (e) {
-      setFormTestResult({ success: false, message: e.response?.data?.detail || 'Ошибка подключения' })
-    } finally {
-      setFormTestLoading(false)
-    }
-  }
-
-  const createIntegration = async (data) => {
-    if (!currentStore) return toast.error('Выберите магазин')
-    setLoading(true)
-    try {
-      const payload = integrationType === 'kontur_market'
-        ? { integration_type: 'kontur_market', api_key: data.api_key, name: 'Контур.Маркет' }
-        : { integration_type: 'onec', onec_url: data.onec_url, onec_username: data.onec_username, onec_password: data.onec_password, name: '1C Integration' }
-      await storesAPI.createIntegration(currentStore.id, payload)
-      toast.success('Интеграция создана!')
-      intForm.reset()
-      setFormTestResult(null)
-      setShowIntegrationForm(false)
-      await loadStoreDetail(currentStore.id)
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка создания интеграции')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-
-  const startEditIntegration = (int) => {
-    setEditingIntegration(int.id)
-    editForm.reset({
-      name: int.name,
-      onec_url: int.onec_url,
-      onec_username: int.onec_username || '',
-      onec_password: '',
-      use_accounting: int.use_accounting ?? false,
-    })
-  }
-
-  const updateIntegration = async (data) => {
-    if (!currentStore) return
-    setLoading(true)
-    try {
-      await storesAPI.updateIntegration(currentStore.id, editingIntegration, {
-        onec_url: data.onec_url,
-        onec_username: data.onec_username,
-        ...(data.onec_password ? { onec_password: data.onec_password } : {}),
-        name: data.name || '1C Integration',
-        use_accounting: data.use_accounting ?? false,
-      })
-      toast.success('Интеграция обновлена!')
-      setEditingIntegration(null)
-      await loadStoreDetail(currentStore.id)
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка обновления')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const diagnoseIntegration = async (storeId, intId) => {
-    setDiagnoseLoadingId(intId)
-    setDiagnoseResults(prev => { const n = { ...prev }; delete n[intId]; return n })
-    setTestResults(prev => { const n = { ...prev }; delete n[intId]; return n })
-    try {
-      const [testRes, diagRes] = await Promise.all([
-        storesAPI.testIntegration(storeId, intId),
-        storesAPI.diagnoseIntegration(storeId, intId),
-      ])
-      setTestResults(prev => ({ ...prev, [intId]: testRes.data }))
-      setDiagnoseResults(prev => ({ ...prev, [intId]: diagRes.data }))
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка диагностики')
-    } finally {
-      setDiagnoseLoadingId(null)
-    }
-  }
-
-  const deleteIntegration = async (storeId, intId) => {
-    if (!window.confirm('Удалить эту интеграцию с 1С? Товары в боте останутся.')) return
-    try {
-      await storesAPI.deleteIntegration(storeId, intId)
-      toast.success('Интеграция удалена')
-      setTestResults(prev => { const n = { ...prev }; delete n[intId]; return n })
-      setDiagnoseResults(prev => { const n = { ...prev }; delete n[intId]; return n })
-      await loadStoreDetail(storeId)
+      if (currentStore?.id === store.id) setCurrentStore(null)
+      const list = await storesAPI.list()
+      setStores(list.data)
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Ошибка удаления')
     }
   }
 
-  const normalizeOnecUrl = (raw) => {
-    if (!raw) return ''
-    raw = raw.trim().replace(/\/$/, '')
-    if (raw.startsWith('http://') || raw.startsWith('https://')) {
-      return raw.replace(/\/[a-z]{2}(_[A-Z]{2})?\/\s*$/, '').replace(/\/$/, '')
-    }
-    if (/^\d+$/.test(raw)) return `https://msk1.1cfresh.com/a/sbm/${raw}`
-    const m = raw.match(/^([a-z0-9-]+)[/:]+([0-9]+)$/i)
-    if (m) return `https://${m[1]}.1cfresh.com/a/sbm/${m[2]}`
-    if (!raw.startsWith('http')) return 'https://' + raw
-    return raw
+  const selectStore = (store) => {
+    setCurrentStore(store)
+    toast.success(`Магазин: ${store.name}`)
   }
 
-  const getSetupUrl = (onecUrl) => {
-    if (!onecUrl) return null
-    const base = normalizeOnecUrl(onecUrl)
-    if (!base.startsWith('http')) return null
-    return `${base}/#e1cib/command/Обработка.НастройкаСтандартногоИнтерфейсаOData.Команда.НастройкиСтандартногоИнтерфейсаOData`
-  }
-
-  const currentStoreDetail = stores.find((s) => s.id === currentStore?.id)
-
+  // ── Subscription ────────────────────────────────────────────────────
   const handlePay = async () => {
     setPayLoading(true)
     try {
@@ -278,38 +102,31 @@ export default function Settings() {
       if (url) window.open(url, '_blank')
       else toast.error('Не удалось создать платёж')
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка создания платежа')
-    } finally { setPayLoading(false) }
+      toast.error(e.response?.data?.detail || 'Ошибка оплаты')
+    } finally {
+      setPayLoading(false)
+    }
   }
 
   const handleToggleAutoRenew = async () => {
     try {
-      const res = await subscriptionsAPI.toggleAutoRenew()
-      setSub(prev => ({ ...prev, auto_renew: res.data.auto_renew }))
-      toast.success(res.data.auto_renew ? 'Автопродление включено' : 'Автопродление отключено')
-    } catch { toast.error('Ошибка') }
-  }
-
-  const handleCopyLink = () => {
-    if (!referral?.link) return
-    navigator.clipboard.writeText(referral.link).then(() => {
-      setCopied(true)
-      toast.success('Ссылка скопирована!')
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }
-
-  const handleApplyRef = async () => {
-    if (!refCode.trim()) return
-    try {
-      await subscriptionsAPI.applyReferral(refCode.trim())
-      toast.success('Реферальный код применён!')
-      setRefCode('')
-      loadSubscription()
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Ошибка')
+      const r = await subscriptionsAPI.toggleAutoRenew()
+      setSub(prev => ({ ...prev, auto_renew: r.data.auto_renew }))
+      toast.success(r.data.auto_renew ? 'Автопродление включено' : 'Автопродление отключено')
+    } catch {
+      toast.error('Ошибка')
     }
   }
+
+  const doLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
+
+  const initials =
+    user?.full_name?.[0]?.toUpperCase() ||
+    user?.email?.[0]?.toUpperCase() ||
+    '?'
 
   return (
     <div className="flex flex-col">
@@ -327,14 +144,14 @@ export default function Settings() {
         </h1>
       </div>
 
-      {/* User Info */}
+      {/* User info */}
       <div className="px-4 mb-4">
         <div className="card flex items-center gap-3">
           <div
             className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
             style={{ background: 'var(--tg-theme-button-color)' }}
           >
-            {user?.full_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || '?'}
+            {initials}
           </div>
           <div className="flex-1 min-w-0">
             <p className="font-semibold truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
@@ -350,16 +167,14 @@ export default function Settings() {
 
       {/* Tabs */}
       <div className="px-4 mb-4">
-        <div className="flex gap-1.5 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-          {[
-            { id: 'stores', label: '🏪 Магазины' },
-            { id: 'integration', label: '🔌 1С' },
-            { id: 'agent', label: '🤖 Агент' },
-            { id: 'subscription', label: '💳 Подписка' },
-          ].map(({ id, label }) => (
+        <div
+          className="flex gap-1 p-1 rounded-xl"
+          style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
+        >
+          {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
-              className="flex-1 py-2 text-sm font-medium rounded-lg transition-all"
+              className="flex-1 py-2 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
               style={{
                 background: tab === id ? 'var(--tg-theme-bg-color)' : 'transparent',
                 color: tab === id ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
@@ -367,29 +182,30 @@ export default function Settings() {
               }}
               onClick={() => setTab(id)}
             >
-              {label}
+              <Icon size={14} />
+              <span>{label}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {/* Tab: Stores */}
+      {/* ── Tab: Stores ──────────────────────────────────────────────── */}
       {tab === 'stores' && (
-        <div className="px-4 flex flex-col gap-3">
+        <div className="px-4 flex flex-col gap-3 pb-6">
           <p className="section-title px-0">Мои магазины</p>
 
           {stores.map((store) => (
-            <div
-              key={store.id}
-              className="card flex items-center gap-3"
-            >
+            <div key={store.id} className="card flex items-center gap-3">
               <div
                 className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0 cursor-pointer active:opacity-70"
                 onClick={() => selectStore(store)}
               >
                 <Store size={18} className="text-blue-500" />
               </div>
-              <div className="flex-1 min-w-0 cursor-pointer active:opacity-70" onClick={() => selectStore(store)}>
+              <div
+                className="flex-1 min-w-0 cursor-pointer active:opacity-70"
+                onClick={() => selectStore(store)}
+              >
                 <p className="font-medium text-sm truncate" style={{ color: 'var(--tg-theme-text-color)' }}>
                   {store.name}
                 </p>
@@ -419,9 +235,11 @@ export default function Settings() {
             </div>
           ))}
 
-          {/* Create Store Form */}
           {showStoreForm ? (
-            <form onSubmit={storeForm.handleSubmit(createStore)} className="card flex flex-col gap-3">
+            <form
+              onSubmit={storeForm.handleSubmit(createStore)}
+              className="card flex flex-col gap-3"
+            >
               <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
                 Новый магазин
               </p>
@@ -436,11 +254,15 @@ export default function Settings() {
                 {...storeForm.register('description')}
               />
               <div className="flex gap-2">
-                <button type="button" className="btn-secondary flex-1" onClick={() => setShowStoreForm(false)}>
+                <button
+                  type="button"
+                  className="btn-secondary flex-1"
+                  onClick={() => setShowStoreForm(false)}
+                >
                   Отмена
                 </button>
-                <button type="submit" className="btn-primary flex-1" disabled={loading}>
-                  {loading ? '...' : 'Создать'}
+                <button type="submit" className="btn-primary flex-1" disabled={creatingStore}>
+                  {creatingStore ? '...' : 'Создать'}
                 </button>
               </div>
             </form>
@@ -458,580 +280,178 @@ export default function Settings() {
               </span>
             </button>
           )}
-        </div>
-      )}
 
-      {/* Tab: Subscription */}
-      {tab === 'subscription' && (
-        <div className="px-4 flex flex-col gap-4 pb-6">
-          {subLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : sub ? (
-            <>
-              {/* Status card */}
-              <div className="rounded-2xl p-4 flex flex-col gap-3"
-                style={{
-                  background: sub.is_active
-                    ? 'linear-gradient(135deg, rgba(36,129,204,0.15) 0%, rgba(139,92,246,0.1) 100%)'
-                    : 'var(--tg-theme-secondary-bg-color)',
-                  border: sub.is_active ? '1.5px solid rgba(36,129,204,0.3)' : 'none',
-                }}>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: sub.is_active ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.2)' }}>
-                    <Crown size={18} color={sub.is_active ? 'white' : '#9ca3af'} />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                      {sub.status === 'trial' ? 'Пробный период' :
-                       sub.status === 'active' ? 'Подписка активна' :
-                       'Подписка истекла'}
-                    </p>
-                    <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                      {sub.status === 'trial' && sub.days_left != null
-                        ? `Осталось ${sub.days_left} дн.`
-                        : sub.status === 'active' && sub.days_left != null
-                        ? `До ${new Date(sub.current_period_end).toLocaleDateString('ru-RU')} · ещё ${sub.days_left} дн.`
-                        : 'Требуется оплата'}
-                    </p>
-                  </div>
-                  <div className="ml-auto">
-                    <span className="text-xs font-semibold px-2 py-1 rounded-full"
-                      style={{
-                        background: sub.is_active ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-                        color: sub.is_active ? '#22c55e' : '#ef4444',
-                      }}>
-                      {sub.is_active ? 'Активна' : 'Неактивна'}
-                    </span>
-                  </div>
-                </div>
-
-                {sub.next_discount_percent > 0 && (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl"
-                    style={{ background: 'rgba(34,197,94,0.1)' }}>
-                    <Zap size={13} color="#22c55e" />
-                    <p className="text-xs font-medium" style={{ color: '#22c55e' }}>
-                      Скидка {sub.next_discount_percent}% на следующую оплату (реферал)
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Pay button */}
-              {!sub.is_active || sub.status === 'trial' ? (
-                <button className="btn-primary flex items-center justify-center gap-2" onClick={handlePay} disabled={payLoading}>
-                  {payLoading
-                    ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    : <CreditCard size={16} />}
-                  {payLoading ? 'Создание платежа...' :
-                    sub.next_discount_percent > 0
-                      ? `Оплатить ${(2499 * (1 - sub.next_discount_percent / 100)).toFixed(0)} ₽/мес`
-                      : 'Оплатить 2 499 ₽/мес'}
-                </button>
-              ) : (
-                <div className="rounded-2xl p-3.5 flex items-center justify-between"
-                  style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                  <div className="flex items-center gap-2">
-                    <RefreshCw size={15} style={{ color: 'var(--tg-theme-hint-color)' }} />
-                    <span className="text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                      Автопродление
-                    </span>
-                  </div>
-                  <button
-                    className="w-11 h-6 rounded-full transition-all relative"
-                    style={{ background: sub.auto_renew ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.3)' }}
-                    onClick={handleToggleAutoRenew}>
-                    <span className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all"
-                      style={{ left: sub.auto_renew ? 'calc(100% - 22px)' : '2px' }} />
-                  </button>
-                </div>
-              )}
-
-              {/* Pricing info */}
-              <div className="rounded-2xl p-3.5" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                <p className="text-xs font-semibold mb-2" style={{ color: 'var(--tg-theme-hint-color)' }}>О подписке</p>
-                <div className="flex flex-col gap-1.5">
-                  {['Полный доступ ко всем функциям', 'Добавление товаров и синхронизация с 1С', 'AI-распознавание фото и накладных', 'Автопродление · отмена в любой момент'].map((f, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <CheckCircle2 size={13} color="#22c55e" />
-                      <span className="text-xs" style={{ color: 'var(--tg-theme-text-color)' }}>{f}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Referral section */}
-              {referral && (
-                <div className="rounded-2xl p-4 flex flex-col gap-3"
-                  style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                  <div className="flex items-center gap-2">
-                    <Users size={15} style={{ color: 'var(--tg-theme-button-color)' }} />
-                    <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>Реферальная программа</p>
-                  </div>
-                  <p className="text-xs leading-snug" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Пригласите друга — он получит 7 дней пробного периода. Когда он оплатит подписку, вы получите <b style={{ color: 'var(--tg-theme-text-color)' }}>скидку 20%</b> на следующий месяц.
-                  </p>
-                  <div className="flex gap-2">
-                    <div className="flex-1 px-3 py-2.5 rounded-xl text-xs font-mono"
-                      style={{ background: 'var(--tg-theme-bg-color)', color: 'var(--tg-theme-text-color)' }}>
-                      {referral.link || referral.code}
-                    </div>
-                    <button
-                      className="w-10 h-10 rounded-xl flex items-center justify-center active:opacity-60 flex-shrink-0"
-                      style={{ background: 'var(--tg-theme-button-color)' }}
-                      onClick={handleCopyLink}>
-                      {copied ? <Check size={15} color="white" /> : <Copy size={15} color="white" />}
-                    </button>
-                  </div>
-                  <div className="flex gap-4">
-                    <div className="text-center flex-1">
-                      <p className="text-lg font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{referral.total_referrals}</p>
-                      <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Приглашено</p>
-                    </div>
-                    <div className="text-center flex-1">
-                      <p className="text-lg font-bold" style={{ color: 'var(--tg-theme-text-color)' }}>{referral.successful_referrals}</p>
-                      <p className="text-[10px]" style={{ color: 'var(--tg-theme-hint-color)' }}>Оплатили</p>
-                    </div>
-                  </div>
-
-                  {/* Apply referral */}
-                  <div>
-                    <p className="text-[11px] mb-1.5" style={{ color: 'var(--tg-theme-hint-color)' }}>У вас есть реферальный код?</p>
-                    <div className="flex gap-2">
-                      <input
-                        className="input-field flex-1 text-sm"
-                        placeholder="Введите код"
-                        value={refCode}
-                        onChange={e => setRefCode(e.target.value.toUpperCase())}
-                      />
-                      <button
-                        className="px-4 rounded-xl font-medium text-sm active:opacity-60"
-                        style={{ background: 'var(--tg-theme-button-color)', color: 'white' }}
-                        onClick={handleApplyRef}
-                        disabled={!refCode.trim()}>
-                        ОК
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : subError ? (
-            <div className="flex flex-col items-center gap-3 py-10">
-              <AlertCircle size={32} style={{ color: 'var(--tg-theme-hint-color)' }} />
-              <p className="text-sm text-center" style={{ color: 'var(--tg-theme-hint-color)' }}>Не удалось загрузить данные подписки</p>
-              <button className="btn-primary w-auto px-6" onClick={loadSubscription}>Повторить</button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3 py-10">
-              <AlertCircle size={28} style={{ color: 'var(--tg-theme-hint-color)' }} />
-              <p className="text-sm text-center" style={{ color: 'var(--tg-theme-hint-color)' }}>Нет данных подписки</p>
-              <button className="btn-secondary w-auto px-6" onClick={loadSubscription}>Загрузить</button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Tab: Integration */}
-      {tab === 'integration' && (
-        <div className="px-4 flex flex-col gap-3">
-          {!currentStore ? (
-            <div className="card flex flex-col items-center gap-3 py-8">
-              <span className="text-4xl">🏪</span>
-              <p className="text-sm text-center" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                Сначала создайте или выберите магазин
+          <div className="card mt-4 flex flex-col gap-2" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet size={16} style={{ color: 'var(--tg-theme-button-color)' }} />
+              <p className="text-sm font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
+                Сканирование и экспорт
               </p>
-              <button className="btn-primary w-auto px-8" onClick={() => setTab('stores')}>
-                К магазинам
-              </button>
             </div>
-          ) : (
-            <>
-              <div className="card">
-                <p className="text-xs font-semibold mb-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                  Текущий магазин
+            <p className="text-xs" style={{ color: 'var(--tg-theme-hint-color)' }}>
+              Сканируйте накладные, управляйте товарами и выгружайте их в Excel для
+              Контур.Маркет, 1С:Розница, 1С:УНФ и 1С:Торговля 11.
+            </p>
+            <button
+              className="btn-primary mt-1"
+              onClick={() => navigate('/exports')}
+              disabled={!currentStore}
+            >
+              Перейти к экспорту
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab: Desktop ─────────────────────────────────────────────── */}
+      {tab === 'desktop' && (
+        <div className="px-4 flex flex-col gap-3 pb-6">
+          <p className="section-title px-0">Десктоп-версия для Windows</p>
+
+          <div className="card flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
+                style={{ background: 'rgba(36,129,204,0.12)' }}
+              >
+                <Monitor size={22} style={{ color: 'var(--tg-theme-button-color)' }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
+                  Полное зеркало на вашем компьютере
                 </p>
-                <p className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>
-                  {currentStore.name}
+                <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                  Всё, что вы сканируете на телефоне, появляется на десктопе автоматически.
                 </p>
               </div>
+            </div>
 
-              <p className="section-title px-0">Интеграция с 1С</p>
-
-              {/* Existing Integrations */}
-              {detailLoading && (
-                <div className="flex items-center justify-center py-4">
-                  <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                </div>
-              )}
-              {storeDetail?.integrations?.map((int) => (
-                <div key={int.id} className="card flex flex-col gap-3">
-                  {editingIntegration === int.id ? (
-                    <form onSubmit={editForm.handleSubmit(updateIntegration)} className="flex flex-col gap-3">
-                      <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>Редактировать интеграцию</p>
-                      <input className="input-field" placeholder="URL или код приложения * (напр. 3941876)" {...editForm.register('onec_url', { required: true })} />
-                      <input className="input-field" placeholder="Имя пользователя *" {...editForm.register('onec_username', { required: true })} />
-                      <input className="input-field" type="password" placeholder="Новый пароль (оставьте пустым чтобы не менять)" {...editForm.register('onec_password')} />
-                      <div className="flex gap-2">
-                        <button type="button" className="btn-secondary flex-1" onClick={() => setEditingIntegration(null)}>Отмена</button>
-                        <button type="submit" className="btn-primary flex-1" disabled={loading}>{loading ? '...' : 'Сохранить'}</button>
-                      </div>
-                    </form>
-                  ) : (
-                    <>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center flex-shrink-0">
-                      <Plug size={18} className="text-purple-500" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                        {int.name}
-                      </p>
-                      <p className="text-xs truncate" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                        {int.integration_type === 'kontur_market' ? '🟢 Контур.Маркет' : (int.onec_url || '1С')}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-60"
-                        style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
-                        onClick={() => startEditIntegration(int)}
-                      >
-                        <Pencil size={13} style={{ color: 'var(--tg-theme-hint-color)' }} />
-                      </button>
-                      <button
-                        className="w-7 h-7 rounded-lg flex items-center justify-center active:opacity-60"
-                        style={{ background: 'rgba(239,68,68,0.1)' }}
-                        onClick={() => deleteIntegration(currentStore.id, int.id)}
-                      >
-                        <Trash2 size={13} style={{ color: '#ef4444' }} />
-                      </button>
-                      <button
-                        className={`badge cursor-pointer active:opacity-70 ${int.status === 'active' ? 'badge-green' : int.status === 'error' ? 'badge-red' : 'badge-yellow'}`}
-                        title={int.status === 'active' ? 'Нажмите чтобы отключить' : 'Нажмите чтобы включить'}
-                        onClick={async () => {
-                          const next = int.status === 'active' ? 'inactive' : 'active'
-                          await storesAPI.toggleIntegrationStatus(currentStore.id, int.id, next)
-                          await loadStoreDetail(currentStore.id)
-                        }}
-                      >
-                        {int.status === 'active' ? 'Активна' : int.status === 'error' ? 'Ошибка' : 'Не активна'}
-                      </button>
-                    </div>
-                  </div>
-                  <button
-                    className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium active:opacity-70 w-full"
-                    style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-hint-color)' }}
-                    disabled={diagnoseLoadingId === int.id}
-                    onClick={() => diagnoseIntegration(currentStore.id, int.id)}
-                  >
-                    {diagnoseLoadingId === int.id
-                      ? <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                      : <span>🔍</span>}
-                    {diagnoseLoadingId === int.id ? 'Проверка...' : 'Тестировать подключение'}
-                  </button>
-                  {(testResults[int.id] || diagnoseResults[int.id]) && (() => {
-                    const t = testResults[int.id]
-                    const d = diagnoseResults[int.id]
-                    const needsSetup = t?.success && t?.message?.includes('не опубликованы')
-                    const setupUrl = needsSetup ? getSetupUrl(int.onec_url) : null
-                    const connOk = t?.success
-                    return (
-                      <div className={`text-xs p-3 rounded-xl flex flex-col gap-2 ${
-                        needsSetup ? 'bg-amber-50 text-amber-800' :
-                        connOk ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-                      }`}>
-                        <p className="font-semibold text-sm">
-                          {connOk ? '✅ Подключение установлено' : '❌ Нет подключения'}
-                        </p>
-                        {t?.message && <p>{t.message}</p>}
-                        {d && connOk && !needsSetup && (
-                          <div className="grid grid-cols-3 gap-1 mt-0.5">
-                            {[
-                              ['Товаров в 1С', d.products_ok ? `${d.products_sample?.length || 0}+` : '—'],
-                              ['В боте', d.synced_in_db ?? '—'],
-                              ['Штрихкодов', d.barcodes_fetched ?? '—'],
-                            ].map(([label, val]) => (
-                              <div key={label} className="p-1.5 rounded-lg text-center" style={{ background: 'rgba(34,197,94,0.1)' }}>
-                                <p className="text-[10px] opacity-70">{label}</p>
-                                <p className="font-bold text-xs">{val}</p>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {needsSetup && setupUrl && (
-                          <div className="flex flex-col gap-2">
-                            <p className="font-semibold text-amber-900">Настройка OData (1 раз):</p>
-                            <div className="flex flex-col gap-1">
-                              <p><b>1.</b> Откройте ссылку ниже</p>
-                              <p><b>2.</b> Нажмите <b>«Загрузить метаданные»</b></p>
-                              <p><b>3.</b> Найдите и поставьте галочки:</p>
-                            </div>
-                            <div className="flex flex-col gap-1 pl-2">
-                              {[
-                                ['Номенклатура', 'обязательно'],
-                                ['Штрихкоды номенклатуры', 'обязательно'],
-                                ['Цены номенклатуры', 'обязательно'],
-                                ['Остатки товаров', 'рекомендуется'],
-                              ].map(([name, hint]) => (
-                                <div key={name} className="flex items-center gap-1.5">
-                                  <span className="text-amber-600 font-bold">✓</span>
-                                  <span className="font-semibold">{name}</span>
-                                  <span className="opacity-70">— {hint}</span>
-                                </div>
-                              ))}
-                            </div>
-                            <p className="text-amber-700"><b>4.</b> Сохранить → вернитесь → нажмите «Тестировать» ещё раз</p>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-                  </>
-                  )}
+            <div
+              className="rounded-xl p-3 flex flex-col gap-2"
+              style={{ background: 'var(--tg-theme-bg-color)' }}
+            >
+              {[
+                'Автоматическая синхронизация накладных и товаров',
+                'Выгрузка Excel для 1С и Контур.Маркет в один клик',
+                'Авторизация по логину/паролю или через сайт',
+              ].map((t) => (
+                <div key={t} className="flex items-start gap-2">
+                  <Check size={14} style={{ color: '#22c55e', marginTop: 2, flexShrink: 0 }} />
+                  <span className="text-xs" style={{ color: 'var(--tg-theme-text-color)' }}>{t}</span>
                 </div>
               ))}
+            </div>
 
-              {/* Add Integration Form */}
-              {showIntegrationForm ? (
-                <form onSubmit={intForm.handleSubmit(createIntegration)} className="card flex flex-col gap-4">
-                  <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                    Подключить учётную систему
-                  </p>
+            <div
+              className="rounded-xl p-3 flex items-start gap-2"
+              style={{ background: 'rgba(245,158,11,0.08)' }}
+            >
+              <span className="text-lg leading-none">🛠</span>
+              <p className="text-xs" style={{ color: 'var(--tg-theme-text-color)' }}>
+                Мы готовим новую упрощённую версию десктоп-клиента.
+                Как только сборка будет готова, тут появится кнопка «Скачать для Windows».
+              </p>
+            </div>
 
-                  {/* Top-level integration type selector */}
-                  <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                    {[['onec', '🔵 1С'], ['kontur_market', '🟢 Контур.Маркет']].map(([type, label]) => (
-                      <button
-                        key={type}
-                        type="button"
-                        className="flex-1 py-2 text-xs font-semibold rounded-lg transition-all"
-                        style={{
-                          background: integrationType === type ? 'var(--tg-theme-bg-color)' : 'transparent',
-                          color: integrationType === type ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
-                          boxShadow: integrationType === type ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
-                        }}
-                        onClick={() => { setIntegrationType(type); setFormTestResult(null) }}
-                      >{label}</button>
-                    ))}
-                  </div>
-
-                  {integrationType === 'kontur_market' ? (
-                    <>
-                      {/* Kontour Market form */}
-                      <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
-                        style={{ background: 'rgba(34,197,94,0.07)', color: 'var(--tg-theme-text-color)' }}>
-                        <p className="font-semibold text-[13px]">Как получить API-ключ</p>
-                        <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          <p>1. Войдите в <b style={{ color: 'var(--tg-theme-text-color)' }}>market.kontur.ru</b></p>
-                          <p>2. Настройки → <b style={{ color: 'var(--tg-theme-text-color)' }}>Интеграция → API</b></p>
-                          <p>3. Создайте ключ и скопируйте его сюда</p>
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-1.5">
-                        <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>API-ключ Контур.Маркет</p>
-                        <input
-                          className="input-field"
-                          placeholder="Вставьте API-ключ *"
-                          {...intForm.register('api_key', { onChange: () => setFormTestResult(null) })}
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      {/* 1C form — mode selector */}
-                      <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--tg-theme-secondary-bg-color)' }}>
-                        {[['cloud', '☁️ 1С Фреш'], ['local', '🖥️ Локальная 1С']].map(([mode, label]) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            className="flex-1 py-2 text-xs font-semibold rounded-lg transition-all"
-                            style={{
-                              background: onecMode === mode ? 'var(--tg-theme-bg-color)' : 'transparent',
-                              color: onecMode === mode ? 'var(--tg-theme-text-color)' : 'var(--tg-theme-hint-color)',
-                              boxShadow: onecMode === mode ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
-                            }}
-                            onClick={() => { setOnecMode(mode); intForm.setValue('onec_url', ''); setFormTestResult(null) }}
-                          >{label}</button>
-                        ))}
-                      </div>
-
-                      {/* Step 1 */}
-                      <div className="flex flex-col gap-1.5">
-                        <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          {onecMode === 'cloud' ? 'Шаг 1 — ID приложения 1СФреш' : 'Шаг 1 — URL опубликованной базы'}
-                        </p>
-                        <input
-                          className="input-field"
-                          placeholder={onecMode === 'cloud' ? 'ID приложения (напр. 3941876) *' : 'http://192.168.1.10/trade *'}
-                          {...intForm.register('onec_url', { required: integrationType === 'onec', onChange: () => setFormTestResult(null) })}
-                        />
-                        {onecMode === 'cloud' ? (
-                          <p className="text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            Цифровой код из адреса браузера 1СФреш — напр. <span className="font-mono">3941876</span> или <span className="font-mono">msk2/3941876</span>
-                          </p>
-                        ) : (
-                          <div className="flex flex-col gap-1 text-[11px] px-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            <p>Полный URL базы: <span className="font-mono">http://IP/имя_базы</span> или туннель <span className="font-mono">https://xxx.ngrok.io/имя_базы</span></p>
-                            <p style={{ color: '#d97706' }}>⚠️ Бот должен иметь доступ к этому URL из интернета. Если 1С за роутером — используйте <b>ngrok</b> или <b>Cloudflare Tunnel</b>.</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Step 2: OData setup */}
-                      <div className="flex flex-col gap-2.5 p-3 rounded-xl text-xs"
-                        style={{ background: 'rgba(234,179,8,0.08)', color: 'var(--tg-theme-text-color)' }}>
-                        <p className="font-semibold text-[13px]">Шаг 2 — Настройка OData в 1С (один раз)</p>
-                        {onecMode === 'cloud' ? (
-                          <p className="text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            Путь: <b style={{ color: 'var(--tg-theme-text-color)' }}>Настройки → Синхронизация данных → Настройка стандартного интерфейса OData</b>
-                          </p>
-                        ) : (
-                          <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            <p>1. Откройте базу в режиме <b style={{ color: 'var(--tg-theme-text-color)' }}>конфигуратора</b></p>
-                            <p>2. <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Публикация на веб-сервере</b> — опубликуйте базу (IIS или Apache)</p>
-                            <p>3. Затем в режиме предприятия: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Настройка стандартного интерфейса OData</b></p>
-                          </div>
-                        )}
-                        <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                          <p className="font-semibold mb-0.5">📋 {onecMode === 'cloud' ? 'Вкладка «Авторизация»' : 'Пользователь для OData'}</p>
-                          <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            {onecMode === 'cloud' ? (
-                              <>
-                                <p>1. Включите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Создать отдельные имя пользователя и пароль»</b></p>
-                                <p>2. Придумайте <b style={{ color: 'var(--tg-theme-text-color)' }}>логин</b> (напр. <span className="font-mono">odata.user</span>) и <b style={{ color: 'var(--tg-theme-text-color)' }}>пароль</b></p>
-                              </>
-                            ) : (
-                              <>
-                                <p>1. В режиме конфигуратора: <b style={{ color: 'var(--tg-theme-text-color)' }}>Администрирование → Пользователи</b></p>
-                                <p>2. Создайте пользователя с именем напр. <span className="font-mono">odata.user</span></p>
-                                <p>3. Разрешите <b style={{ color: 'var(--tg-theme-text-color)' }}>аутентификацию 1С:Предприятия</b></p>
-                              </>
-                            )}
-                            <p className="mt-0.5" style={{ color: '#d97706' }}>⚠️ Запомните логин и пароль — введёте в шаге 3</p>
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-1 p-2.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                          <p className="font-semibold mb-0.5">📋 Вкладка «Состав»</p>
-                          <div className="flex flex-col gap-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            <p>1. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Загрузить метаданные»</b></p>
-                            <p>2. Найдите и поставьте галочки:</p>
-                          </div>
-                          <div className="flex flex-col gap-0.5 pl-3 mt-0.5">
-                            {['Номенклатура', 'Штрихкоды номенклатуры', 'Цены номенклатуры', 'Остатки товаров'].map((name) => (
-                              <div key={name} className="flex items-center gap-1.5">
-                                <span className="font-bold" style={{ color: '#d97706' }}>✓</span>
-                                <span className="font-semibold" style={{ color: 'var(--tg-theme-text-color)' }}>{name}</span>
-                              </div>
-                            ))}
-                          </div>
-                          <p className="mt-1" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                            3. Нажмите <b style={{ color: 'var(--tg-theme-text-color)' }}>«Сохранить и закрыть»</b>
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Step 3: Login / Password */}
-                      <div className="flex flex-col gap-1.5">
-                        <p className="text-xs font-semibold" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                          Шаг 3 — Логин и пароль из вкладки «Авторизация»
-                        </p>
-                        <input
-                          className="input-field"
-                          placeholder="Имя пользователя (напр. odata.user) *"
-                          {...intForm.register('onec_username', { required: integrationType === 'onec', onChange: () => setFormTestResult(null) })}
-                        />
-                        <input
-                          className="input-field"
-                          type="password"
-                          placeholder="Пароль *"
-                          {...intForm.register('onec_password', { required: integrationType === 'onec', onChange: () => setFormTestResult(null) })}
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  {/* Test result */}
-                  {formTestResult && (() => {
-                    const isFullSuccess = formTestResult.success && !formTestResult.message?.includes('не опубликованы')
-                    const isMissingEntities = formTestResult.success && formTestResult.message?.includes('не опубликованы')
-                    return (
-                      <div className={`text-xs p-3 rounded-xl ${
-                        isFullSuccess ? 'bg-green-50 text-green-700' :
-                        isMissingEntities ? 'bg-amber-50 text-amber-800' :
-                        'bg-red-50 text-red-700'
-                      }`}>
-                        <p className="font-semibold mb-1">
-                          {isFullSuccess ? '✅ Подключение работает — можно сохранить' :
-                           isMissingEntities ? '⚠️ Подключение есть, но не все галочки поставлены' :
-                           '❌ Ошибка подключения'}
-                        </p>
-                        <p>{formTestResult.message}</p>
-                        {isMissingEntities && (
-                          <p className="mt-1">Вернитесь в 1С → вкладка «Состав» → поставьте нужные галочки → Сохранить и закрыть → нажмите «Тестировать» ещё раз</p>
-                        )}
-                        {!formTestResult.success && integrationType === 'onec' && (
-                          <p className="mt-1">Проверьте URL, логин и пароль. Убедитесь что в 1С создан пользователь для OData (вкладка «Авторизация»).</p>
-                        )}
-                      </div>
-                    )
-                  })()}
-
-                  <div className="flex gap-2">
-                    <button type="button" className="btn-secondary flex-1" onClick={() => { setShowIntegrationForm(false); setFormTestResult(null) }}>
-                      Отмена
-                    </button>
-                    <button
-                      type="button"
-                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold active:opacity-70"
-                      style={{ background: 'var(--tg-theme-secondary-bg-color)', color: 'var(--tg-theme-text-color)' }}
-                      onClick={testFormCredentials}
-                      disabled={formTestLoading}
-                    >
-                      {formTestLoading
-                        ? <span className="flex items-center justify-center gap-1.5"><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" /> Проверка...</span>
-                        : '🔍 Тестировать'}
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity"
-                      style={{
-                        background: 'var(--tg-theme-button-color)',
-                        opacity: formTestResult?.success ? 1 : 0.35,
-                        cursor: formTestResult?.success ? 'pointer' : 'not-allowed',
-                      }}
-                      disabled={loading || !formTestResult?.success}
-                    >
-                      {loading ? '...' : 'Сохранить'}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <button
-                  className="card flex items-center gap-3 active:opacity-70 border-2 border-dashed"
-                  style={{ borderColor: 'var(--tg-theme-hint-color)' }}
-                  onClick={() => setShowIntegrationForm(true)}
-                >
-                  <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center flex-shrink-0">
-                    <Plus size={18} className="text-purple-500" />
-                  </div>
-                  <span className="text-sm font-medium" style={{ color: 'var(--tg-theme-hint-color)' }}>
-                    Подключить учётную систему
-                  </span>
-                </button>
-              )}
-
-            </>
-          )}
+            <button
+              className="btn-primary flex items-center justify-center gap-2"
+              disabled
+              title="Сборка появится в ближайшее время"
+            >
+              <Download size={16} />
+              Скачать для Windows (скоро)
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Tab: Agent (Desktop Bridge for Kontur.Market) */}
-      {tab === 'agent' && (
+      {/* ── Tab: Subscription ────────────────────────────────────────── */}
+      {tab === 'subscription' && (
         <div className="px-4 flex flex-col gap-3 pb-6">
-          <AgentTab currentStore={currentStore} />
+          <div className="flex items-center justify-between">
+            <p className="section-title px-0 m-0">Подписка</p>
+            <button
+              className="w-8 h-8 rounded-xl flex items-center justify-center active:opacity-60"
+              style={{ background: 'var(--tg-theme-secondary-bg-color)' }}
+              onClick={loadSubscription}
+              disabled={subLoading}
+            >
+              <RefreshCw size={14} className={subLoading ? 'animate-spin' : ''} style={{ color: 'var(--tg-theme-hint-color)' }} />
+            </button>
+          </div>
+
+          {subLoading && !sub && (
+            <div className="skeleton h-24 rounded-2xl" />
+          )}
+
+          {sub && (
+            <div
+              className="rounded-2xl p-4 flex flex-col gap-3"
+              style={{
+                background: sub.is_active
+                  ? 'linear-gradient(135deg, rgba(36,129,204,0.15) 0%, rgba(139,92,246,0.1) 100%)'
+                  : 'var(--tg-theme-secondary-bg-color)',
+                border: sub.is_active ? '1.5px solid rgba(36,129,204,0.3)' : 'none',
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ background: sub.is_active ? 'var(--tg-theme-button-color)' : 'rgba(107,114,128,0.2)' }}
+                >
+                  <Crown size={18} color={sub.is_active ? 'white' : '#9ca3af'} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
+                    {sub.status === 'trial' ? 'Пробный период'
+                      : sub.is_active ? 'Подписка активна'
+                      : 'Подписка неактивна'}
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                    {sub.status === 'trial' && sub.days_left != null
+                      ? `Осталось ${sub.days_left} дн. пробного периода`
+                      : sub.current_period_end
+                      ? `До ${new Date(sub.current_period_end).toLocaleDateString('ru-RU')}`
+                      : 'Оформите подписку, чтобы продолжить пользоваться сервисом'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                className="btn-primary w-full flex items-center justify-center gap-2"
+                onClick={handlePay}
+                disabled={payLoading}
+              >
+                {payLoading ? '...' : sub.is_active ? 'Продлить' : 'Оформить подписку'}
+              </button>
+
+              {sub.is_active && (
+                <label
+                  className="flex items-center justify-between gap-2 text-sm"
+                  style={{ color: 'var(--tg-theme-text-color)' }}
+                >
+                  <span>Автопродление</span>
+                  <input
+                    type="checkbox"
+                    checked={!!sub.auto_renew}
+                    onChange={handleToggleAutoRenew}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          <button
+            className="card flex items-center gap-3 active:opacity-70 mt-2"
+            onClick={doLogout}
+          >
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(239,68,68,0.1)' }}>
+              <LogOut size={16} style={{ color: '#ef4444' }} />
+            </div>
+            <span className="text-sm font-medium" style={{ color: '#ef4444' }}>
+              Выйти из аккаунта
+            </span>
+          </button>
         </div>
       )}
     </div>

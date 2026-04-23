@@ -336,7 +336,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── Subscription / Referral card ── */}
+      {/* ── Subscription card ── */}
       {subStatus && !subLoading && (
         <div className="px-4 mb-2">
           <button
@@ -350,13 +350,15 @@ export default function Dashboard() {
             </div>
             <div className="flex-1 min-w-0">
               <span className="font-medium text-sm" style={{ color: 'var(--tg-theme-text-color)' }}>
-                Подписка и рефералы
+                Подписка
               </span>
-              {subStatus.next_discount_percent > 0 && (
-                <p className="text-[11px] mt-0.5" style={{ color: '#22c55e' }}>
-                  🎁 Скидка {subStatus.next_discount_percent}% на след. оплату
-                </p>
-              )}
+              <p className="text-[11px] mt-0.5" style={{ color: 'var(--tg-theme-hint-color)' }}>
+                {subStatus.status === 'trial' && subStatus.days_left != null
+                  ? `Пробный период — осталось ${subStatus.days_left} дн.`
+                  : subStatus.is_active
+                  ? `Активна до ${subStatus.current_period_end ? new Date(subStatus.current_period_end).toLocaleDateString('ru-RU') : '—'}`
+                  : 'Оформите подписку'}
+              </p>
             </div>
             <ChevronRight size={14} style={{ color: 'var(--tg-theme-hint-color)', opacity: 0.6 }} />
           </button>

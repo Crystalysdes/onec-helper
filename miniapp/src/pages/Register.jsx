@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link, useSearchParams } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, Package, ArrowRight, Loader2, User } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { authAPI, storesAPI } from '../services/api'
@@ -8,7 +8,6 @@ import useStore from '../store/useStore'
 
 export default function Register() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
   const { setToken, setUser, setStores, setCurrentStore } = useStore()
 
   const [form, setForm] = useState({
@@ -16,7 +15,6 @@ export default function Register() {
     email: '',
     password: '',
     password2: '',
-    referral_code: searchParams.get('ref') || '',
   })
   const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -42,7 +40,6 @@ export default function Register() {
         email: form.email.trim(),
         password: form.password,
       }
-      if (form.referral_code) payload.referral_code = form.referral_code.trim()
 
       const res = await authAPI.register(payload)
       const { access_token, user } = res.data
@@ -158,18 +155,6 @@ export default function Register() {
             />
           </div>
 
-          {/* Referral (optional) */}
-          <div>
-            <label className="field-label">Реферальный код (опционально)</label>
-            <input
-              type="text"
-              className="input-field uppercase"
-              placeholder="XXXXXXXX"
-              value={form.referral_code}
-              onChange={e => setForm(f => ({ ...f, referral_code: e.target.value.toUpperCase() }))}
-              maxLength={8}
-            />
-          </div>
 
           {/* Submit */}
           <button
