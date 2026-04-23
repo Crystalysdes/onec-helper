@@ -195,6 +195,28 @@ export const agentAPI = {
     }),
 }
 
+export const exportsAPI = {
+  formats: () => api.get('/exports/formats'),
+  list: (params) => api.get('/exports', { params }),
+  create: (formatId, storeId, productIds = null) =>
+    api.post(`/exports/${formatId}`, {
+      store_id: storeId,
+      ...(productIds ? { product_ids: productIds } : {}),
+    }),
+  remove: (fileId) => api.delete(`/exports/${fileId}`),
+  /** Direct URL for <a download> — token passed as query-param because
+   *  browsers can't set Authorization on navigation. */
+  downloadUrl: (fileId) => {
+    const t = localStorage.getItem('access_token') || ''
+    return `${BASE_URL}/exports/${fileId}/download?token=${encodeURIComponent(t)}`
+  },
+  /** URL for EventSource connection — same token-in-query trick. */
+  streamUrl: () => {
+    const t = localStorage.getItem('access_token') || ''
+    return `${BASE_URL}/exports/stream?token=${encodeURIComponent(t)}`
+  },
+}
+
 export const subscriptionsAPI = {
   status: () => api.get('/subscriptions/status'),
   createPayment: () => api.post('/subscriptions/create-payment'),

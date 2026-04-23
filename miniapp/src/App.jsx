@@ -9,6 +9,7 @@ import Products from './pages/Products'
 import ProductDetail from './pages/ProductDetail'
 import AddProduct from './pages/AddProduct'
 import UploadInvoice from './pages/UploadInvoice'
+import Exports from './pages/Exports'
 import ImportCSV from './pages/ImportCSV'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
@@ -118,6 +119,7 @@ function App() {
           <Route path="/products/:id" element={<ProductDetail />} />
           <Route path="/add-product" element={<AddProduct />} />
           <Route path="/upload-invoice" element={<UploadInvoice />} />
+          <Route path="/exports" element={<Exports />} />
           <Route path="/import-csv" element={<ImportCSV />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />

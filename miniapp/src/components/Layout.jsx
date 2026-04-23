@@ -3,13 +3,14 @@ import { Outlet, useNavigate, useLocation, NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Package, BarChart2, Settings, Plus,
   LogOut, ChevronDown, Store, Crown, User, ShieldCheck,
-  Menu, X, UserMinus,
+  Menu, X, UserMinus, FileSpreadsheet,
 } from 'lucide-react'
 import useStore from '../store/useStore'
 
 const NAV_ITEMS = [
   { to: '/',          icon: LayoutDashboard, label: 'Главная',   end: true },
   { to: '/products',  icon: Package,         label: 'Товары' },
+  { to: '/exports',   icon: FileSpreadsheet, label: 'Экспорт' },
   { to: '/reports',   icon: BarChart2,        label: 'Отчёты' },
   { to: '/settings',  icon: Settings,         label: 'Настройки' },
 ]
