@@ -172,29 +172,6 @@ export const adminAPI = {
   globalCatalog: (params) => api.get('/admin/global-catalog', { params }),
 }
 
-export const agentAPI = {
-  list: (storeId) => api.get('/agent/list', { params: { store_id: storeId } }),
-  pair: (storeId, name) => api.post('/agent/pair', { store_id: storeId, name }),
-  revoke: (agentId) => api.delete(`/agent/${agentId}`),
-  rename: (agentId, name) => api.patch(`/agent/${agentId}`, { name }),
-  tasks: (agentId, limit = 50) => api.get(`/agent/${agentId}/tasks`, { params: { limit } }),
-  testTask: (agentId, action = 'login_check', payload = {}) =>
-    api.post(`/agent/${agentId}/test-task`, { action, payload }),
-  info: () => api.get('/agent/info'),
-  downloadInstallerExe: (storeId, name = 'Агент') =>
-    api.get('/agent/installer.exe', {
-      params: { store_id: storeId, name },
-      responseType: 'blob',
-      timeout: 120000,  // proxied from GitHub Release, allow up to 2 min
-    }),
-  downloadInstallerBat: (storeId, name = 'Агент') =>
-    api.get('/agent/installer.bat', {
-      params: { store_id: storeId, name },
-      responseType: 'blob',
-      timeout: 30000,
-    }),
-}
-
 export const exportsAPI = {
   formats: () => api.get('/exports/formats'),
   list: (params) => api.get('/exports', { params }),

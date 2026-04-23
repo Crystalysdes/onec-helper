@@ -22,7 +22,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend/
 COPY bot/ ./bot/
-COPY agent/ ./agent/
 COPY setup.py ./setup.py
 
 # Copy built React app from stage 1

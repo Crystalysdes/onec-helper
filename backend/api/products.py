@@ -1198,56 +1198,10 @@ async def save_invoice_products(
         if km_bg_kwargs.get("via_onec"):
             sync_paths.append("onec_kontur_bridge")
 
-    # Dispatch tasks to Desktop Bridge Agent if one is paired and (recently) active
-    try:
-        from backend.database.models import AgentDevice, AgentStatus, AgentTask, AgentTaskStatus
-        from datetime import timedelta as _td, timezone as _tz
-        agent_rows = (await db.execute(
-            select(AgentDevice).where(
-                AgentDevice.store_id == store_id_uuid,
-                AgentDevice.status != AgentStatus.revoked,
-                AgentDevice.auth_token_hash.is_not(None),
-            )
-        )).scalars().all()
-        # Prefer online agent (last_seen < 5 min). Fallback to any active agent (queue it anyway).
-        now_utc = datetime.now(_tz.utc)
-        online_agents = []
-        any_agents = []
-        for a in agent_rows:
-            any_agents.append(a)
-            if a.last_seen_at:
-                last = a.last_seen_at if a.last_seen_at.tzinfo else a.last_seen_at.replace(tzinfo=_tz.utc)
-                if (now_utc - last) < _td(minutes=5):
-                    online_agents.append(a)
-        target_agent = online_agents[0] if online_agents else (any_agents[0] if any_agents else None)
-        if target_agent:
-            for prod in saved:
-                # Only meaningful products get a KM task
-                if not prod.name:
-                    continue
-                task = AgentTask(
-                    agent_id=target_agent.id,
-                    store_id=store_id_uuid,
-                    action="upsert_product",
-                    payload={
-                        "product_id": str(prod.id),
-                        "name": prod.name,
-                        "barcode": prod.barcode,
-                        "article": prod.article,
-                        "price": float(prod.price) if prod.price else None,
-                        "purchase_price": float(prod.purchase_price) if prod.purchase_price else None,
-                        "quantity": float(prod.quantity) if prod.quantity else 0,
-                        "unit": prod.unit or "шт",
-                        "category": prod.category,
-                        "kontur_id": prod.kontur_id,
-                    },
-                    status=AgentTaskStatus.pending,
-                )
-                db.add(task)
-            await db.commit()
-            sync_paths.append("agent_bridge")
-    except Exception as _e:
-        logger.warning(f"Agent task dispatch failed: {_e}")
+    # [Phase 5] Removed: Desktop Bridge Agent (Playwright-based Kontur automation).
+    # The new export-based workflow (Excel file generation via /api/v1/exports) fully
+    # replaces this bridge — users download a file and import it into their accounting
+    # software themselves.
 
     # Upsert global catalog in background (no DB session issues)
     for s in serialized:
