@@ -22,6 +22,115 @@ def _strip_json(content: str) -> str:
     return content.strip()
 
 
+def _parse_json_resilient(raw: str, tag: str = "") -> list:
+    """Parse a JSON array from Claude's output, tolerating malformed strings.
+
+    Claude sometimes returns JSON with unescaped double quotes inside product names
+    (e.g. `"name": "Конфеты "Раф-Раф""`). A strict json.loads rejects this and we
+    lose the ENTIRE invoice. This function tries progressively lenient parsers.
+
+    Returns the parsed list, or raises json.JSONDecodeError on total failure
+    (after logging extensive diagnostics).
+    """
+    import re
+    stripped = _strip_json(raw)
+
+    # Attempt 1: standard JSON
+    try:
+        data = json.loads(stripped)
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError as e:
+        err_pos = e.pos if hasattr(e, "pos") else 0
+        ctx_start = max(0, err_pos - 80)
+        ctx_end = min(len(stripped), err_pos + 80)
+        logger.warning(
+            f"JSON[{tag}] strict parse failed at char {err_pos}/{len(stripped)}: {e.msg}. "
+            f"Context: ...{stripped[ctx_start:err_pos]!r}⟦HERE⟧{stripped[err_pos:ctx_end]!r}..."
+        )
+
+    # Attempt 2: object-by-object extraction via regex (ignore outer brackets)
+    # Matches `{ ... }` blocks non-greedily, skipping over malformed ones.
+    results = []
+    # Find all top-level objects inside the array. Balanced-brace scan.
+    s = stripped
+    # Strip wrapping [ ] if present
+    if s.startswith("["):
+        s = s[1:]
+    if s.endswith("]"):
+        s = s[:-1]
+
+    depth = 0
+    start = None
+    i = 0
+    n = len(s)
+    in_str = False
+    esc = False
+    while i < n:
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                # Heuristic: if this quote is followed (ignoring ws) by ':' it was a key-end,
+                # if followed by ',' or '}' it was a value-end. Otherwise likely unescaped.
+                j = i + 1
+                while j < n and s[j] in " \t\n\r":
+                    j += 1
+                if j < n and s[j] in ':,}]':
+                    in_str = False
+                # else: treat as literal inside the string (don't close it)
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and start is not None:
+                    obj_str = s[start:i + 1]
+                    try:
+                        obj = json.loads(obj_str)
+                        results.append(obj)
+                    except json.JSONDecodeError:
+                        # try replacing internal unescaped quotes with ' — last resort
+                        fixed = re.sub(
+                            r'("(?:name|article|category|unit|description)"\s*:\s*")'
+                            r'((?:[^"\\]|\\.)*?)'
+                            r'(")([^,}\]]*?)(?=[,}])',
+                            lambda m: (
+                                m.group(1)
+                                + (m.group(2) + m.group(3) + m.group(4)).replace('"', "'")
+                                + '"'
+                            ),
+                            obj_str,
+                        )
+                        try:
+                            obj = json.loads(fixed)
+                            results.append(obj)
+                        except json.JSONDecodeError:
+                            logger.debug(f"JSON[{tag}] dropped malformed object: {obj_str[:160]!r}")
+                    start = None
+        i += 1
+
+    if results:
+        logger.info(
+            f"JSON[{tag}] recovered {len(results)} objects from malformed response "
+            f"(length={len(stripped)})"
+        )
+        return results
+
+    # Total failure
+    logger.error(
+        f"JSON[{tag}] ALL recovery attempts failed. "
+        f"First 400 chars: {stripped[:400]!r}. Last 200: {stripped[-200:]!r}"
+    )
+    raise json.JSONDecodeError("Could not recover any valid objects", stripped, 0)
+
+
 _PROXY_FILE = "/app/data/proxy.txt"
 _MAX_IMAGE_BYTES = 3_500_000  # ~3.5 MB raw keeps base64 under Anthropic's 5 MB limit
 
@@ -578,6 +687,16 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
    Список категорий:
 {_CATEGORIES}
 
+ПРАВИЛА JSON (КРИТИЧНО):
+- Все строковые значения в ДВОЙНЫХ кавычках ASCII: "
+- Если в названии товара есть кавычки (например, Конфеты «Мишка»), ЗАМЕНИ их на апостроф '
+  или экранируй через \\". НИКОГДА не оставляй неэкранированную " внутри строки.
+- Правильно: {{"name": "Конфеты 'Мишка' 200г"}}
+- Правильно: {{"name": "Конфеты \\"Мишка\\" 200г"}}
+- НЕПРАВИЛЬНО: {{"name": "Конфеты "Мишка" 200г"}}  ← сломает парсер, потеряем ВСЕ товары!
+- Никаких одинарных кавычек ' вокруг ключей/значений, только "
+- Никаких trailing запятых, никаких комментариев // или /* */
+
 Верни ТОЛЬКО JSON массив без текста до и после:
 [{{"name":"Название товара","article":null,"barcode":null,"quantity":1,"unit":"шт","purchase_price":100.50,"price":null,"category":"Бакалея"}}]
 
@@ -604,42 +723,47 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
             raise  # propagate so endpoint can show proper error message
         logger.info(f"Invoice Pass 2 DONE in {int((time.perf_counter() - t_p2) * 1000)}ms")
 
+        # Try resilient parser — returns [] or raises on total failure.
+        products: List[dict] = []
         try:
-            products = json.loads(_strip_json(result))
+            products = _parse_json_resilient(result or "", tag="pass2")
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Invoice Pass 2 JSON TOTAL FAIL: {e}. Resp_len={len(result) if result else 0}, "
+                f"tail={result[-200:] if result else 'empty'!r}"
+            )
+
+        if products:
             logger.info(
                 f"Invoice TOTAL: {len(products)} products in "
                 f"{int((time.perf_counter() - t_total) * 1000)}ms "
                 f"(from {len(images_bytes)} photo(s))"
             )
             return products
-        except json.JSONDecodeError as e:
-            logger.warning(
-                f"Invoice Pass 2 JSON parse error: {e}. Resp_len={len(result) if result else 0}, "
-                f"tail={result[-200:] if result else 'empty'!r}"
-            )
-            # Fallback: parse EVERY image separately — previously only first image
-            # was tried, which silently lost products on multi-page invoices whose
-            # JSON got truncated.
-            logger.info(f"Fallback: parsing all {len(images_bytes)} images individually")
-            products: List[dict] = []
-            for i, img_bytes in enumerate(images_bytes, start=1):
-                try:
-                    t_i = time.perf_counter()
-                    partial = await self.parse_invoice_from_image(img_bytes)
-                    logger.info(
-                        f"  Fallback image {i}/{len(images_bytes)}: "
-                        f"{len(partial)} products in "
-                        f"{int((time.perf_counter() - t_i) * 1000)}ms"
-                    )
-                    products.extend(partial)
-                except Exception as fe:
-                    logger.error(f"  Fallback image {i} failed: {fe}")
-                    continue
-            logger.info(
-                f"Invoice TOTAL (fallback): {len(products)} products in "
-                f"{int((time.perf_counter() - t_total) * 1000)}ms"
-            )
-            return products
+
+        # Fallback: parse EVERY image separately — covers both JSON total failure and
+        # 0-product recovery. Previously only the first image was tried, which silently
+        # lost products on multi-page invoices with truncated or malformed JSON.
+        logger.info(f"Fallback: parsing all {len(images_bytes)} images individually")
+        fb_products: List[dict] = []
+        for i, img_bytes in enumerate(images_bytes, start=1):
+            try:
+                t_i = time.perf_counter()
+                partial = await self.parse_invoice_from_image(img_bytes)
+                logger.info(
+                    f"  Fallback image {i}/{len(images_bytes)}: "
+                    f"{len(partial)} products in "
+                    f"{int((time.perf_counter() - t_i) * 1000)}ms"
+                )
+                fb_products.extend(partial)
+            except Exception as fe:
+                logger.error(f"  Fallback image {i} failed: {fe}")
+                continue
+        logger.info(
+            f"Invoice TOTAL (fallback): {len(fb_products)} products in "
+            f"{int((time.perf_counter() - t_total) * 1000)}ms"
+        )
+        return fb_products
 
     async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
         """Parse invoice by sending image directly to Claude vision (when OCR is unavailable)."""
@@ -675,7 +799,7 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
         }]
         try:
             content = await self._call_invoice(messages, max_tokens=4096)
-            return json.loads(_strip_json(content))
+            return _parse_json_resilient(content or "", tag="single_img")
         except json.JSONDecodeError as e:
             logger.error(f"AI invoice image parse JSON error: {e}")
             return []
