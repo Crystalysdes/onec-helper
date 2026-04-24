@@ -873,6 +873,32 @@ async def upload_invoice(
         f"io_ms={int((_time.perf_counter() - t_io) * 1000)}"
     )
 
+    # ── Debug forensics: save every uploaded invoice to /app/data/debug/invoices ──
+    # Keeps last 20 uploads; lets us match what Claude saw vs what it returned.
+    try:
+        import os as _os
+        from datetime import datetime as _dt
+        debug_dir = "/app/data/debug/invoices"
+        _os.makedirs(debug_dir, exist_ok=True)
+        ts = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+        uid_short = str(current_user.id)[:8]
+        for idx, b in enumerate(all_image_bytes):
+            ext = ".pdf" if all_pdf else ".jpg"
+            fname = f"{ts}_{uid_short}_{idx}{ext}"
+            with open(f"{debug_dir}/{fname}", "wb") as fh:
+                fh.write(b)
+        # Simple rotation: keep only last 20 files
+        entries = sorted(
+            [f"{debug_dir}/{x}" for x in _os.listdir(debug_dir) if _os.path.isfile(f"{debug_dir}/{x}")],
+            key=lambda p: _os.path.getmtime(p),
+        )
+        for old in entries[:-20]:
+            try: _os.remove(old)
+            except OSError: pass
+        logger.info(f"Invoice debug: saved {len(all_image_bytes)} file(s) to {debug_dir} (ts={ts})")
+    except Exception as _e:
+        logger.warning(f"Invoice debug save failed: {_e}")
+
     products = []
     t_ai = _time.perf_counter()
     try:

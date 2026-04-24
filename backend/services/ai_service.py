@@ -739,6 +739,21 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
                 f"{int((time.perf_counter() - t_total) * 1000)}ms "
                 f"(from {len(images_bytes)} photo(s))"
             )
+            # Log sample of first 5 and last 2 to diagnose hallucinations/wrong matches
+            _sample_hi = products[:5]
+            _sample_lo = products[-2:] if len(products) > 7 else []
+            for i, p in enumerate(_sample_hi):
+                logger.info(
+                    f"  [{i}] name={(p.get('name') or '')[:60]!r} "
+                    f"qty={p.get('quantity')} unit={p.get('unit')} "
+                    f"price={p.get('purchase_price')} art={p.get('article')}"
+                )
+            for i, p in enumerate(_sample_lo, start=len(products) - len(_sample_lo)):
+                logger.info(
+                    f"  [{i}] name={(p.get('name') or '')[:60]!r} "
+                    f"qty={p.get('quantity')} unit={p.get('unit')} "
+                    f"price={p.get('purchase_price')} art={p.get('article')}"
+                )
             return products
 
         # Fallback: parse EVERY image separately — covers both JSON total failure and
