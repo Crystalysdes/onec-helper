@@ -1,10 +1,16 @@
 import json
 import os
+import time
 import base64
 from typing import List, Optional
 from loguru import logger
 
 from backend.config import settings
+
+
+# Anthropic beta header required to raise max_tokens above 8192 for Claude 3.5 Sonnet.
+# Safe to send on all requests — ignored by models that don't support it.
+_ANTHROPIC_EXTENDED_OUTPUT_HEADER = {"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
 
 
 def _strip_json(content: str) -> str:
@@ -234,12 +240,40 @@ class AIService:
         r = await client.chat.completions.create(model=model, max_tokens=max_tokens, messages=msgs)
         return r.choices[0].message.content.strip()
 
-    async def _do_call_anthropic(self, client, model: str, max_tokens: int, messages: list, system: str = None) -> str:
+    async def _do_call_anthropic(
+        self, client, model: str, max_tokens: int, messages: list,
+        system: str = None, tag: str = "generic",
+    ) -> str:
+        """Call Anthropic and log latency + stop_reason + token usage.
+
+        Logs a WARNING if stop_reason == "max_tokens" — that means the JSON
+        was truncated and the caller will likely hit a JSONDecodeError.
+        """
         kw = {"model": model, "max_tokens": max_tokens, "messages": messages}
         if system:
             kw["system"] = system
-        r = await client.messages.create(**kw)
-        return r.content[0].text.strip()
+        # Enable extended output (up to 16384 tokens for Claude 3.5 Sonnet)
+        extra = {"extra_headers": _ANTHROPIC_EXTENDED_OUTPUT_HEADER}
+        t0 = time.perf_counter()
+        r = await client.messages.create(**kw, **extra)
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+
+        stop_reason = getattr(r, "stop_reason", None)
+        usage = getattr(r, "usage", None)
+        in_tok = getattr(usage, "input_tokens", None) if usage else None
+        out_tok = getattr(usage, "output_tokens", None) if usage else None
+        text = r.content[0].text.strip() if r.content else ""
+
+        log_msg = (
+            f"Anthropic[{tag}] model={model} elapsed={elapsed_ms}ms "
+            f"stop={stop_reason} in_tok={in_tok} out_tok={out_tok}/{max_tokens} "
+            f"resp_chars={len(text)}"
+        )
+        if stop_reason == "max_tokens":
+            logger.warning(f"{log_msg}  ⚠️ OUTPUT TRUNCATED — invoice may lose items!")
+        else:
+            logger.info(log_msg)
+        return text
 
     async def _call(self, messages: list, system: str = None, max_tokens: int = 1024, fast: bool = False) -> str:
         model = self._fast_model if fast else self._model
@@ -253,7 +287,7 @@ class AIService:
                     msgs = ([{"role": "system", "content": system}] if system else []) + messages
                     result = await self._do_call_openai(client, model, max_tokens, msgs)
                 else:
-                    result = await self._do_call_anthropic(client, model, max_tokens, messages, system)
+                    result = await self._do_call_anthropic(client, model, max_tokens, messages, system, tag="generic")
                 if idx != self._active_idx:
                     logger.info(f"AIService: switched to proxy index {idx}")
                     self._active_idx = idx
@@ -288,7 +322,7 @@ class AIService:
             idx = (self._invoice_active_idx + pi) % n
             client = self._invoice_clients[idx]
             try:
-                r = await self._do_call_anthropic(client, model, max_tokens, messages)
+                r = await self._do_call_anthropic(client, model, max_tokens, messages, tag="invoice")
                 if idx != self._invoice_active_idx:
                     logger.info(f"AIService invoice: switched to proxy index {idx}")
                     self._invoice_active_idx = idx
@@ -479,17 +513,28 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
                                    so data is correctly mapped even on photos where
                                    the column header row is no longer visible.
         """
+        t_total = time.perf_counter()
         if not images_bytes:
             return []
 
+        raw_bytes_total = sum(len(b) for b in images_bytes)
         if _compress:
+            t_c = time.perf_counter()
             images_bytes = [_compress_image(b) for b in images_bytes]
+            compressed_total = sum(len(b) for b in images_bytes)
+            logger.info(
+                f"Invoice: {len(images_bytes)} image(s) compressed in "
+                f"{int((time.perf_counter() - t_c) * 1000)}ms "
+                f"({raw_bytes_total // 1024}KB → {compressed_total // 1024}KB)"
+            )
 
         multi = len(images_bytes) > 1
 
         # ── Pass 1: extract header from first photo ──────────────────────
         logger.info(f"Invoice Pass 1: extracting header from first of {len(images_bytes)} photo(s)")
+        t_p1 = time.perf_counter()
         header = await self._extract_invoice_header(images_bytes[0])
+        logger.info(f"Invoice Pass 1 DONE in {int((time.perf_counter() - t_p1) * 1000)}ms, header={list(header.keys()) if header else '[]'}")
         col_context = self._build_column_context(header)
 
         # ── Build meta hints ─────────────────────────────────────────────
@@ -546,25 +591,55 @@ doc_type: ТОРГ-12 / УПД / Счёт-фактура / Накладная / 
 
         messages = [{"role": "user", "content": content}]
         result = None
+        t_p2 = time.perf_counter()
         try:
-            result = await self._call_invoice(messages, max_tokens=8192)
+            # Claude 3.5 Sonnet supports up to 16384 output tokens with the
+            # `max-tokens-3-5-sonnet-2024-07-15` beta header (sent by _do_call_anthropic).
+            result = await self._call_invoice(messages, max_tokens=16384)
         except Exception as e:
-            logger.error(f"Invoice _call_invoice error: {type(e).__name__}: {e}")
+            logger.error(
+                f"Invoice Pass 2 FAILED after {int((time.perf_counter() - t_p2) * 1000)}ms: "
+                f"{type(e).__name__}: {e}"
+            )
             raise  # propagate so endpoint can show proper error message
+        logger.info(f"Invoice Pass 2 DONE in {int((time.perf_counter() - t_p2) * 1000)}ms")
 
         try:
             products = json.loads(_strip_json(result))
-            logger.info(f"Invoice parsed: {len(products)} products extracted")
+            logger.info(
+                f"Invoice TOTAL: {len(products)} products in "
+                f"{int((time.perf_counter() - t_total) * 1000)}ms "
+                f"(from {len(images_bytes)} photo(s))"
+            )
             return products
         except json.JSONDecodeError as e:
-            logger.error(f"Invoice JSON parse error: {e}. Preview: {result[:400] if result else 'empty'}")
-            # Fallback: try single-pass parse on first image only
-            logger.info("Trying single-pass fallback on first image")
-            try:
-                return await self.parse_invoice_from_image(images_bytes[0])
-            except Exception as fe:
-                logger.error(f"Single-pass fallback also failed: {fe}")
-                return []
+            logger.warning(
+                f"Invoice Pass 2 JSON parse error: {e}. Resp_len={len(result) if result else 0}, "
+                f"tail={result[-200:] if result else 'empty'!r}"
+            )
+            # Fallback: parse EVERY image separately — previously only first image
+            # was tried, which silently lost products on multi-page invoices whose
+            # JSON got truncated.
+            logger.info(f"Fallback: parsing all {len(images_bytes)} images individually")
+            products: List[dict] = []
+            for i, img_bytes in enumerate(images_bytes, start=1):
+                try:
+                    t_i = time.perf_counter()
+                    partial = await self.parse_invoice_from_image(img_bytes)
+                    logger.info(
+                        f"  Fallback image {i}/{len(images_bytes)}: "
+                        f"{len(partial)} products in "
+                        f"{int((time.perf_counter() - t_i) * 1000)}ms"
+                    )
+                    products.extend(partial)
+                except Exception as fe:
+                    logger.error(f"  Fallback image {i} failed: {fe}")
+                    continue
+            logger.info(
+                f"Invoice TOTAL (fallback): {len(products)} products in "
+                f"{int((time.perf_counter() - t_total) * 1000)}ms"
+            )
+            return products
 
     async def parse_invoice_from_image(self, image_bytes: bytes) -> List[dict]:
         """Parse invoice by sending image directly to Claude vision (when OCR is unavailable)."""

@@ -841,10 +841,12 @@ async def upload_invoice(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    import time as _time
     from backend.services.ai_service import AIService
     from backend.services.ocr_service import OCRService
     from sqlalchemy import func as _func
 
+    t_request = _time.perf_counter()
     store_id_uuid = UUID(store_id)
     await _check_store_access(store_id_uuid, current_user, db)
 
@@ -852,6 +854,7 @@ async def upload_invoice(
     combined_text_parts: List[str] = []
     all_pdf = True
 
+    t_io = _time.perf_counter()
     for f in files:
         contents = await f.read()
         content_type = f.content_type or "image/jpeg"
@@ -863,8 +866,15 @@ async def upload_invoice(
                 combined_text_parts.append(extracted)
         else:
             all_pdf = False
+    total_bytes = sum(len(b) for b in all_image_bytes)
+    logger.info(
+        f"Invoice upload: user={current_user.id} store={store_id_uuid} "
+        f"files={len(files)} total={total_bytes // 1024}KB all_pdf={all_pdf} "
+        f"io_ms={int((_time.perf_counter() - t_io) * 1000)}"
+    )
 
     products = []
+    t_ai = _time.perf_counter()
     try:
         ai_service = AIService()
         if combined_text_parts and all_pdf:
@@ -981,6 +991,12 @@ async def upload_invoice(
                 if not p.get("category") and existing.category:
                     p["category"] = existing.category
 
+    ai_elapsed_ms = int((_time.perf_counter() - t_ai) * 1000)
+    logger.info(
+        f"Invoice AI+match done: {len(products)} products in {ai_elapsed_ms}ms "
+        f"(path={'pdf_text' if combined_text_parts and all_pdf else 'vision'})"
+    )
+
     log = Log(
         user_id=current_user.id,
         store_id=store_id_uuid,
@@ -992,7 +1008,20 @@ async def upload_invoice(
     db.add(log)
     await db.commit()
 
-    return {"products": products, "count": len(products)}
+    total_elapsed_ms = int((_time.perf_counter() - t_request) * 1000)
+    logger.info(
+        f"Invoice /upload-invoice TOTAL: user={current_user.id} files={len(files)} "
+        f"products={len(products)} elapsed={total_elapsed_ms}ms "
+        f"(io={int((_time.perf_counter() - t_io) * 1000 - ai_elapsed_ms)}ms "
+        f"ai={ai_elapsed_ms}ms)"
+    )
+
+    return {
+        "products": products,
+        "count": len(products),
+        "elapsed_ms": total_elapsed_ms,
+        "ai_elapsed_ms": ai_elapsed_ms,
+    }
 
 
 @router.post("/save-invoice")
